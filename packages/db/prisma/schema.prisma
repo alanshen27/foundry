@@ -1,0 +1,501 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Pooled (pgbouncer) connection used by the app at runtime.
+  url       = env("DATABASE_URL")
+  // Direct/session connection used for migrations & `db push` (DDL cannot run
+  // over the transaction pooler). Falls back to DATABASE_URL if unset.
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------- Identity ----------
+
+model User {
+  id           String   @id @default(cuid())
+  // Supabase auth.users.id when AUTH_MODE=supabase; null for LOCAL users.
+  supabaseId   String?  @unique
+  email        String   @unique
+  name         String
+  // Only set for the LOCAL dev/e2e auth adapter (scrypt hash). Never used
+  // when AUTH_MODE=supabase.
+  localPasswordHash String?
+  createdAt    DateTime @default(now())
+
+  memberships       WorkspaceMembership[]
+  createdWorkspaces Workspace[]           @relation("WorkspaceCreator")
+  invitationsSent   Invitation[]          @relation("InvitationInviter")
+  auditEvents       AuditEvent[]
+}
+
+// ---------- Workspace ----------
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  GUEST
+}
+
+model Workspace {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  createdById String
+  createdAt   DateTime @default(now())
+
+  createdBy   User                  @relation("WorkspaceCreator", fields: [createdById], references: [id])
+  memberships WorkspaceMembership[]
+  projects    Project[]
+  invitations Invitation[]
+  auditEvents AuditEvent[]
+}
+
+model WorkspaceMembership {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole
+  createdAt   DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  grants    CapabilityGrant[]
+
+  @@unique([workspaceId, userId])
+}
+
+// Extends a membership beyond its role defaults (PRD 7.2). Grants never
+// reduce role defaults.
+model CapabilityGrant {
+  id           String   @id @default(cuid())
+  membershipId String
+  capability   String
+  // Null = workspace-wide; otherwise scoped to a project.
+  projectId    String?
+  grantedById  String
+  createdAt    DateTime @default(now())
+
+  membership WorkspaceMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, capability, projectId])
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+model Invitation {
+  id          String           @id @default(cuid())
+  workspaceId String
+  email       String
+  role        WorkspaceRole
+  token       String           @unique
+  status      InvitationStatus @default(PENDING)
+  invitedById String
+  expiresAt   DateTime
+  createdAt   DateTime         @default(now())
+  acceptedAt  DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy User      @relation("InvitationInviter", fields: [invitedById], references: [id])
+
+  @@index([workspaceId, email])
+}
+
+// ---------- Project ----------
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model Project {
+  id             String        @id @default(cuid())
+  workspaceId    String
+  name           String
+  slug           String
+  description    String?
+  status         ProjectStatus @default(ACTIVE)
+  activeBranchId String?
+  createdById    String
+  createdAt      DateTime      @default(now())
+
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  branches         ProjectBranch[]
+  stageStates      StageState[]
+  artifacts        Artifact[]
+  briefs           ProjectBrief[]
+  requirements     Requirement[]
+  components       Component[]
+  repoLinks        RepoLink[]
+  validationChecks ValidationCheck[]
+  releases         Release[]
+  designDocs       DesignDoc[]
+  chatMessages     ChatMessage[]
+  codeFiles        CodeFile[]
+
+  @@unique([workspaceId, slug])
+}
+
+model ProjectBranch {
+  id          String   @id @default(cuid())
+  projectId   String
+  name        String
+  isDefault   Boolean  @default(false)
+  createdById String
+  createdAt   DateTime @default(now())
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stageStates StageState[]
+  artifacts   Artifact[]
+
+  @@unique([projectId, name])
+}
+
+enum Stage {
+  IDEATE
+  ENGINEER
+  VERIFY
+  LAUNCH
+}
+
+enum StageStatus {
+  NOT_STARTED
+  DRAFT
+  RUNNING
+  NEEDS_REVIEW
+  APPROVED
+  BLOCKED
+  STALE
+}
+
+model StageState {
+  id                 String      @id @default(cuid())
+  projectId          String
+  branchId           String
+  stage              Stage
+  status             StageStatus @default(NOT_STARTED)
+  approvedSnapshotId String?
+  approvedById       String?
+  approvedAt         DateTime?
+  updatedAt          DateTime    @updatedAt
+
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  branch  ProjectBranch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, branchId, stage])
+}
+
+// ---------- Artifacts (metadata only in Phase 0) ----------
+
+enum VerificationState {
+  UNVERIFIED
+  SIMULATED
+  VERIFIED
+  REJECTED
+}
+
+model Artifact {
+  id                String            @id @default(cuid())
+  projectId         String
+  branchId          String
+  kind              String
+  name              String
+  storageKey        String
+  sha256            String?
+  mimeType          String
+  sizeBytes         Int?
+  verificationState VerificationState @default(UNVERIFIED)
+  createdById       String
+  createdAt         DateTime          @default(now())
+
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  branch  ProjectBranch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+}
+
+// ---------- Audit / domain events ----------
+
+model AuditEvent {
+  id            String   @id @default(cuid())
+  type          String
+  schemaVersion Int      @default(1)
+  workspaceId   String
+  projectId     String?
+  branchId      String?
+  actorId       String
+  actorType     String   @default("USER")
+  causationId   String?
+  correlationId String?
+  payload       Json
+  createdAt     DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor     User      @relation(fields: [actorId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@index([projectId, createdAt])
+}
+
+// ---------- Stage 1: Ideate ----------
+
+model ProjectBrief {
+  id                  String   @id @default(cuid())
+  projectId           String
+  branchId            String
+  prompt              String?
+  intendedUse         String?
+  environment         String?
+  targetAudience      String?
+  budgetCents         Int?
+  currency            String   @default("USD")
+  dimensions          String?
+  performanceTargets  String?
+  manufacturingNotes  String?
+  updatedById         String
+  updatedAt           DateTime @updatedAt
+  createdAt           DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, branchId])
+}
+
+enum RequirementType {
+  FUNCTIONAL
+  ELECTRICAL
+  MECHANICAL
+  SOFTWARE
+  VISUAL
+  MANUFACTURING
+  COST
+  COMPLIANCE
+  UX
+}
+
+enum RequirementPriority {
+  MUST
+  SHOULD
+  MAY
+}
+
+enum RequirementStatus {
+  PROPOSED
+  ACCEPTED
+  REJECTED
+}
+
+model Requirement {
+  id                 String              @id @default(cuid())
+  projectId          String
+  branchId           String
+  title              String
+  description        String?
+  type               RequirementType     @default(FUNCTIONAL)
+  priority           RequirementPriority @default(SHOULD)
+  status             RequirementStatus   @default(PROPOSED)
+  minValue           Float?
+  maxValue           Float?
+  unit               String?
+  rationale          String?
+  verificationMethod String?
+  createdById        String
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, branchId])
+}
+
+// ---------- Stage 2: Engineer ----------
+
+enum Discipline {
+  ELECTRONICS
+  MECHANICAL
+  SOFTWARE
+  DESIGN
+}
+
+enum DesignDocKind {
+  CIRCUIT
+  MODEL3D
+  DESIGN
+}
+
+/**
+ * JSON documents backing the visual editors: circuit schematic (CIRCUIT),
+ * parametric 3D model (MODEL3D), and industrial design notes (DESIGN).
+ * One doc per kind per branch; edits autosave last-write-wins. Live
+ * co-editing (Yjs) replaces this storage in a later phase.
+ */
+model DesignDoc {
+  id          String        @id @default(cuid())
+  projectId   String
+  branchId    String
+  kind        DesignDocKind
+  data        Json
+  updatedById String
+  updatedAt   DateTime      @updatedAt
+  createdAt   DateTime      @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, branchId, kind])
+}
+
+model Component {
+  id            String     @id @default(cuid())
+  projectId     String
+  branchId      String
+  discipline    Discipline @default(ELECTRONICS)
+  refDes        String?
+  name          String
+  manufacturer  String?
+  partNumber    String?
+  quantity      Int        @default(1)
+  unitCostCents Int?
+  sourceUrl     String?
+  notes         String?
+  createdById   String
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, branchId])
+}
+
+model RepoLink {
+  id          String   @id @default(cuid())
+  projectId   String
+  branchId    String
+  role        String
+  url         String
+  notes       String?
+  createdById String
+  createdAt   DateTime @default(now())
+
+  project Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  files   CodeFile[]
+
+  @@index([projectId, branchId])
+}
+
+/**
+ * Files in the project code workspace (Engineer > Code). Each file belongs
+ * to a linked repository and is edited in-app (Monaco). Push/pull sync with
+ * the actual GitHub repo arrives with the GitHub App integration phase.
+ */
+model CodeFile {
+  id          String   @id @default(cuid())
+  projectId   String
+  branchId    String
+  repoId      String
+  path        String
+  content     String   @default("")
+  updatedById String
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  repo    RepoLink @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([repoId, path])
+  @@index([projectId, branchId])
+}
+
+// ---------- AI copilot ----------
+
+/**
+ * Persisted project chat history for the AI copilot sidebar. Message
+ * `parts` stores the AI SDK UIMessage parts array (text + tool calls).
+ */
+model ChatMessage {
+  id        String   @id @default(cuid())
+  projectId String
+  branchId  String
+  role      String
+  parts     Json
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, branchId, createdAt])
+}
+
+// ---------- Stage 3: Verify ----------
+
+enum ValidationCategory {
+  VISUAL
+  ELECTRICAL
+  MECHANICAL
+  SOFTWARE
+  CROSS_DOMAIN
+}
+
+enum ValidationStatus {
+  PENDING
+  PASS
+  FAIL
+  WARNING
+  SKIPPED
+  SIMULATED
+  ERROR
+}
+
+enum ValidationSeverity {
+  INFO
+  MINOR
+  MAJOR
+  CRITICAL
+}
+
+model ValidationCheck {
+  id           String             @id @default(cuid())
+  projectId    String
+  branchId     String
+  category     ValidationCategory @default(CROSS_DOMAIN)
+  title        String
+  detail       String?
+  status       ValidationStatus   @default(PENDING)
+  severity     ValidationSeverity @default(INFO)
+  evidence     String?
+  waived       Boolean            @default(false)
+  waiverReason String?
+  approvedById String?
+  approvedAt   DateTime?
+  createdById  String
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, branchId])
+}
+
+// ---------- Stage 4: Launch ----------
+
+model Release {
+  id          String   @id @default(cuid())
+  projectId   String
+  branchId    String
+  version     String
+  notes       String?
+  // Immutable frozen copy of requirements, components, repos, and checks
+  // at creation time. Releases are never mutated (PRD 14.1).
+  snapshot    Json
+  createdById String
+  createdByName String
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, version])
+  @@index([projectId, branchId])
+}

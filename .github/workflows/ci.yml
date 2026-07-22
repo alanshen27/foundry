@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: foundry
+          POSTGRES_PASSWORD: foundry
+          POSTGRES_DB: foundry
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U foundry"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://foundry:foundry@localhost:5432/foundry
+      AUTH_MODE: local
+      AUTH_SECRET: ci-secret
+      STORAGE_MODE: local
+      STORAGE_BUCKET: artifacts
+      NEXT_PUBLIC_REALTIME_MODE: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm db:push
+      - run: pnpm db:seed
+      - run: pnpm test
+      - name: Install Playwright browsers
+        run: pnpm --filter @foundry/web exec playwright install --with-deps chromium
+      - run: pnpm e2e

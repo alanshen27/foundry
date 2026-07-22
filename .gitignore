@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# builds
+.next/
+.turbo/
+dist/
+coverage/
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+
+# test artifacts
+playwright-report/
+test-results/
+
+# local adapters
+.local-storage/
+
+# misc
+.DS_Store
+.screens/
