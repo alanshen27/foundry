@@ -2,17 +2,27 @@ import {
   footprintDef,
   type PcbDoc,
 } from "@/lib/pcb/doc";
+import { EMPTY_CIRCUIT, type CircuitDoc } from "@/lib/circuit/catalog";
+import { buildRatsnest } from "@/lib/pcb/netlist";
 
 /**
  * Static top-down PCB view for headless copilot screenshots (/render/pcb).
- * No pan/zoom — fits the board into a fixed viewport.
+ * No pan/zoom — fits the board into a fixed viewport. Airwires are drawn so
+ * the copilot can see whether its placement follows the schematic's nets.
  */
-export function PcbRenderView({ doc }: { doc: PcbDoc }) {
+export function PcbRenderView({
+  doc,
+  circuit = EMPTY_CIRCUIT,
+}: {
+  doc: PcbDoc;
+  circuit?: CircuitDoc;
+}) {
   const pad = 4;
   const w = doc.board.widthMm;
   const h = doc.board.heightMm;
   const viewW = w + pad * 2;
   const viewH = h + pad * 2;
+  const { nets, airwires, issues } = buildRatsnest(circuit, doc);
 
   return (
     <svg
@@ -33,6 +43,19 @@ export function PcbRenderView({ doc }: { doc: PcbDoc }) {
         stroke="#f0c040"
         strokeWidth={0.25}
       />
+      {airwires.map((wire, i) => (
+        <line
+          key={`${wire.net}-${i}`}
+          x1={wire.from.xMm}
+          y1={wire.from.yMm}
+          x2={wire.to.xMm}
+          y2={wire.to.yMm}
+          stroke="#d0d0d0"
+          strokeWidth={0.09}
+          strokeDasharray="0.4 0.3"
+          opacity={0.6}
+        />
+      ))}
       {doc.footprints.map((fp) => {
         const def = footprintDef(fp.libraryId);
         if (!def) return null;
@@ -77,14 +100,27 @@ export function PcbRenderView({ doc }: { doc: PcbDoc }) {
       })}
       <text
         x={w / 2}
-        y={h + pad - 0.8}
+        y={h + pad - 2.4}
         textAnchor="middle"
         fill="#a0a0a0"
         fontSize={1.4}
         fontFamily="ui-monospace, monospace"
       >
-        {w}×{h}×{doc.board.thicknessMm} mm · {doc.footprints.length} footprints
+        {w}×{h}×{doc.board.thicknessMm} mm · {doc.footprints.length} footprints · {nets.length}{" "}
+        nets · {airwires.length} airwires
       </text>
+      {issues.unlinkedParts.length + issues.unmappedPins.length > 0 ? (
+        <text
+          x={w / 2}
+          y={h + pad - 0.6}
+          textAnchor="middle"
+          fill="#e0a040"
+          fontSize={1.2}
+          fontFamily="ui-monospace, monospace"
+        >
+          {issues.unlinkedParts.length} unplaced · {issues.unmappedPins.length} unmapped pins
+        </text>
+      ) : null}
     </svg>
   );
 }

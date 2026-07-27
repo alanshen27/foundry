@@ -17,6 +17,11 @@ export type PcbBoard = {
 };
 
 export type PcbPadDef = {
+  /**
+   * Pad identity within the footprint, e.g. "1", "2", "A", "EP". Empty for
+   * mechanical pads (mounting holes) that never carry a net.
+   */
+  pin: string;
   /** Offset from footprint origin (centre). */
   xMm: number;
   yMm: number;
@@ -50,6 +55,18 @@ export type PcbFootprint = {
   /** Rotation clockwise in degrees (0 / 90 / 180 / 270 typical). */
   rotationDeg: number;
   side: PcbSide;
+  /**
+   * Id of the CircuitPart this footprint physically realises. Set it to pull
+   * the schematic's nets onto the board (see lib/pcb/netlist.ts); unset means
+   * the footprint is board-only (mounting holes, test points).
+   */
+  partId?: string;
+  /**
+   * Schematic pin name -> pad pin, for parts whose symbol pins don't match the
+   * footprint's pad names (a Wokwi LED's A/C vs. an LED_0805's 1/2). Only
+   * needed where the names differ.
+   */
+  pinMap?: Record<string, string>;
 };
 
 export type PcbDoc = {
@@ -79,8 +96,8 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     bodyWMm: 1.6,
     bodyHMm: 0.8,
     pads: [
-      { xMm: -0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
-      { xMm: 0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
+      { pin: "1", xMm: -0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
+      { pin: "2", xMm: 0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
     ],
   },
   {
@@ -91,8 +108,8 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     bodyWMm: 2.0,
     bodyHMm: 1.25,
     pads: [
-      { xMm: -0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
-      { xMm: 0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
+      { pin: "1", xMm: -0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
+      { pin: "2", xMm: 0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
     ],
   },
   {
@@ -103,8 +120,8 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     bodyWMm: 1.6,
     bodyHMm: 0.8,
     pads: [
-      { xMm: -0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
-      { xMm: 0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
+      { pin: "1", xMm: -0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
+      { pin: "2", xMm: 0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
     ],
   },
   {
@@ -114,9 +131,11 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "led 0805 smd diode",
     bodyWMm: 2.0,
     bodyHMm: 1.25,
+    // Pad 1 is the anode, pad 2 the cathode — Wokwi LED symbols use A/C, so
+    // those parts need a pinMap.
     pads: [
-      { xMm: -0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
-      { xMm: 0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
+      { pin: "1", xMm: -0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
+      { pin: "2", xMm: 0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
     ],
   },
   {
@@ -126,10 +145,13 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "soic 8 ic package",
     bodyWMm: 5.0,
     bodyHMm: 4.0,
+    // Pins 1-4 run left-to-right along the top row, 5-8 right-to-left along the
+    // bottom — the standard counter-clockwise SOIC numbering.
     pads: Array.from({ length: 8 }, (_, i) => {
       const row = i < 4 ? -1 : 1;
       const col = i < 4 ? i : 7 - i;
       return {
+        pin: String(i + 1),
         xMm: -1.905 + col * 1.27,
         yMm: row * 2.6,
         wMm: 0.6,
@@ -145,8 +167,11 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "qfn 16 3x3 ic",
     bodyWMm: 3.0,
     bodyHMm: 3.0,
+    // 1-16 run around the package in placement order (top edge left-to-right,
+    // then right, bottom, left), with "EP" for the centre exposed pad.
     pads: [
       ...Array.from({ length: 4 }, (_, i) => ({
+        pin: String(i + 1),
         xMm: -1.05 + i * 0.5,
         yMm: -1.45,
         wMm: 0.25,
@@ -154,6 +179,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
         shape: "rect" as const,
       })),
       ...Array.from({ length: 4 }, (_, i) => ({
+        pin: String(i + 5),
         xMm: 1.45,
         yMm: -1.05 + i * 0.5,
         wMm: 0.55,
@@ -161,6 +187,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
         shape: "rect" as const,
       })),
       ...Array.from({ length: 4 }, (_, i) => ({
+        pin: String(i + 9),
         xMm: 1.05 - i * 0.5,
         yMm: 1.45,
         wMm: 0.25,
@@ -168,13 +195,14 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
         shape: "rect" as const,
       })),
       ...Array.from({ length: 4 }, (_, i) => ({
+        pin: String(i + 13),
         xMm: -1.45,
         yMm: 1.05 - i * 0.5,
         wMm: 0.55,
         hMm: 0.25,
         shape: "rect" as const,
       })),
-      { xMm: 0, yMm: 0, wMm: 1.6, hMm: 1.6, shape: "rect" as const },
+      { pin: "EP", xMm: 0, yMm: 0, wMm: 1.6, hMm: 1.6, shape: "rect" as const },
     ],
   },
   {
@@ -185,6 +213,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     bodyWMm: 2.54 * 4,
     bodyHMm: 2.54,
     pads: Array.from({ length: 4 }, (_, i) => ({
+      pin: String(i + 1),
       xMm: -1.5 * 2.54 + i * 2.54,
       yMm: 0,
       wMm: 1.6,
@@ -200,10 +229,12 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "usb type-c connector",
     bodyWMm: 9.0,
     bodyHMm: 7.5,
+    // S1/S2 are the through-hole shield tabs; A1-A12 the signal row.
     pads: [
-      { xMm: -4.2, yMm: 0, wMm: 1.2, hMm: 2.2, shape: "rect", plated: true },
-      { xMm: 4.2, yMm: 0, wMm: 1.2, hMm: 2.2, shape: "rect", plated: true },
+      { pin: "S1", xMm: -4.2, yMm: 0, wMm: 1.2, hMm: 2.2, shape: "rect", plated: true },
+      { pin: "S2", xMm: 4.2, yMm: 0, wMm: 1.2, hMm: 2.2, shape: "rect", plated: true },
       ...Array.from({ length: 12 }, (_, i) => ({
+        pin: `A${i + 1}`,
         xMm: -2.75 + i * 0.5,
         yMm: 2.8,
         wMm: 0.3,
@@ -219,7 +250,8 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "mounting hole m3 3.2mm",
     bodyWMm: 6.0,
     bodyHMm: 6.0,
-    pads: [{ xMm: 0, yMm: 0, wMm: 3.2, hMm: 3.2, shape: "oval" }],
+    // Mechanical only — no pin, so it never joins a net.
+    pads: [{ pin: "", xMm: 0, yMm: 0, wMm: 3.2, hMm: 3.2, shape: "oval" }],
   },
 ];
 
@@ -238,6 +270,16 @@ export function unsupportedFootprintIds(
     if (!footprintDef(f.libraryId)) unknown.add(f.libraryId);
   }
   return [...unknown];
+}
+
+/** Pad on `libraryId` whose pin matches `pin` (exact, then case-insensitive). */
+export function padByPin(libraryId: string, pin: string): PcbPadDef | undefined {
+  const def = footprintDef(libraryId);
+  if (!def || !pin) return undefined;
+  return (
+    def.pads.find((p) => p.pin === pin) ??
+    def.pads.find((p) => p.pin.toLowerCase() === pin.toLowerCase())
+  );
 }
 
 export function searchFootprints(query: string): PcbFootprintDef[] {
@@ -260,6 +302,22 @@ function num(raw: unknown, fallback: number, min: number, max: number): number {
   const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
   if (!Number.isFinite(n)) return fallback;
   return clamp(n, min, max);
+}
+
+/**
+ * Keeps only entries whose target names a real pad on `libraryId` — a map into
+ * a pad that doesn't exist would silently drop the pin from the ratsnest, so
+ * it's better reported as unmapped.
+ */
+function cleanPinMap(raw: unknown, libraryId: string): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [schematicPin, padPin] of Object.entries(raw as Record<string, unknown>)) {
+    if (!schematicPin || typeof padPin !== "string") continue;
+    const pad = padByPin(libraryId, padPin);
+    if (pad) out[schematicPin.slice(0, 40)] = pad.pin;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function nextRefDes(libraryId: string, existing: PcbFootprint[]): string {
@@ -336,6 +394,11 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
       yMm: num(f.yMm, board.heightMm / 2, -50, board.heightMm + 50),
       rotationDeg: num(f.rotationDeg, 0, 0, 359),
       side,
+      partId:
+        typeof f.partId === "string" && f.partId.trim()
+          ? f.partId.trim().slice(0, 60)
+          : undefined,
+      pinMap: cleanPinMap(f.pinMap, libraryId),
     });
   }
 

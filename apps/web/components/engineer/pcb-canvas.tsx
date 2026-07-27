@@ -41,6 +41,8 @@ import {
   type PcbFootprint,
   type PcbSide,
 } from "@/lib/pcb/doc";
+import { EMPTY_CIRCUIT, normalizeCircuitDoc } from "@/lib/circuit/catalog";
+import { buildRatsnest, netsByPad } from "@/lib/pcb/netlist";
 import { trpc } from "@/lib/trpc";
 
 const PcbPreview3d = dynamic(
@@ -54,7 +56,7 @@ const PcbPreview3d = dynamic(
 const PX_PER_MM = 8;
 const PAD = 24;
 
-type LayerKey = "Edge.Cuts" | "F.Cu" | "B.Cu" | "F.SilkS" | "courtyard";
+type LayerKey = "Edge.Cuts" | "F.Cu" | "B.Cu" | "F.SilkS" | "courtyard" | "ratsnest";
 
 const LAYER_META: { id: LayerKey; label: string; color: string }[] = [
   { id: "Edge.Cuts", label: "Edge.Cuts", color: "#f0c040" },
@@ -62,6 +64,7 @@ const LAYER_META: { id: LayerKey; label: string; color: string }[] = [
   { id: "B.Cu", label: "B.Cu", color: "#4040c0" },
   { id: "F.SilkS", label: "F.SilkS", color: "#e8e8e0" },
   { id: "courtyard", label: "Courtyard", color: "#40c080" },
+  { id: "ratsnest", label: "Ratsnest", color: "#d0d0d0" },
 ];
 
 function BoardField({
@@ -202,6 +205,8 @@ export function PcbCanvas({
   canEdit: boolean;
 }) {
   const query = trpc.design.get.useQuery({ projectId, branchId, kind: "PCB" });
+  // The schematic is the source of nets; the board only references it.
+  const circuitQuery = trpc.design.get.useQuery({ projectId, branchId, kind: "CIRCUIT" });
   const save = trpc.design.save.useMutation();
 
   const [doc, setDoc] = useState<PcbDoc>(EMPTY_PCB);
@@ -216,6 +221,7 @@ export function PcbCanvas({
     "B.Cu": true,
     "F.SilkS": true,
     courtyard: true,
+    ratsnest: true,
   });
 
   const dirtyRef = useRef(false);
@@ -385,6 +391,22 @@ export function PcbCanvas({
   const results = useMemo(() => searchFootprints(search), [search]);
   const selected = doc.footprints.find((f) => f.id === selectedId) ?? null;
 
+  const circuit = useMemo(
+    () => (circuitQuery.data ? normalizeCircuitDoc(circuitQuery.data.data) : EMPTY_CIRCUIT),
+    [circuitQuery.data],
+  );
+  // Recomputed while dragging so airwires track the footprint under the cursor.
+  const ratsnest = useMemo(() => buildRatsnest(circuit, doc), [circuit, doc]);
+  const padNets = useMemo(() => netsByPad(ratsnest.nets, doc), [ratsnest.nets, doc]);
+  const selectedDef = selected ? footprintDef(selected.libraryId) : null;
+  const selectedPart = selected?.partId
+    ? (circuit.parts.find((p) => p.id === selected.partId) ?? null)
+    : null;
+  const issueCount =
+    ratsnest.issues.unlinkedParts.length +
+    ratsnest.issues.unmappedPins.length +
+    ratsnest.issues.danglingFootprints.length;
+
   // Fit board once when the document first loads.
   useEffect(() => {
     if (!query.isSuccess || fittedRef.current) return;
@@ -522,6 +544,28 @@ export function PcbCanvas({
                 <text x={1} y={-1} fill="#f0c040" fontSize={1.1} opacity={0.7}>
                   (0,0)
                 </text>
+
+                {/* Airwires sit under the footprints so pads stay readable. */}
+                {layers.ratsnest
+                  ? ratsnest.airwires.map((wire, i) => {
+                      const touchesSelection =
+                        selectedId !== null &&
+                        (wire.from.footprintId === selectedId || wire.to.footprintId === selectedId);
+                      return (
+                        <line
+                          key={`${wire.net}-${i}`}
+                          x1={wire.from.xMm}
+                          y1={wire.from.yMm}
+                          x2={wire.to.xMm}
+                          y2={wire.to.yMm}
+                          stroke={touchesSelection ? "var(--color-primary)" : "#d0d0d0"}
+                          strokeWidth={touchesSelection ? 0.12 : 0.07}
+                          strokeDasharray="0.4 0.3"
+                          opacity={touchesSelection ? 0.95 : 0.5}
+                        />
+                      );
+                    })
+                  : null}
 
                 {doc.footprints.map((fp) => (
                   <FootprintGraphic
@@ -676,6 +720,43 @@ export function PcbCanvas({
               <p className="text-muted-foreground text-[10px]">
                 {selected.libraryId} · {selected.side}
               </p>
+
+              <div className="mt-1 border-t pt-2">
+                <h3 className="text-muted-foreground mb-1 text-[10px] font-semibold tracking-wide uppercase">
+                  Nets
+                </h3>
+                {selected.partId ? (
+                  <p className="text-muted-foreground mb-1 text-[10px]">
+                    Schematic part{" "}
+                    <span className="text-foreground font-mono">
+                      {selectedPart?.label ?? selectedPart?.id ?? selected.partId}
+                    </span>
+                    {selectedPart ? null : " (missing)"}
+                  </p>
+                ) : (
+                  <p className="text-muted-foreground mb-1 text-[10px]">
+                    Not linked to a schematic part — no nets.
+                  </p>
+                )}
+                <div className="flex flex-col gap-0.5">
+                  {(selectedDef?.pads ?? [])
+                    .filter((pad) => pad.pin)
+                    .map((pad) => {
+                      const net = padNets.get(`${selected.id}:${pad.pin}`);
+                      return (
+                        <div
+                          key={pad.pin}
+                          className="flex items-center justify-between gap-2 font-mono text-[10px]"
+                        >
+                          <span className="text-muted-foreground">{pad.pin}</span>
+                          <span className={net ? "text-foreground" : "text-muted-foreground/60"}>
+                            {net ?? "—"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
               <div className="flex flex-wrap gap-1.5 pt-1">
                 <Button
                   variant="outline"
@@ -723,7 +804,23 @@ export function PcbCanvas({
           )}
         >
           {doc.footprints.length} footprint{doc.footprints.length === 1 ? "" : "s"} · grid{" "}
-          {gridStep} mm
+          {gridStep} mm · {ratsnest.nets.length} net
+          {ratsnest.nets.length === 1 ? "" : "s"} · {ratsnest.airwires.length} airwire
+          {ratsnest.airwires.length === 1 ? "" : "s"}
+          {issueCount > 0 ? (
+            <>
+              <br />
+              {ratsnest.issues.unlinkedParts.length > 0
+                ? `${ratsnest.issues.unlinkedParts.length} schematic part${ratsnest.issues.unlinkedParts.length === 1 ? "" : "s"} unplaced. `
+                : null}
+              {ratsnest.issues.unmappedPins.length > 0
+                ? `${ratsnest.issues.unmappedPins.length} pin${ratsnest.issues.unmappedPins.length === 1 ? "" : "s"} unmapped. `
+                : null}
+              {ratsnest.issues.danglingFootprints.length > 0
+                ? `${ratsnest.issues.danglingFootprints.length} stale link${ratsnest.issues.danglingFootprints.length === 1 ? "" : "s"}.`
+                : null}
+            </>
+          ) : null}
         </p>
       </aside>
     </div>

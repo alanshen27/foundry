@@ -15,6 +15,7 @@ import {
   normalizePcbDoc,
   unsupportedFootprintIds,
 } from "@/lib/pcb/doc";
+import { buildNets, buildRatsnest } from "@/lib/pcb/netlist";
 import { isPlausibleZooOpId } from "@foundry/cad";
 import {
   addCadComponents,
@@ -118,6 +119,19 @@ const pcbSchema = z.object({
         yMm: z.number().describe("Centre Y from top-left of Edge.Cuts, mm"),
         rotationDeg: z.number().min(0).max(359).default(0),
         side: z.enum(["front", "back"]).default("front"),
+        partId: z
+          .string()
+          .max(60)
+          .optional()
+          .describe(
+            "Id of the schematic part this footprint realises (from get_project_state circuit.parts[].id). Set it to pull the schematic's nets onto the board — without it there is no ratsnest for this footprint.",
+          ),
+        pinMap: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe(
+            'Schematic pin name -> pad pin, only where the names differ. E.g. a Wokwi LED on LED_0805 needs {"A":"1","C":"2"}; an MCU on SOIC-8 needs {"GND.1":"8","5V":"1"}. Pads are numbered 1..n (QFN centre pad is "EP", USB-C shield tabs are "S1"/"S2").',
+          ),
       }),
     )
     .max(120),
@@ -334,6 +348,7 @@ export function buildProjectTools(ctx: ToolContext) {
               where: { projectId_branchId_kind: { projectId, branchId, kind: "DESIGN" } },
             }),
           ]);
+          const circuitDoc = circuit?.data ? normalizeCircuitDoc(circuit.data) : null;
           const designData = (design?.data as Record<string, unknown> | null) ?? {};
           const conceptImages = Array.isArray(designData.conceptImages)
             ? (designData.conceptImages as { key: string; prompt: string }[])
@@ -345,8 +360,16 @@ export function buildProjectTools(ctx: ToolContext) {
             repoLinks,
             validationChecks: checks,
             stages: stageStates.map((s) => ({ stage: s.stage, status: s.status })),
-            circuit: circuit?.data ? normalizeCircuitDoc(circuit.data) : null,
+            circuit: circuitDoc,
             pcb: pcb?.data ? normalizePcbDoc(pcb.data) : null,
+            // Nets derived from the schematic's wires, so PCB placement can be
+            // checked against them. Empty until the schematic has wires.
+            netlist: circuitDoc
+              ? buildNets(circuitDoc).map((net) => ({
+                  name: net.name,
+                  nodes: net.nodes.map((n) => `${n.partId}:${n.pin}`),
+                }))
+              : [],
             cad: model3d?.data
               ? (() => {
                   const d = normalizeCadDoc(model3d.data);
@@ -858,7 +881,7 @@ export function buildProjectTools(ctx: ToolContext) {
     },
 
     save_pcb: {
-      description: `Replace the PCB board layout (Engineer > PCB view): rectangular Edge.Cuts outline in millimetres plus footprint placement. This is placement/outline only — no copper routing. Origin (0,0) is the top-left of the board; +X right, +Y down. Keep footprints inside the outline with ~2mm margin; put mounting holes near corners; connectors (USB, headers) on edges. Map schematic parts to footprints: resistors→R_0603/R_0805, caps→C_0603, LEDs→LED_0805, MCUs/ICs→SOIC-8 or QFN-16-3x3, pin headers→PinHeader_1x04, USB→USB_C_Receptacle, holes→MountingHole_3.2mm. ONLY these libraryIds: ${FOOTPRINT_IDS.join(", ")}.`,
+      description: `Replace the PCB board layout (Engineer > PCB view): rectangular Edge.Cuts outline in millimetres plus footprint placement. This is placement/outline only — no copper routing. Origin (0,0) is the top-left of the board; +X right, +Y down. Keep footprints inside the outline with ~2mm margin; put mounting holes near corners; connectors (USB, headers) on edges. Map schematic parts to footprints: resistors→R_0603/R_0805, caps→C_0603, LEDs→LED_0805, MCUs/ICs→SOIC-8 or QFN-16-3x3, pin headers→PinHeader_1x04, USB→USB_C_Receptacle, holes→MountingHole_3.2mm. Set partId (and pinMap where pin names differ) on every footprint that comes from the schematic: that derives the netlist and draws the ratsnest, and the result tells you which parts are still unplaced or unmapped. Place connected parts near each other so airwires stay short and uncrossed. ONLY these libraryIds: ${FOOTPRINT_IDS.join(", ")}.`,
       inputSchema: pcbSchema,
       execute: async (input: PcbInput) =>
         guard(ctx, "electronics.edit", async (workspaceId) => {
@@ -898,11 +921,34 @@ export function buildProjectTools(ctx: ToolContext) {
             },
           });
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
+
+          // Report the netlist the placement produced so the model can see
+          // which schematic parts it left unplaced or unmapped.
+          const circuitDoc = await prisma.designDoc.findUnique({
+            where: { projectId_branchId_kind: { projectId, branchId, kind: "CIRCUIT" } },
+          });
+          const circuit = circuitDoc?.data
+            ? normalizeCircuitDoc(circuitDoc.data)
+            : { version: 2 as const, parts: [], wires: [] };
+          const { nets, airwires, issues } = buildRatsnest(circuit, data);
+          const unresolved =
+            issues.unlinkedParts.length +
+            issues.unmappedPins.length +
+            issues.danglingFootprints.length;
+
           return {
             ok: true,
             board: data.board,
             footprints: data.footprints.length,
+            nets: nets.length,
+            airwires: airwires.length,
+            ...(unresolved > 0 ? { issues } : {}),
             staleStages: staled,
+            ...(unresolved > 0
+              ? {
+                  hint: "Some schematic pins aren't on the board yet: place the missing parts, set partId, or add a pinMap for pins whose names don't match a pad. Then call render_pcb.",
+                }
+              : {}),
           };
         }),
     },
