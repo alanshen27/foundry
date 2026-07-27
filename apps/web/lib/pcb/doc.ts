@@ -1,9 +1,22 @@
 /**
- * PCB board document model (Engineer > PCB). Outline, stackup metadata, and
- * footprint placement — a KiCad-style layout baseline, not a full router.
+ * PCB board document model (Engineer > PCB). Outline, stackup metadata,
+ * footprint placement, and two-layer copper routing — a KiCad-style layout
+ * baseline with manual routing, DRC, and Gerber output.
  */
 
 export type PcbSide = "front" | "back";
+
+/** The two copper layers. Routing is two-sided; inner layers are not modelled. */
+export type PcbLayer = "F.Cu" | "B.Cu";
+
+export const PCB_LAYERS: PcbLayer[] = ["F.Cu", "B.Cu"];
+
+/** The copper layer a footprint's SMD pads live on. */
+export function sideLayer(side: PcbSide): PcbLayer {
+  return side === "front" ? "F.Cu" : "B.Cu";
+}
+
+export type PcbPoint = { xMm: number; yMm: number };
 
 export type PcbBoard = {
   /** Board outline width in millimetres (Edge.Cuts). */
@@ -69,10 +82,68 @@ export type PcbFootprint = {
   pinMap?: Record<string, string>;
 };
 
+/**
+ * A routed copper polyline. Stored as a vertex list rather than one segment per
+ * record because that is how a track is drawn (click, click, click) and how it
+ * is edited — splitting a corner off into its own row would make an undo of a
+ * single route touch many records.
+ *
+ * `net` is the net name the track was started from. It is a claim, not a
+ * guarantee: dragging a footprint afterwards can leave the copper touching a
+ * different net, which is exactly the short DRC looks for.
+ */
+export type PcbTrack = {
+  id: string;
+  net?: string;
+  layer: PcbLayer;
+  widthMm: number;
+  /** At least two points; collinear duplicates are removed on normalize. */
+  points: PcbPoint[];
+};
+
+/**
+ * A plated through-hole joining F.Cu and B.Cu. Blind/buried vias would need a
+ * real stackup, so every via spans the whole board.
+ */
+export type PcbVia = {
+  id: string;
+  net?: string;
+  xMm: number;
+  yMm: number;
+  drillMm: number;
+  diameterMm: number;
+};
+
+/**
+ * Manufacturing constraints. Defaults are a conservative 2-layer spec that
+ * every low-cost fab (JLCPCB, PCBWay, OSH Park) accepts without review.
+ */
+export type PcbRules = {
+  /** Minimum copper-to-copper gap between different nets. */
+  clearanceMm: number;
+  /** Default width for newly drawn tracks. */
+  trackWidthMm: number;
+  viaDiameterMm: number;
+  viaDrillMm: number;
+  /** Minimum copper-to-board-edge gap. */
+  edgeClearanceMm: number;
+};
+
+export const DEFAULT_RULES: PcbRules = {
+  clearanceMm: 0.2,
+  trackWidthMm: 0.25,
+  viaDiameterMm: 0.6,
+  viaDrillMm: 0.3,
+  edgeClearanceMm: 0.3,
+};
+
 export type PcbDoc = {
   version: 1;
   board: PcbBoard;
   footprints: PcbFootprint[];
+  tracks: PcbTrack[];
+  vias: PcbVia[];
+  rules: PcbRules;
 };
 
 export const EMPTY_PCB: PcbDoc = {
@@ -84,7 +155,22 @@ export const EMPTY_PCB: PcbDoc = {
     cornerRadiusMm: 1,
   },
   footprints: [],
+  tracks: [],
+  vias: [],
+  rules: DEFAULT_RULES,
 };
+
+/** A fresh EMPTY_PCB whose nested objects/arrays are safe to mutate. */
+export function emptyPcbDoc(): PcbDoc {
+  return {
+    version: 1,
+    board: { ...EMPTY_PCB.board },
+    footprints: [],
+    tracks: [],
+    vias: [],
+    rules: { ...DEFAULT_RULES },
+  };
+}
 
 /** Small built-in library — enough for placement practice, not a full KiCad lib. */
 export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
@@ -343,6 +429,11 @@ function nextRefDes(libraryId: string, existing: PcbFootprint[]): string {
   return `${prefix}${i}`;
 }
 
+/** Collision-resistant enough for client-side ids on a single document. */
+export function pcbId(prefix: string): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
 export function createFootprint(
   libraryId: string,
   existing: PcbFootprint[],
@@ -350,7 +441,7 @@ export function createFootprint(
 ): PcbFootprint | null {
   if (!footprintDef(libraryId)) return null;
   return {
-    id: `fp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    id: pcbId("fp"),
     libraryId,
     refDes: nextRefDes(libraryId, existing),
     xMm: at.xMm,
@@ -360,8 +451,81 @@ export function createFootprint(
   };
 }
 
+/**
+ * Drops consecutive duplicate vertices. A click that lands on the previous
+ * point would otherwise store a zero-length segment, which has no direction and
+ * so breaks both the DRC segment distance and the Gerber writer.
+ */
+function cleanPoints(raw: unknown, board: PcbBoard): PcbPoint[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PcbPoint[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const p = item as Record<string, unknown>;
+    const xMm = num(p.xMm, NaN, -500, board.widthMm + 500);
+    const yMm = num(p.yMm, NaN, -500, board.heightMm + 500);
+    if (!Number.isFinite(xMm) || !Number.isFinite(yMm)) continue;
+    const prev = out[out.length - 1];
+    if (prev && Math.abs(prev.xMm - xMm) < 1e-6 && Math.abs(prev.yMm - yMm) < 1e-6) continue;
+    out.push({ xMm, yMm });
+  }
+  return out;
+}
+
+function normalizeTracks(raw: unknown, board: PcbBoard): PcbTrack[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PcbTrack[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const t = item as Record<string, unknown>;
+    const points = cleanPoints(t.points, board);
+    // A one-point track is not copper; it is a click that never went anywhere.
+    if (points.length < 2) continue;
+    out.push({
+      id: typeof t.id === "string" && t.id ? t.id : pcbId("tr"),
+      net: typeof t.net === "string" && t.net.trim() ? t.net.trim().slice(0, 60) : undefined,
+      layer: t.layer === "B.Cu" ? "B.Cu" : "F.Cu",
+      widthMm: num(t.widthMm, DEFAULT_RULES.trackWidthMm, 0.05, 10),
+      points,
+    });
+  }
+  return out;
+}
+
+function normalizeVias(raw: unknown, board: PcbBoard): PcbVia[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PcbVia[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const v = item as Record<string, unknown>;
+    const diameterMm = num(v.diameterMm, DEFAULT_RULES.viaDiameterMm, 0.1, 10);
+    // Drill can never reach the annular ring's outer edge or there is no ring.
+    const drillMm = num(v.drillMm, DEFAULT_RULES.viaDrillMm, 0.05, Math.max(0.05, diameterMm - 0.05));
+    out.push({
+      id: typeof v.id === "string" && v.id ? v.id : pcbId("via"),
+      net: typeof v.net === "string" && v.net.trim() ? v.net.trim().slice(0, 60) : undefined,
+      xMm: num(v.xMm, board.widthMm / 2, -500, board.widthMm + 500),
+      yMm: num(v.yMm, board.heightMm / 2, -500, board.heightMm + 500),
+      diameterMm,
+      drillMm,
+    });
+  }
+  return out;
+}
+
+function normalizeRules(raw: unknown): PcbRules {
+  const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return {
+    clearanceMm: num(r.clearanceMm, DEFAULT_RULES.clearanceMm, 0.02, 5),
+    trackWidthMm: num(r.trackWidthMm, DEFAULT_RULES.trackWidthMm, 0.05, 10),
+    viaDiameterMm: num(r.viaDiameterMm, DEFAULT_RULES.viaDiameterMm, 0.1, 10),
+    viaDrillMm: num(r.viaDrillMm, DEFAULT_RULES.viaDrillMm, 0.05, 9),
+    edgeClearanceMm: num(r.edgeClearanceMm, DEFAULT_RULES.edgeClearanceMm, 0, 10),
+  };
+}
+
 export function normalizePcbDoc(raw: unknown): PcbDoc {
-  if (!raw || typeof raw !== "object") return { ...EMPTY_PCB, board: { ...EMPTY_PCB.board } };
+  if (!raw || typeof raw !== "object") return emptyPcbDoc();
 
   const obj = raw as Record<string, unknown>;
   const boardRaw =
@@ -402,5 +566,12 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
     });
   }
 
-  return { version: 1, board, footprints };
+  return {
+    version: 1,
+    board,
+    footprints,
+    tracks: normalizeTracks(obj.tracks, board),
+    vias: normalizeVias(obj.vias, board),
+    rules: normalizeRules(obj.rules),
+  };
 }

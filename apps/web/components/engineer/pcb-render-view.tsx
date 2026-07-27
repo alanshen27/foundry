@@ -7,8 +7,9 @@ import { buildRatsnest } from "@/lib/pcb/netlist";
 
 /**
  * Static top-down PCB view for headless copilot screenshots (/render/pcb).
- * No pan/zoom — fits the board into a fixed viewport. Airwires are drawn so
- * the copilot can see whether its placement follows the schematic's nets.
+ * No pan/zoom — fits the board into a fixed viewport. Airwires and routed
+ * copper are both drawn so the copilot can see what it has connected and what
+ * is still outstanding.
  */
 export function PcbRenderView({
   doc,
@@ -22,7 +23,7 @@ export function PcbRenderView({
   const h = doc.board.heightMm;
   const viewW = w + pad * 2;
   const viewH = h + pad * 2;
-  const { nets, airwires, issues } = buildRatsnest(circuit, doc);
+  const { nets, airwires, issues, routedCount, totalConnections } = buildRatsnest(circuit, doc);
 
   return (
     <svg
@@ -55,6 +56,24 @@ export function PcbRenderView({
           strokeDasharray="0.4 0.3"
           opacity={0.6}
         />
+      ))}
+      {/* Routed copper, under the footprints so pads stay legible. */}
+      {doc.tracks.map((track) => (
+        <path
+          key={track.id}
+          d={track.points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.xMm} ${p.yMm}`).join(" ")}
+          fill="none"
+          stroke={track.layer === "F.Cu" ? "#c04040" : "#6060d0"}
+          strokeWidth={track.widthMm}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ))}
+      {doc.vias.map((via) => (
+        <g key={via.id}>
+          <circle cx={via.xMm} cy={via.yMm} r={via.diameterMm / 2} fill="#c8a020" />
+          <circle cx={via.xMm} cy={via.yMm} r={via.drillMm / 2} fill="#1a3d2e" />
+        </g>
       ))}
       {doc.footprints.map((fp) => {
         const def = footprintDef(fp.libraryId);
@@ -107,7 +126,7 @@ export function PcbRenderView({
         fontFamily="ui-monospace, monospace"
       >
         {w}×{h}×{doc.board.thicknessMm} mm · {doc.footprints.length} footprints · {nets.length}{" "}
-        nets · {airwires.length} airwires
+        nets · {routedCount}/{totalConnections} routed · {airwires.length} airwires
       </text>
       {issues.unlinkedParts.length + issues.unmappedPins.length > 0 ? (
         <text
