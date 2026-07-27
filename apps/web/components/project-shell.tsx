@@ -10,6 +10,7 @@ import {
   ChevronsUpDown,
   CircuitBoard,
   Code2,
+  Combine,
   LayoutDashboard,
   Lightbulb,
   Package,
@@ -155,7 +156,13 @@ type ProcessStep = {
 
 function processSteps(base: string): ProcessStep[] {
   return [
-    { key: "overview", label: "Overview", icon: LayoutDashboard, href: `${base}/overview`, stage: null },
+    {
+      key: "overview",
+      label: "Overview",
+      icon: LayoutDashboard,
+      href: `${base}/overview`,
+      stage: null,
+    },
     { key: "ideate", label: "Ideation", icon: Lightbulb, href: `${base}/ideate`, stage: "IDEATE" },
     {
       key: "sourcing",
@@ -204,6 +211,14 @@ function processSteps(base: string): ProcessStep[] {
       href: `${base}/engineer?view=design`,
       stage: "ENGINEER",
       view: "design",
+    },
+    {
+      key: "assembly",
+      label: "Assembly",
+      icon: Combine,
+      href: `${base}/engineer?view=assembly`,
+      stage: "ENGINEER",
+      view: "assembly",
     },
     { key: "verify", label: "Verify", icon: ShieldCheck, href: `${base}/verify`, stage: "VERIFY" },
     { key: "launch", label: "Launch", icon: Rocket, href: `${base}/launch`, stage: "LAUNCH" },
@@ -292,13 +307,7 @@ function ShellInner({
   const isChatPopout = Boolean(pathname?.endsWith("/chat"));
 
   if (isChatPopout) {
-    return (
-      <DiscordChat
-        projectName={project.name}
-        workspaceName={workspace.name}
-        user={user}
-      />
-    );
+    return <DiscordChat projectName={project.name} workspaceName={workspace.name} user={user} />;
   }
 
   return (
@@ -355,11 +364,7 @@ function ShellInner({
       </div>
 
       <Suspense fallback={<footer className="bg-card/60 h-11 shrink-0 border-t" />}>
-        <ProcessFooter
-          base={base}
-          stageStatuses={stageStatuses}
-          workspaceSlug={workspace.slug}
-        />
+        <ProcessFooter base={base} stageStatuses={stageStatuses} workspaceSlug={workspace.slug} />
       </Suspense>
     </div>
   );
