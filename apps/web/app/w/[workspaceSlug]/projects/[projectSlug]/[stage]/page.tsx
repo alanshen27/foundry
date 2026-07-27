@@ -54,7 +54,15 @@ export default async function StagePage({
     (s) => s.stage === "VERIFY" && s.branchId === branchId,
   );
 
-  const engineerViews = ["sourcing", "schematic", "pcb", "model", "code", "design"] as const;
+  const engineerViews = [
+    "sourcing",
+    "schematic",
+    "pcb",
+    "model",
+    "code",
+    "design",
+    "assembly",
+  ] as const;
   const engineerView = engineerViews.includes(view as (typeof engineerViews)[number])
     ? (view as (typeof engineerViews)[number])
     : "schematic";

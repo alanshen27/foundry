@@ -39,6 +39,19 @@ const ModelEditor = dynamic(
   },
 );
 
+const AssemblyView = dynamic(
+  () => import("@/components/engineer/assembly-view").then((m) => m.AssemblyView),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="absolute inset-0 flex">
+        <Skeleton className="min-w-0 flex-1 rounded-none" />
+        <Skeleton className="hidden w-64 rounded-none border-l md:block" />
+      </div>
+    ),
+  },
+);
+
 const PcbCanvas = dynamic(
   () => import("@/components/engineer/pcb-canvas").then((m) => m.PcbCanvas),
   {
@@ -53,7 +66,8 @@ const PcbCanvas = dynamic(
   },
 );
 
-export type EngineerView = "sourcing" | "schematic" | "pcb" | "model" | "code" | "design";
+export type EngineerView =
+  "sourcing" | "schematic" | "pcb" | "model" | "code" | "design" | "assembly";
 
 type Props = { projectId: string; branchId: string; canEdit: boolean; view: EngineerView };
 
@@ -257,6 +271,13 @@ export function EngineerStage({ projectId, branchId, canEdit, view }: Props) {
     return (
       <div className="h-full overflow-hidden">
         <CodeWorkspace projectId={projectId} branchId={branchId} canEdit={canEdit} />
+      </div>
+    );
+  }
+  if (view === "assembly") {
+    return (
+      <div className="relative h-full overflow-hidden">
+        <AssemblyView projectId={projectId} branchId={branchId} />
       </div>
     );
   }
