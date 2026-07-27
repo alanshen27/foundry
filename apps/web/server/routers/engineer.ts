@@ -46,6 +46,7 @@ export const engineerRouter = router({
         quantity: z.number().int().positive().default(1),
         unitCostCents: z.number().int().nonnegative().nullish(),
         sourceUrl: z.string().url().max(500).nullish(),
+        imageUrl: z.string().url().max(2000).nullish(),
         notes: z.string().max(2000).nullish(),
       }),
     )
@@ -96,6 +97,7 @@ export const engineerRouter = router({
         quantity: z.number().int().positive().optional(),
         unitCostCents: z.number().int().nonnegative().nullish(),
         sourceUrl: z.string().url().max(500).nullish(),
+        imageUrl: z.string().url().max(2000).nullish(),
         notes: z.string().max(2000).nullish(),
       }),
     )

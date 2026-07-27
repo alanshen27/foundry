@@ -40,13 +40,31 @@ export async function getCurrentUser(): Promise<User | null> {
 }
 
 export async function upsertSupabaseUser(identity: AuthenticatedIdentity): Promise<User> {
-  return prisma.user.upsert({
-    where: { supabaseId: identity.subject },
-    update: { email: identity.email },
-    create: {
+  const bySupabaseId = await prisma.user.findUnique({ where: { supabaseId: identity.subject } });
+  if (bySupabaseId) {
+    return prisma.user.update({
+      where: { id: bySupabaseId.id },
+      data: { email: identity.email, avatarUrl: identity.avatarUrl ?? undefined },
+    });
+  }
+
+  // A row with this email may already exist (local-auth user, seed data, or a
+  // re-created Supabase project). Adopt it instead of violating the email
+  // unique constraint.
+  const byEmail = await prisma.user.findUnique({ where: { email: identity.email } });
+  if (byEmail) {
+    return prisma.user.update({
+      where: { id: byEmail.id },
+      data: { supabaseId: identity.subject, avatarUrl: identity.avatarUrl ?? undefined },
+    });
+  }
+
+  return prisma.user.create({
+    data: {
       supabaseId: identity.subject,
       email: identity.email,
       name: identity.name ?? identity.email.split("@")[0] ?? "User",
+      avatarUrl: identity.avatarUrl,
     },
   });
 }

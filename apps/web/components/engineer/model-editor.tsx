@@ -1,130 +1,195 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Canvas } from "@react-three/fiber";
-import { Grid, OrbitControls } from "@react-three/drei";
-import { Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { trpc } from "@/lib/trpc";
-import { cn } from "@/lib/utils";
-
 /**
- * Parametric 3D model editor. The product is composed from primitive parts
- * (box / cylinder / sphere, millimetre units) listed on the right; the
- * viewport is a live three.js scene. Autosaves; shared with the AI copilot.
+ * Mechanical CAD workspace: multi-component tree (parts / assembly /
+ * instructions) + Monaco + live Zoo viewport for the active KCL component.
  */
+import { useEffect, useMemo, useRef, useState } from "react";
+import Editor from "@monaco-editor/react";
+import {
+  Boxes,
+  ChevronDown,
+  ChevronUp,
+  Code,
+  FilePlus,
+  FileText,
+  Layers,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Puzzle,
+  SlidersHorizontal,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  addCadComponent,
+  getActiveComponent,
+  normalizeCadDoc,
+  setActiveComponent,
+  updateComponentContent,
+  type CadComponent,
+  type CadComponentKind,
+  type CadDoc,
+} from "@/lib/cad/engine";
+import { parseCadParams, setCadParam, type CadParam } from "@/lib/cad/params";
+import { cadViewportInput } from "@/lib/cad/viewport-project";
+import { CadViewport } from "@/components/engineer/cad-viewport";
+import { CadToolsPanel } from "@/components/engineer/cad-tools-panel";
+import { useTheme } from "@/components/theme-provider";
+import { monacoThemeFor } from "@/lib/theme";
+import { cn } from "@/lib/utils";
+import { trpc } from "@/lib/trpc";
 
-type Primitive = "box" | "cylinder" | "sphere";
-
-type Part = {
-  id: string;
-  name: string;
-  primitive: Primitive;
-  size: number[];
-  position: [number, number, number];
-  rotation: [number, number, number];
-  color: string;
-};
-
-export type Model3dDoc = { parts: Part[] };
-
-const EMPTY: Model3dDoc = { parts: [] };
-const MM = 0.1; // world units per mm (scene scale)
-
-let nextId = 1;
-function uid() {
-  return `part-${Date.now().toString(36)}-${nextId++}`;
-}
-
-const DEFAULTS: Record<Primitive, { size: number[]; name: string }> = {
-  box: { size: [60, 20, 40], name: "Body" },
-  cylinder: { size: [10, 30], name: "Cylinder" },
-  sphere: { size: [12], name: "Sphere" },
-};
-
-function PartMesh({
-  part,
-  selected,
-  onSelect,
+function ParamsPanel({
+  params,
+  canEdit,
+  onSet,
 }: {
-  part: Part;
-  selected: boolean;
-  onSelect: () => void;
+  params: CadParam[];
+  canEdit: boolean;
+  onSet: (name: string, value: number | boolean | string) => void;
 }) {
-  const scale = MM;
-  const position: [number, number, number] = [
-    part.position[0] * scale,
-    part.position[1] * scale,
-    part.position[2] * scale,
-  ];
-  const rotation: [number, number, number] = [
-    (part.rotation[0] * Math.PI) / 180,
-    (part.rotation[1] * Math.PI) / 180,
-    (part.rotation[2] * Math.PI) / 180,
-  ];
+  const [collapsed, setCollapsed] = useState(false);
+
   return (
-    <mesh
-      position={position}
-      rotation={rotation}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect();
-      }}
-    >
-      {part.primitive === "box" ? (
-        <boxGeometry
-          args={[
-            (part.size[0] ?? 10) * scale,
-            (part.size[1] ?? 10) * scale,
-            (part.size[2] ?? 10) * scale,
-          ]}
-        />
-      ) : part.primitive === "cylinder" ? (
-        <cylinderGeometry
-          args={[
-            (part.size[0] ?? 10) * scale,
-            (part.size[0] ?? 10) * scale,
-            (part.size[1] ?? 20) * scale,
-            48,
-          ]}
-        />
-      ) : (
-        <sphereGeometry args={[(part.size[0] ?? 10) * scale, 48, 32]} />
-      )}
-      <meshStandardMaterial
-        color={part.color}
-        roughness={0.45}
-        metalness={0.1}
-        emissive={selected ? "#f97316" : "#000000"}
-        emissiveIntensity={selected ? 0.35 : 0}
-      />
-    </mesh>
+    <div className="bg-card/85 absolute top-3 right-3 z-10 w-60 rounded-xl border shadow-lg backdrop-blur-md">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex w-full items-center gap-2 px-3 py-2"
+      >
+        <SlidersHorizontal className="text-primary size-3.5" />
+        <span className="text-xs font-semibold">Parameters</span>
+        <span className="text-muted-foreground ml-auto text-[10px]">{params.length}</span>
+        {collapsed ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
+      </button>
+      {!collapsed ? (
+        <div className="flex max-h-[50vh] flex-col gap-1.5 overflow-y-auto border-t px-3 py-2.5">
+          {params.map((param) => (
+            <label key={param.name} className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground min-w-0 flex-1 truncate" title={param.name}>
+                {param.name}
+              </span>
+              {typeof param.value === "boolean" ? (
+                <input
+                  type="checkbox"
+                  checked={param.value}
+                  disabled={!canEdit}
+                  onChange={(e) => onSet(param.name, e.target.checked)}
+                  className="accent-primary size-3.5"
+                />
+              ) : typeof param.value === "number" ? (
+                <input
+                  type="number"
+                  value={param.value}
+                  disabled={!canEdit}
+                  step={Number.isInteger(param.value) ? 1 : 0.1}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (Number.isFinite(n)) onSet(param.name, n);
+                  }}
+                  className={cn(
+                    "bg-background w-20 rounded-md border px-1.5 py-0.5 text-right font-mono text-xs outline-none",
+                    "focus:border-ring",
+                  )}
+                />
+              ) : (
+                <input
+                  type="text"
+                  value={param.value}
+                  disabled={!canEdit}
+                  onChange={(e) => onSet(param.name, e.target.value)}
+                  className="bg-background w-24 rounded-md border px-1.5 py-0.5 font-mono text-xs outline-none focus:border-ring"
+                />
+              )}
+            </label>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
-function NumberField({
-  label,
-  value,
-  onChange,
-  disabled,
+const KIND_META: Record<
+  CadComponentKind,
+  { label: string; icon: typeof Puzzle; folder: string }
+> = {
+  part: { label: "Parts", icon: Puzzle, folder: "parts/" },
+  assembly: { label: "Assembly", icon: Boxes, folder: "assembly/" },
+  instructions: { label: "Instructions", icon: FileText, folder: "docs/" },
+};
+
+function ComponentTree({
+  doc,
+  activeId,
+  canEdit,
+  onSelect,
+  onAdd,
 }: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  disabled?: boolean;
+  doc: CadDoc;
+  activeId: string;
+  canEdit: boolean;
+  onSelect: (id: string) => void;
+  onAdd: (kind: CadComponentKind) => void;
 }) {
+  const groups: CadComponentKind[] = ["part", "assembly", "instructions"];
   return (
-    <div className="flex flex-col gap-1">
-      <Label className="text-[11px]">{label}</Label>
-      <Input
-        type="number"
-        value={Number.isFinite(value) ? value : 0}
-        onChange={(e) => onChange(Number(e.target.value))}
-        disabled={disabled}
-        className="h-7 text-xs"
-      />
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1">
+      {groups.map((kind) => {
+        const meta = KIND_META[kind];
+        const Icon = meta.icon;
+        const items = doc.components.filter((c) => c.kind === kind);
+        return (
+          <div key={kind} className="mb-2">
+            <div className="text-muted-foreground flex items-center gap-1.5 px-2.5 py-1 text-[12px]">
+              <Icon className="size-3 opacity-70" />
+              <span className="flex-1 font-medium">{meta.label}</span>
+              {canEdit ? (
+                <button
+                  type="button"
+                  title={`Add ${kind}`}
+                  onClick={() => onAdd(kind)}
+                  className="hover:bg-muted rounded p-0.5"
+                >
+                  <FilePlus className="size-3" />
+                </button>
+              ) : null}
+            </div>
+            {items.map((c) => {
+              const file = c.path.split("/").pop() ?? c.name;
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => onSelect(c.id)}
+                  className={cn(
+                    "hover:bg-muted/60 flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs",
+                    activeId === c.id && "bg-muted text-foreground font-medium",
+                  )}
+                >
+                  <Layers className="text-muted-foreground size-3 shrink-0 opacity-60" />
+                  <span className="min-w-0 flex-1 truncate font-mono" title={c.path}>
+                    {file}
+                  </span>
+                </button>
+              );
+            })}
+            {items.length === 0 ? (
+              <p className="text-muted-foreground px-2.5 py-1 text-[11px]">None yet</p>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function InstructionsPreview({ content }: { content: string }) {
+  return (
+    <div className="absolute inset-0 overflow-y-auto p-8">
+      <article className="prose prose-sm dark:prose-invert mx-auto max-w-2xl whitespace-pre-wrap font-sans text-sm leading-relaxed">
+        {content}
+      </article>
     </div>
   );
 }
@@ -138,225 +203,272 @@ export function ModelEditor({
   branchId: string;
   canEdit: boolean;
 }) {
+  const { theme } = useTheme();
+  const monacoTheme = monacoThemeFor(theme.mode);
   const query = trpc.design.get.useQuery({ projectId, branchId, kind: "MODEL3D" });
+  const engine = trpc.cad.engineSession.useQuery({ projectId });
   const save = trpc.design.save.useMutation();
 
-  const [doc, setDoc] = useState<Model3dDoc>(EMPTY);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [doc, setDoc] = useState<CadDoc | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [showTree, setShowTree] = useState(true);
+  const [showCode, setShowCode] = useState(false);
+  const [execError, setExecError] = useState<string | null>(null);
   const dirtyRef = useRef(false);
+  const migratedRef = useRef(false);
+  const appliedUpdatedAtRef = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveRef = useRef(save);
+  saveRef.current = save;
 
   useEffect(() => {
-    if (!dirtyRef.current && query.data?.data) {
-      setDoc(query.data.data as unknown as Model3dDoc);
-    }
-    if (!query.data?.data && !dirtyRef.current) setDoc(EMPTY);
-  }, [query.data]);
+    if (!query.isFetched) return;
+    const serverUpdatedAt = query.data?.updatedAt
+      ? new Date(query.data.updatedAt).toISOString()
+      : "empty";
+    // Always take newer server docs (copilot writes) even if local was dirty —
+    // otherwise AI-added parts never appear after a parallel race or autosave.
+    const serverIsNew = appliedUpdatedAtRef.current !== serverUpdatedAt;
+    if (dirtyRef.current && !serverIsNew) return;
 
-  const update = useCallback(
-    (fn: (d: Model3dDoc) => Model3dDoc) => {
-      setDoc((d) => {
-        const next = fn(d);
-        if (canEdit) {
-          dirtyRef.current = true;
-          if (saveTimer.current) clearTimeout(saveTimer.current);
-          saveTimer.current = setTimeout(() => {
-            save.mutate(
-              { projectId, branchId, kind: "MODEL3D", data: next },
-              { onSuccess: () => (dirtyRef.current = false) },
-            );
-          }, 800);
-        }
-        return next;
+    const next = normalizeCadDoc(query.data?.data ?? null);
+    appliedUpdatedAtRef.current = serverUpdatedAt;
+    dirtyRef.current = false;
+    setDoc(next);
+    setActiveId((prev) =>
+      prev && next.components.some((c) => c.id === prev) ? prev : next.activeId,
+    );
+
+    const raw = query.data?.data as { version?: unknown } | null | undefined;
+    if (
+      canEdit &&
+      !migratedRef.current &&
+      raw &&
+      typeof raw === "object" &&
+      raw.version !== 5
+    ) {
+      migratedRef.current = true;
+      saveRef.current.mutate({
+        projectId,
+        branchId,
+        kind: "MODEL3D",
+        data: next,
       });
-    },
-    [canEdit, projectId, branchId, save],
+    }
+  }, [query.data, query.isFetched, canEdit, projectId, branchId]);
+
+  function persist(next: CadDoc) {
+    setDoc(next);
+    dirtyRef.current = true;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      const toSave = activeId ? setActiveComponent(next, activeId) : next;
+      saveRef.current.mutate(
+        {
+          projectId,
+          branchId,
+          kind: "MODEL3D",
+          data: toSave,
+        },
+        {
+          onSuccess: (saved) => {
+            dirtyRef.current = false;
+            if (saved.updatedAt) {
+              appliedUpdatedAtRef.current = new Date(saved.updatedAt).toISOString();
+            }
+          },
+        },
+      );
+    }, 900);
+  }
+
+  function onSelect(id: string) {
+    setActiveId(id);
+  }
+
+  function onAdd(kind: CadComponentKind) {
+    if (!doc || !canEdit) return;
+    const base =
+      kind === "part" ? "part" : kind === "assembly" ? "assembly" : "instructions";
+    const n = doc.components.filter((c) => c.kind === kind).length + 1;
+    const next = addCadComponent(doc, { name: `${base}-${n}`, kind });
+    setActiveId(next.activeId);
+    persist(next);
+  }
+
+  function onChangeContent(next: string | undefined) {
+    if (!canEdit || !doc || !activeId || next === undefined) return;
+    const current = doc.components.find((c) => c.id === activeId);
+    if (!current) return;
+    if ((current.kind === "part" || current.kind === "assembly") && !next.trim()) return;
+    persist(updateComponentContent(doc, activeId, next));
+  }
+
+  const viewDoc: CadDoc | null = useMemo(
+    () => (doc && activeId ? setActiveComponent(doc, activeId) : doc),
+    [doc, activeId],
+  );
+  const active: CadComponent | null = viewDoc ? getActiveComponent(viewDoc) : null;
+  const isKcl = active?.kind === "part" || active?.kind === "assembly";
+
+  // Debounce the whole document rather than just the active script: an assembly
+  // renders from every part it imports, so the engine needs one consistent
+  // snapshot instead of a single file that may be newer than its siblings.
+  const [settled, setSettled] = useState<{ doc: CadDoc; activeId: string } | null>(null);
+  useEffect(() => {
+    if (!viewDoc || !active || !isKcl) {
+      setSettled(null);
+      return;
+    }
+    const delay =
+      active.content.length > 12_000 ? 1_400 : active.content.length > 4_000 ? 900 : 500;
+    const timer = setTimeout(() => setSettled({ doc: viewDoc, activeId: active.id }), delay);
+    return () => clearTimeout(timer);
+  }, [viewDoc, active?.id, active?.content, isKcl]);
+
+  const viewport = useMemo(
+    () => (settled ? cadViewportInput(settled.doc, settled.activeId) : null),
+    [settled],
   );
 
-  function addPart(primitive: Primitive) {
-    const d = DEFAULTS[primitive];
-    update((m) => ({
-      parts: [
-        ...m.parts,
-        {
-          id: uid(),
-          name: `${d.name} ${m.parts.length + 1}`,
-          primitive,
-          size: [...d.size],
-          position: [0, (d.size[1] ?? d.size[0] ?? 10) / 2, 0],
-          rotation: [0, 0, 0],
-          color: "#8899aa",
-        },
-      ],
-    }));
+  const params = useMemo(
+    () => (isKcl && active ? parseCadParams(active.content) : []),
+    [isKcl, active?.content],
+  );
+
+  if (doc === null || engine.isLoading) {
+    return (
+      <div className="absolute inset-0 flex" aria-busy="true" aria-label="Loading CAD workspace">
+        <div className="hidden w-56 shrink-0 flex-col border-r md:flex">
+          <Skeleton className="h-9 rounded-none border-b" />
+          <Skeleton className="min-h-0 flex-1 rounded-none" />
+        </div>
+        <Skeleton className="hidden w-[380px] shrink-0 rounded-none border-r md:block" />
+        <Skeleton className="min-w-0 flex-1 rounded-none" />
+      </div>
+    );
   }
 
-  const selected = doc.parts.find((p) => p.id === selectedId) ?? null;
-
-  function patchSelected(patch: Partial<Part>) {
-    if (!selected) return;
-    update((m) => ({
-      parts: m.parts.map((p) => (p.id === selected.id ? { ...p, ...patch } : p)),
-    }));
+  if (engine.error || !engine.data) {
+    return (
+      <div className="text-destructive absolute inset-0 flex items-center justify-center p-8 text-center text-sm">
+        {engine.error?.message ??
+          "Zoo CAD is not configured. Set ZOO_API_TOKEN in the root .env and restart."}
+      </div>
+    );
   }
-
-  const sizeLabels =
-    selected?.primitive === "box"
-      ? ["W (mm)", "H (mm)", "D (mm)"]
-      : selected?.primitive === "cylinder"
-        ? ["R (mm)", "H (mm)"]
-        : ["R (mm)"];
 
   return (
-    <div className="flex flex-col gap-3">
-      {canEdit ? (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Button variant="outline" size="xs" onClick={() => addPart("box")}>
-            + Box
-          </Button>
-          <Button variant="outline" size="xs" onClick={() => addPart("cylinder")}>
-            + Cylinder
-          </Button>
-          <Button variant="outline" size="xs" onClick={() => addPart("sphere")}>
-            + Sphere
-          </Button>
-          <span className="text-muted-foreground ml-auto text-xs">
-            {save.isPending ? "Saving…" : "Autosaves · mm units"}
-          </span>
+    <div className="absolute inset-0 flex">
+      {showTree ? (
+        <div className="bg-card/40 flex w-52 shrink-0 flex-col border-r">
+          <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+            <Boxes className="text-primary size-3.5" />
+            <span className="text-xs font-medium">CAD workspace</span>
+          </div>
+          <ComponentTree
+            doc={doc}
+            activeId={activeId ?? doc.activeId}
+            canEdit={canEdit}
+            onSelect={onSelect}
+            onAdd={onAdd}
+          />
         </div>
       ) : null}
 
-      <div className="grid gap-3 lg:grid-cols-[1fr_240px]">
-        <div className="bg-background/60 overflow-hidden rounded-xl border">
-          <Canvas
-            camera={{ position: [9, 7, 9], fov: 40 }}
-            className="h-[calc(100vh-380px)]! min-h-[420px]!"
-            onPointerMissed={() => setSelectedId(null)}
-          >
-            <ambientLight intensity={0.7} />
-            <directionalLight position={[8, 12, 6]} intensity={1.2} />
-            <directionalLight position={[-6, 4, -8]} intensity={0.4} />
-            {doc.parts.map((p) => (
-              <PartMesh
-                key={p.id}
-                part={p}
-                selected={p.id === selectedId}
-                onSelect={() => setSelectedId(p.id)}
-              />
-            ))}
-            <Grid
-              args={[40, 40]}
-              cellColor="#333"
-              sectionColor="#444"
-              fadeDistance={30}
-              position={[0, 0, 0]}
-            />
-            <OrbitControls makeDefault enableDamping />
-          </Canvas>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <p className="text-muted-foreground text-xs font-semibold tracking-widest uppercase">
-            Parts
-          </p>
-          <div className="flex max-h-56 flex-col gap-1 overflow-y-auto">
-            {doc.parts.length === 0 ? (
-              <p className="text-muted-foreground text-xs">
-                No parts yet. Add a primitive or ask the copilot to model the product.
-              </p>
-            ) : (
-              doc.parts.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setSelectedId(p.id)}
-                  className={cn(
-                    "flex items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition-colors",
-                    p.id === selectedId
-                      ? "border-primary/50 bg-primary/10"
-                      : "border-border hover:bg-muted/50",
-                  )}
-                >
-                  <span
-                    className="size-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: p.color }}
-                  />
-                  <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                  <span className="text-muted-foreground">{p.primitive}</span>
-                </button>
-              ))
-            )}
+      {showCode ? (
+        <div className="flex min-w-0 w-[min(42%,420px)] shrink-0 flex-col border-r">
+          <div className="bg-card/60 flex h-9 shrink-0 items-center gap-2 border-b px-3">
+            <span className="truncate font-mono text-xs font-medium" title={active?.path}>
+              {active?.path ?? "—"}
+            </span>
+            <span className="text-muted-foreground ml-auto text-[11px]">
+              {save.isPending ? "Saving…" : "Autosaves"}
+            </span>
           </div>
-
-          {selected ? (
-            <div className="mt-2 flex flex-col gap-2 rounded-lg border p-2.5">
-              <Input
-                value={selected.name}
-                onChange={(e) => patchSelected({ name: e.target.value })}
-                disabled={!canEdit}
-                className="h-7 text-xs"
-                aria-label="Part name"
-              />
-              <div className="grid grid-cols-3 gap-1.5">
-                {sizeLabels.map((label, i) => (
-                  <NumberField
-                    key={label}
-                    label={label}
-                    value={selected.size[i] ?? 0}
-                    disabled={!canEdit}
-                    onChange={(v) => {
-                      const size = [...selected.size];
-                      size[i] = Math.max(0.5, v);
-                      patchSelected({ size });
-                    }}
-                  />
-                ))}
-              </div>
-              <div className="grid grid-cols-3 gap-1.5">
-                {(["X", "Y", "Z"] as const).map((axis, i) => (
-                  <NumberField
-                    key={axis}
-                    label={`${axis} (mm)`}
-                    value={selected.position[i] ?? 0}
-                    disabled={!canEdit}
-                    onChange={(v) => {
-                      const position = [...selected.position] as [number, number, number];
-                      position[i] = v;
-                      patchSelected({ position });
-                    }}
-                  />
-                ))}
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={selected.color}
-                  onChange={(e) => patchSelected({ color: e.target.value })}
-                  disabled={!canEdit}
-                  aria-label="Part color"
-                  className="h-7 w-9 cursor-pointer rounded border bg-transparent"
-                />
-                {canEdit ? (
-                  <Button
-                    variant="destructive"
-                    size="xs"
-                    className="ml-auto"
-                    onClick={() => {
-                      update((m) => ({ parts: m.parts.filter((p) => p.id !== selected.id) }));
-                      setSelectedId(null);
-                    }}
-                  >
-                    <Trash2 className="size-3" /> Remove
-                  </Button>
-                ) : null}
-              </div>
+          <div className="min-h-0 flex-1">
+            <Editor
+              key={`${monacoTheme}-${active?.id ?? "none"}`}
+              language={isKcl ? "javascript" : "markdown"}
+              theme={monacoTheme}
+              value={active?.content ?? ""}
+              onChange={onChangeContent}
+              options={{
+                readOnly: !canEdit,
+                minimap: { enabled: false },
+                fontSize: 12,
+                lineNumbers: "on",
+                scrollBeyondLastLine: false,
+                automaticLayout: true,
+                padding: { top: 10 },
+              }}
+            />
+          </div>
+          {execError && isKcl ? (
+            <div className="text-destructive shrink-0 border-t px-3 py-2 font-mono text-[11px] leading-relaxed">
+              {execError}
             </div>
           ) : null}
         </div>
+      ) : null}
+
+      <div className="bg-background relative min-w-0 flex-1">
+        {active?.kind === "instructions" ? (
+          <InstructionsPreview content={active.content} />
+        ) : (
+          <>
+            {params.length > 0 && active ? (
+              <ParamsPanel
+                params={params}
+                canEdit={canEdit}
+                onSet={(name, value) =>
+                  onChangeContent(setCadParam(active.content, name, value))
+                }
+              />
+            ) : null}
+            {viewport ? (
+              <CadViewport
+                script={viewport.script}
+                engine={engine.data}
+                view="orbit"
+                chrome
+                projectFiles={viewport.projectFiles}
+                entryPath={viewport.entryPath}
+                meshAssets={viewport.meshAssets}
+                foreignImportOnly={viewport.foreignImportOnly}
+                onError={setExecError}
+              />
+            ) : null}
+            {active && isKcl ? (
+              <CadToolsPanel
+                script={active.content}
+                canEdit={canEdit}
+                onApply={onChangeContent}
+              />
+            ) : null}
+          </>
+        )}
+        <div className="absolute top-3 left-3 z-30 flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            onClick={() => setShowTree(!showTree)}
+            aria-label={showTree ? "Hide component tree" : "Show component tree"}
+            className="bg-card/90 shadow backdrop-blur-md"
+          >
+            {showTree ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
+          </Button>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            onClick={() => setShowCode(!showCode)}
+            aria-label={showCode ? "Hide code" : "Show code"}
+            className={cn("bg-card/90 shadow backdrop-blur-md", showCode && "bg-muted")}
+          >
+            <Code className="size-4" />
+          </Button>
+        </div>
       </div>
-      <p className="text-muted-foreground text-xs">
-        Orbit: drag · zoom: scroll · pan: right-drag. Click a part to edit its parameters.
-      </p>
     </div>
   );
 }

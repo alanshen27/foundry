@@ -11,23 +11,31 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
 
   const invitation = await prisma.invitation.findUnique({
     where: { token },
-    include: { workspace: true, invitedBy: true },
+    include: { workspace: true, project: true, invitedBy: true },
   });
 
   return (
     <main className="flex min-h-screen items-center justify-center p-8">
       <Card className="w-full max-w-md p-6 text-center">
         {!invitation || invitation.status !== "PENDING" ? (
-          <p className="text-sm text-zinc-400">
+          <p className="text-muted-foreground text-sm">
             This invitation does not exist or has already been used.
           </p>
         ) : invitation.expiresAt < new Date() ? (
-          <p className="text-sm text-zinc-400">This invitation has expired.</p>
+          <p className="text-muted-foreground text-sm">This invitation has expired.</p>
         ) : (
           <>
             <h1 className="mb-2 text-lg font-semibold">Join {invitation.workspace.name}</h1>
-            <p className="mb-6 text-sm text-zinc-500">
-              {invitation.invitedBy.name} invited {invitation.email} as {invitation.role}.
+            <p className="text-muted-foreground mb-6 text-sm">
+              {invitation.invitedBy.name} invited {invitation.email} as a workspace{" "}
+              {invitation.role.toLowerCase()}
+              {invitation.project ? (
+                <>
+                  {" "}
+                  (via <span className="text-foreground">{invitation.project.name}</span>)
+                </>
+              ) : null}
+              .
             </p>
             <AcceptInviteButton token={token} />
           </>

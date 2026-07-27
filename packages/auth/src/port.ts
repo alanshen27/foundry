@@ -8,6 +8,8 @@ export type AuthenticatedIdentity = {
   subject: string;
   email: string;
   name?: string;
+  /** Profile picture URL (e.g. Supabase user_metadata.avatar_url). */
+  avatarUrl?: string;
   provider: "supabase" | "local";
 };
 

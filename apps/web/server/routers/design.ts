@@ -4,10 +4,11 @@ import { protectedProcedure, router } from "../trpc";
 import { requireProjectCapability } from "../access";
 import { ensureStageStarted, markDownstreamStale } from "../stage-state";
 
-const kind = z.enum(["CIRCUIT", "MODEL3D", "DESIGN"]);
+const kind = z.enum(["CIRCUIT", "PCB", "MODEL3D", "DESIGN"]);
 
 const KIND_CAPABILITY = {
   CIRCUIT: "electronics.edit",
+  PCB: "electronics.edit",
   MODEL3D: "mechanical.edit",
   DESIGN: "site.edit",
 } as const;

@@ -8,6 +8,8 @@ const handler = (req: Request) =>
     req,
     router: appRouter,
     createContext,
+    // Required so the client can send queries as POST (avoids HTTP 431 on long GET URLs).
+    allowMethodOverride: true,
   });
 
 export { handler as GET, handler as POST };

@@ -2,44 +2,43 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 const STATUS_STYLES: Record<string, string> = {
-  // Stage statuses
-  NOT_STARTED: "bg-zinc-800 text-zinc-300 border-zinc-700",
-  DRAFT: "bg-blue-950 text-blue-300 border-blue-900",
-  RUNNING: "bg-indigo-950 text-indigo-300 border-indigo-900",
-  NEEDS_REVIEW: "bg-amber-950 text-amber-300 border-amber-900",
-  APPROVED: "bg-emerald-950 text-emerald-300 border-emerald-900",
-  BLOCKED: "bg-red-950 text-red-300 border-red-900",
-  STALE: "bg-orange-950 text-orange-300 border-orange-900",
-  // Verification / validation states
-  UNVERIFIED: "bg-zinc-800 text-zinc-300 border-zinc-700",
-  SIMULATED: "bg-purple-950 text-purple-300 border-purple-900",
-  VERIFIED: "bg-emerald-950 text-emerald-300 border-emerald-900",
-  REJECTED: "bg-red-950 text-red-300 border-red-900",
-  PENDING: "bg-zinc-800 text-zinc-300 border-zinc-700",
-  PASS: "bg-emerald-950 text-emerald-300 border-emerald-900",
-  FAIL: "bg-red-950 text-red-300 border-red-900",
-  WARNING: "bg-amber-950 text-amber-300 border-amber-900",
-  SKIPPED: "bg-zinc-800 text-zinc-400 border-zinc-700",
-  ERROR: "bg-red-950 text-red-300 border-red-900",
-  // Requirement statuses
-  PROPOSED: "bg-blue-950 text-blue-300 border-blue-900",
-  ACCEPTED: "bg-emerald-950 text-emerald-300 border-emerald-900",
-  // Requirement priority
-  MUST: "bg-red-950 text-red-300 border-red-900",
-  SHOULD: "bg-amber-950 text-amber-300 border-amber-900",
-  MAY: "bg-zinc-800 text-zinc-300 border-zinc-700",
-  // Severity
-  INFO: "bg-zinc-800 text-zinc-300 border-zinc-700",
-  MINOR: "bg-blue-950 text-blue-300 border-blue-900",
-  MAJOR: "bg-amber-950 text-amber-300 border-amber-900",
-  CRITICAL: "bg-red-950 text-red-300 border-red-900",
+  NOT_STARTED: "bg-muted text-muted-foreground border-transparent",
+  DRAFT: "bg-sky-500/10 text-sky-700 border-transparent dark:text-sky-300",
+  RUNNING: "bg-primary/10 text-primary border-transparent",
+  NEEDS_REVIEW: "bg-amber-500/10 text-amber-700 border-transparent dark:text-amber-300",
+  APPROVED: "bg-emerald-500/10 text-emerald-700 border-transparent dark:text-emerald-300",
+  BLOCKED: "bg-red-500/10 text-red-700 border-transparent dark:text-red-300",
+  STALE: "bg-orange-500/10 text-orange-700 border-transparent dark:text-orange-300",
+  UNVERIFIED: "bg-muted text-muted-foreground border-transparent",
+  SIMULATED: "bg-violet-500/10 text-violet-700 border-transparent dark:text-violet-300",
+  VERIFIED: "bg-emerald-500/10 text-emerald-700 border-transparent dark:text-emerald-300",
+  REJECTED: "bg-red-500/10 text-red-700 border-transparent dark:text-red-300",
+  PENDING: "bg-muted text-muted-foreground border-transparent",
+  PASS: "bg-emerald-500/10 text-emerald-700 border-transparent dark:text-emerald-300",
+  FAIL: "bg-red-500/10 text-red-700 border-transparent dark:text-red-300",
+  WARNING: "bg-amber-500/10 text-amber-700 border-transparent dark:text-amber-300",
+  SKIPPED: "bg-muted text-muted-foreground border-transparent",
+  ERROR: "bg-red-500/10 text-red-700 border-transparent dark:text-red-300",
+  PROPOSED: "bg-sky-500/10 text-sky-700 border-transparent dark:text-sky-300",
+  ACCEPTED: "bg-emerald-500/10 text-emerald-700 border-transparent dark:text-emerald-300",
+  MUST: "bg-red-500/10 text-red-700 border-transparent dark:text-red-300",
+  SHOULD: "bg-amber-500/10 text-amber-700 border-transparent dark:text-amber-300",
+  MAY: "bg-muted text-muted-foreground border-transparent",
+  INFO: "bg-muted text-muted-foreground border-transparent",
+  MINOR: "bg-sky-500/10 text-sky-700 border-transparent dark:text-sky-300",
+  MAJOR: "bg-amber-500/10 text-amber-700 border-transparent dark:text-amber-300",
+  CRITICAL: "bg-red-500/10 text-red-700 border-transparent dark:text-red-300",
 };
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
   return (
     <Badge
       variant="outline"
-      className={cn("font-semibold tracking-wide", STATUS_STYLES[status], className)}
+      className={cn(
+        "rounded-md px-1.5 py-0 text-[11px] font-medium tracking-wide",
+        STATUS_STYLES[status],
+        className,
+      )}
     >
       {status.replaceAll("_", " ")}
     </Badge>

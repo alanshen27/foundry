@@ -19,6 +19,8 @@ model User {
   supabaseId   String?  @unique
   email        String   @unique
   name         String
+  // Profile picture (Supabase user_metadata.avatar_url / OAuth picture).
+  avatarUrl    String?
   // Only set for the LOCAL dev/e2e auth adapter (scrypt hash). Never used
   // when AUTH_MODE=supabase.
   localPasswordHash String?
@@ -49,8 +51,28 @@ model Workspace {
   createdBy   User                  @relation("WorkspaceCreator", fields: [createdById], references: [id])
   memberships WorkspaceMembership[]
   projects    Project[]
+  folders     ProjectFolder[]
   invitations Invitation[]
   auditEvents AuditEvent[]
+}
+
+/// Nested folder for organizing projects inside a workspace sidebar tree.
+model ProjectFolder {
+  id          String   @id @default(cuid())
+  workspaceId String
+  parentId    String?
+  name        String
+  /// Palette id from apps/web/lib/folder-color.ts. Null = derive from the folder id.
+  color       String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent    ProjectFolder?  @relation("FolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children  ProjectFolder[] @relation("FolderTree")
+  projects  Project[]
+
+  @@index([workspaceId, parentId])
 }
 
 model WorkspaceMembership {
@@ -93,6 +115,10 @@ enum InvitationStatus {
 model Invitation {
   id          String           @id @default(cuid())
   workspaceId String
+  /// Optional project context when the invite was sent from a project page.
+  /// Membership is always workspace-scoped; this only affects accept redirect
+  /// and optional guest project.read grant.
+  projectId   String?
   email       String
   role        WorkspaceRole
   token       String           @unique
@@ -103,6 +129,7 @@ model Invitation {
   acceptedAt  DateTime?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
   invitedBy User      @relation("InvitationInviter", fields: [invitedById], references: [id])
 
   @@index([workspaceId, email])
@@ -118,6 +145,7 @@ enum ProjectStatus {
 model Project {
   id             String        @id @default(cuid())
   workspaceId    String
+  folderId       String?
   name           String
   slug           String
   description    String?
@@ -127,6 +155,8 @@ model Project {
   createdAt      DateTime      @default(now())
 
   workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  folder           ProjectFolder?    @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  invitations      Invitation[]
   branches         ProjectBranch[]
   stageStates      StageState[]
   artifacts        Artifact[]
@@ -137,10 +167,14 @@ model Project {
   validationChecks ValidationCheck[]
   releases         Release[]
   designDocs       DesignDoc[]
-  chatMessages     ChatMessage[]
-  codeFiles        CodeFile[]
+  chatMessages         ChatMessage[]
+  chatChannels         ChatChannel[]
+  chatChannelCategories ChatChannelCategory[]
+  chatRuns             ChatRun[]
+  codeFiles            CodeFile[]
 
   @@unique([workspaceId, slug])
+  @@index([workspaceId, folderId])
 }
 
 model ProjectBranch {
@@ -324,15 +358,16 @@ enum Discipline {
 
 enum DesignDocKind {
   CIRCUIT
+  PCB
   MODEL3D
   DESIGN
 }
 
 /**
  * JSON documents backing the visual editors: circuit schematic (CIRCUIT),
- * parametric 3D model (MODEL3D), and industrial design notes (DESIGN).
- * One doc per kind per branch; edits autosave last-write-wins. Live
- * co-editing (Yjs) replaces this storage in a later phase.
+ * PCB board layout (PCB), parametric 3D model (MODEL3D), and industrial
+ * design notes (DESIGN). One doc per kind per branch; edits autosave
+ * last-write-wins. Live co-editing (Yjs) replaces this storage in a later phase.
  */
 model DesignDoc {
   id          String        @id @default(cuid())
@@ -361,6 +396,7 @@ model Component {
   quantity      Int        @default(1)
   unitCostCents Int?
   sourceUrl     String?
+  imageUrl      String?
   notes         String?
   createdById   String
   createdAt     DateTime   @default(now())
@@ -413,20 +449,113 @@ model CodeFile {
 // ---------- AI copilot ----------
 
 /**
+ * Discord-style category grouping channels on a project branch
+ * (e.g. "Text Channels", "Hardware", "Firmware").
+ */
+model ChatChannelCategory {
+  id        String   @id @default(cuid())
+  projectId String
+  branchId  String
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  project  Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  channels ChatChannel[]
+
+  @@unique([projectId, branchId, name])
+  @@index([projectId, branchId, sortOrder])
+}
+
+/**
+ * A named copilot conversation thread within a project branch. Every branch
+ * gets a default "General" channel; users can add more (e.g. "Enclosure",
+ * "Firmware") to keep parallel workstreams separate.
+ */
+model ChatChannel {
+  id         String   @id @default(cuid())
+  projectId  String
+  branchId   String
+  categoryId String?
+  name       String
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  project  Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category ChatChannelCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  messages ChatMessage[]
+
+  @@unique([projectId, branchId, name])
+  @@index([projectId, branchId, createdAt])
+  @@index([categoryId, sortOrder])
+}
+
+/**
  * Persisted project chat history for the AI copilot sidebar. Message
  * `parts` stores the AI SDK UIMessage parts array (text + tool calls).
+ * channelId is null only for legacy rows, which belong to "General".
  */
 model ChatMessage {
   id        String   @id @default(cuid())
   projectId String
   branchId  String
+  channelId String?
   role      String
   parts     Json
   createdAt DateTime @default(now())
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  channel ChatChannel? @relation(fields: [channelId], references: [id], onDelete: Cascade)
 
   @@index([projectId, branchId, createdAt])
+  @@index([channelId, createdAt])
+}
+
+enum ChatRunStatus {
+  PENDING
+  RUNNING
+  DONE
+  ERROR
+  CANCELLED
+}
+
+/**
+ * A copilot turn executed by the background worker. Clients subscribe to the
+ * run's event stream (SSE + realtime broadcast) instead of holding an HTTP
+ * connection open while the model runs.
+ */
+model ChatRun {
+  id            String        @id @default(cuid())
+  projectId     String
+  branchId      String
+  channelId     String
+  actorId       String
+  status        ChatRunStatus @default(PENDING)
+  error         String?
+  inputMessages Json
+  createdAt     DateTime      @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+
+  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  events  ChatRunEvent[]
+
+  @@index([channelId, status, createdAt])
+  @@index([status, createdAt])
+}
+
+/** Ordered UI message stream chunks for a run (replay + reconnect). */
+model ChatRunEvent {
+  id        String   @id @default(cuid())
+  runId     String
+  seq       Int
+  chunk     Json
+  createdAt DateTime @default(now())
+
+  run ChatRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, seq])
+  @@index([runId, seq])
 }
 
 // ---------- Stage 3: Verify ----------

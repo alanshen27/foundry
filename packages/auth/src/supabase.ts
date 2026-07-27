@@ -16,6 +16,30 @@ export type SupabaseAuthConfig = {
   cookies: CookieAccessor;
 };
 
+type UserLike = {
+  id: string;
+  email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+};
+
+/** Short TTL so chat.activeRun polling doesn't hammer Supabase Auth (429). */
+const IDENTITY_CACHE_MS = 45_000;
+const identityCache = new Map<string, { identity: AuthenticatedIdentity; exp: number }>();
+
+function identityFromUser(user: UserLike): AuthenticatedIdentity | null {
+  if (!user.email) return null;
+  return {
+    subject: user.id,
+    email: user.email,
+    name: (user.user_metadata?.name as string | undefined) ?? undefined,
+    avatarUrl:
+      (user.user_metadata?.avatar_url as string | undefined) ??
+      (user.user_metadata?.picture as string | undefined) ??
+      undefined,
+    provider: "supabase",
+  };
+}
+
 export function createSupabaseAuthAdapter(config: SupabaseAuthConfig): AuthPort {
   const client = createServerClient(config.url, config.anonKey, {
     cookies: {
@@ -27,14 +51,28 @@ export function createSupabaseAuthAdapter(config: SupabaseAuthConfig): AuthPort 
 
   return {
     async getIdentity(): Promise<AuthenticatedIdentity | null> {
-      const { data } = await client.auth.getUser();
-      if (!data.user?.email) return null;
-      return {
-        subject: data.user.id,
-        email: data.user.email,
-        name: (data.user.user_metadata?.name as string | undefined) ?? undefined,
-        provider: "supabase",
-      };
+      const { data: sessionData } = await client.auth.getSession();
+      const accessToken = sessionData.session?.access_token ?? "";
+      if (accessToken) {
+        const hit = identityCache.get(accessToken);
+        if (hit && hit.exp > Date.now()) return hit.identity;
+      }
+
+      const { data, error } = await client.auth.getUser();
+      if (error) {
+        // Rate-limited / transient Auth API failures: fall back to the JWT session
+        // so high-frequency tRPC polls don't flap 401 forever.
+        const status = "status" in error ? Number(error.status) : 0;
+        if (status === 429 && sessionData.session?.user) {
+          return identityFromUser(sessionData.session.user);
+        }
+        return null;
+      }
+      const identity = data.user ? identityFromUser(data.user) : null;
+      if (identity && accessToken) {
+        identityCache.set(accessToken, { identity, exp: Date.now() + IDENTITY_CACHE_MS });
+      }
+      return identity;
     },
 
     async signInWithPassword(email, password): Promise<AuthenticatedIdentity | null> {

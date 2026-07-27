@@ -15,10 +15,13 @@ import { LaunchStage } from "@/components/stages/launch-stage";
 
 export default async function StagePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ workspaceSlug: string; projectSlug: string; stage: string }>;
+  searchParams: Promise<{ view?: string }>;
 }) {
   const { workspaceSlug, projectSlug, stage: stageParam } = await params;
+  const { view } = await searchParams;
   const stage = stageParam.toUpperCase() as Stage;
   if (!STAGES.includes(stage)) notFound();
 
@@ -51,14 +54,15 @@ export default async function StagePage({
     (s) => s.stage === "VERIFY" && s.branchId === branchId,
   );
 
+  const engineerViews = ["sourcing", "schematic", "pcb", "model", "code", "design"] as const;
+  const engineerView = engineerViews.includes(view as (typeof engineerViews)[number])
+    ? (view as (typeof engineerViews)[number])
+    : "schematic";
+
   // Engineer is a full-bleed editing surface (Figma-like); other stages are
   // centered documents.
   return (
-    <div
-      className={
-        stage === "ENGINEER" ? "flex h-full flex-col p-4 lg:p-5" : "mx-auto w-full max-w-4xl p-6 lg:p-8"
-      }
-    >
+    <div className={stage === "ENGINEER" ? "h-full" : "mx-auto w-full max-w-4xl p-6 lg:p-8"}>
       {stage === "IDEATE" ? (
         <>
           <h1 className="mb-6 text-3xl font-semibold tracking-tight">Ideate</h1>
@@ -69,6 +73,7 @@ export default async function StagePage({
         <EngineerStage
           projectId={project.id}
           branchId={branchId}
+          view={engineerView}
           canEdit={
             can("electronics.edit") ||
             can("mechanical.edit") ||

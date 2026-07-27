@@ -7,8 +7,12 @@ import type { NextConfig } from "next";
 config({ path: join(__dirname, "..", "..", ".env") });
 
 const nextConfig: NextConfig = {
+  // Lets a second instance (tests, agents) run without clobbering the main
+  // dev server's build cache: NEXT_DIST_DIR=.next-test pnpm dev --port 3100
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   transpilePackages: [
     "@foundry/auth",
+    "@foundry/cad",
     "@foundry/config",
     "@foundry/db",
     "@foundry/domain",
@@ -16,6 +20,7 @@ const nextConfig: NextConfig = {
     "@foundry/storage",
     "@foundry/observability",
   ],
+  serverExternalPackages: ["@kittycad/lib"],
 };
 
 export default nextConfig;

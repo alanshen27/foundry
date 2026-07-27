@@ -2,6 +2,8 @@ import { notFound, redirect } from "next/navigation";
 import { prisma } from "@foundry/db";
 import { Card } from "@/components/ui/card";
 import { HomeShell } from "@/components/home-shell";
+import { ThemeSettingsPanel } from "@/components/theme-picker";
+import { UserAvatar } from "@/components/user-avatar";
 import { getCurrentUser } from "@/server/session";
 import { InviteMemberForm } from "./invite-member-form";
 
@@ -19,7 +21,20 @@ export default async function WorkspaceSettingsPage({
       where: { slug: workspaceSlug, memberships: { some: { userId: user.id } } },
       include: {
         memberships: { include: { user: true }, orderBy: { createdAt: "asc" } },
-        invitations: { where: { status: "PENDING" }, orderBy: { createdAt: "desc" } },
+        invitations: {
+          where: { status: "PENDING" },
+          include: { project: true },
+          orderBy: { createdAt: "desc" },
+        },
+        projects: {
+          where: { status: "ACTIVE" },
+          select: { id: true, name: true, slug: true, folderId: true },
+          orderBy: { createdAt: "asc" },
+        },
+        folders: {
+          select: { id: true, name: true, parentId: true, sortOrder: true },
+          orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+        },
       },
     }),
     prisma.workspaceMembership.findMany({
@@ -41,55 +56,103 @@ export default async function WorkspaceSettingsPage({
         slug: m.workspace.slug,
       }))}
       current={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
-      userName={user.name}
+      projects={workspace.projects}
+      folders={workspace.folders}
+      user={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
     >
-      <h1 className="mb-8 text-3xl font-semibold tracking-tight">Members</h1>
+      <div className="mb-8">
+        <h1 className="text-[28px] font-semibold tracking-[-0.03em]">Settings</h1>
+        <p className="text-muted-foreground mt-1 text-[13px]">
+          Appearance and workspace members for {workspace.name}
+        </p>
+      </div>
 
-      <Card className="mb-6 p-4">
-        <ul className="divide-y divide-border">
-          {workspace.memberships.map((membership) => (
-            <li key={membership.id} className="flex items-center justify-between py-2.5">
-              <div>
-                <p className="text-sm font-medium">{membership.user.name}</p>
-                <p className="text-sm text-zinc-500">{membership.user.email}</p>
-              </div>
-              <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                {membership.role}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </Card>
+      <section className="mb-10">
+        <h2 className="text-muted-foreground mb-3 text-[11px] font-medium tracking-[0.04em] uppercase">
+          Theme
+        </h2>
+        <Card className="gap-0 rounded-xl p-4">
+          <ThemeSettingsPanel />
+        </Card>
+      </section>
 
-      {workspace.invitations.length > 0 ? (
-        <Card className="mb-6 p-4">
-          <h2 className="text-muted-foreground mb-3 text-sm font-semibold tracking-wide uppercase">
-            Pending invitations
-          </h2>
-          <ul className="divide-y divide-border">
-            {workspace.invitations.map((invitation) => (
-              <li key={invitation.id} className="py-2.5">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm">{invitation.email}</p>
-                  <span className="text-xs uppercase tracking-wide text-zinc-500">
-                    {invitation.role} · expires {invitation.expiresAt.toLocaleDateString()}
-                  </span>
+      <section className="mb-6">
+        <h2 className="text-muted-foreground mb-3 text-[11px] font-medium tracking-[0.04em] uppercase">
+          Members
+        </h2>
+        <Card className="mb-6 gap-0 rounded-xl p-0">
+          <ul className="divide-border divide-y">
+            {workspace.memberships.map((membership) => (
+              <li
+                key={membership.id}
+                className="flex items-center justify-between gap-3 px-3.5 py-2.5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <UserAvatar
+                    userId={membership.user.id}
+                    name={membership.user.name}
+                    avatarUrl={membership.user.avatarUrl}
+                    className="size-8"
+                  />
+                  <div className="min-w-0">
+                    <p className="truncate text-[13px] font-medium">{membership.user.name}</p>
+                    <p className="text-muted-foreground truncate text-[12px]">
+                      {membership.user.email}
+                    </p>
+                  </div>
                 </div>
-                {/* Email delivery is not wired in Phase 0; share the link directly. */}
-                <p className="mt-1 break-all text-xs text-zinc-500" data-testid="invite-link">
-                  Invite link: /invite/{invitation.token}
-                </p>
+                <span className="text-muted-foreground shrink-0 text-[11px] font-medium tracking-wide uppercase">
+                  {membership.role}
+                </span>
               </li>
             ))}
           </ul>
         </Card>
-      ) : null}
 
-      {canManage ? (
-        <InviteMemberForm workspaceId={workspace.id} actorRole={myRole!} />
-      ) : (
-        <p className="text-muted-foreground text-sm">Only owners and admins can invite members.</p>
-      )}
+        {workspace.invitations.length > 0 ? (
+          <Card className="mb-6 gap-0 rounded-xl p-0">
+            <div className="border-b px-3.5 py-2.5">
+              <h2 className="text-muted-foreground text-[11px] font-medium tracking-[0.04em] uppercase">
+                Pending invitations
+              </h2>
+            </div>
+            <ul className="divide-border divide-y">
+              {workspace.invitations.map((invitation) => (
+                <li key={invitation.id} className="px-3.5 py-2.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[13px]">{invitation.email}</p>
+                      {invitation.project ? (
+                        <p className="text-muted-foreground truncate text-[11px]">
+                          Via project {invitation.project.name}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="text-muted-foreground shrink-0 text-[11px] tracking-wide uppercase">
+                      {invitation.role} · expires {invitation.expiresAt.toLocaleDateString()}
+                    </span>
+                  </div>
+                  {/* Email delivery is not wired in Phase 0; share the link directly. */}
+                  <p
+                    className="text-muted-foreground mt-1 break-all text-[11px]"
+                    data-testid="invite-link"
+                  >
+                    Invite link: /invite/{invitation.token}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        ) : null}
+
+        {canManage ? (
+          <InviteMemberForm workspaceId={workspace.id} actorRole={myRole!} />
+        ) : (
+          <p className="text-muted-foreground text-sm">
+            Only owners and admins can invite members.
+          </p>
+        )}
+      </section>
     </HomeShell>
   );
 }

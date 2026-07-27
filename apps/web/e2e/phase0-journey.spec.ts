@@ -14,7 +14,8 @@ async function signIn(page: Page, email: string) {
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("demo-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL("**/workspaces");
+  // Signed-in home is the primary workspace slug, not the all-workspaces list.
+  await page.waitForURL(/\/w\/[^/]+$/);
 }
 
 test("full Phase 0 journey", async ({ browser }) => {
@@ -23,7 +24,8 @@ test("full Phase 0 journey", async ({ browser }) => {
 
   await signIn(builder, "builder@foundry.local");
 
-  // Create workspace
+  // Create workspace (manage list — not the default home)
+  await builder.goto("/workspaces?manage=1");
   const workspaceName = `E2E Workspace ${runId}`;
   await builder.getByLabel("Workspace name").fill(workspaceName);
   await builder.getByRole("button", { name: "Create" }).click();
@@ -37,19 +39,25 @@ test("full Phase 0 journey", async ({ browser }) => {
   await builder.waitForURL("**/projects/test-rover/overview");
   await expect(builder.getByRole("heading", { name: "Test Rover" })).toBeVisible();
 
-  // Navigate the four stages and check their real editors render
-  const stageMarkers: [string, string | RegExp][] = [
-    ["Ideate", "Product brief"],
-    ["Engineer", "Est. unit cost"],
-    ["Verify", "Validation checklist"],
-    ["Launch", "Cut a release"],
+  // Walk the footer process bar and check the real editors render.
+  // Clicks retry because dev-mode hydration can swallow the first one.
+  const stageMarkers: [string, RegExp, string][] = [
+    ["Ideation", /\/ideate$/, "Product brief"],
+    ["Sourcing", /\/engineer\?view=sourcing$/, "Est. unit cost"],
+    ["Schematic", /\/engineer\?view=schematic$/, "Resistor"],
+    ["Code", /\/engineer\?view=code$/, "Link a repository to codebase"],
+    ["Verify", /\/verify$/, "Validation checklist"],
+    ["Launch", /\/launch$/, "Cut a release"],
   ];
-  for (const [stage, marker] of stageMarkers) {
-    await builder
-      .getByRole("navigation", { name: "Stages" })
-      .getByRole("link", { name: stage })
-      .click();
-    await expect(builder.getByText(marker).first()).toBeVisible();
+  for (const [step, url, marker] of stageMarkers) {
+    await expect(async () => {
+      await builder
+        .getByRole("navigation", { name: "Design process" })
+        .getByRole("link", { name: step })
+        .click();
+      await builder.waitForURL(url, { timeout: 10_000 });
+    }).toPass({ timeout: 90_000 });
+    await expect(builder.getByText(marker).first()).toBeVisible({ timeout: 30_000 });
   }
 
   // Invite the reviewer
@@ -83,8 +91,71 @@ test("full Phase 0 journey", async ({ browser }) => {
   await reviewerContext.close();
 });
 
+test("chat channels and visual CAD parameters", async ({ page }) => {
+  await signIn(page, "builder@foundry.local");
+
+  // Fresh workspace + project for this test.
+  await page.getByLabel("Workspace name").fill(`E2E Studio ${runId}`);
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.waitForURL("**/w/e2e-studio-*");
+  await page.getByLabel("Project name").fill("Param Rig");
+  await page.getByLabel("Project description").fill("Channels + params test");
+  await page.getByRole("button", { name: "Create project" }).click();
+  await page.waitForURL("**/projects/param-rig/overview");
+
+  // --- Copilot channels: create one, switch, persist across reloads.
+  await page.getByRole("button", { name: /General/ }).click();
+  await page.getByRole("button", { name: "New channel" }).click();
+  await page.getByLabel("New channel name").fill("enclosure");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  // The header switches to the new (empty) channel.
+  await expect(page.getByRole("button", { name: /enclosure/ })).toBeVisible();
+
+  await page.reload();
+  // Default channel after reload is General; the new channel is listed.
+  const channelButton = page.getByRole("button", { name: /General/ });
+  await expect(channelButton).toBeVisible();
+  await channelButton.click();
+  await expect(page.getByRole("listbox").getByText("enclosure")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // --- Visual CAD parameters: edit a value, autosave, survive reload.
+  await page.goto(page.url().replace(/\/overview.*$/, "/engineer?view=model"));
+  await expect(page.getByText("Parameters")).toBeVisible({ timeout: 60_000 });
+  const width = page.locator('label:has-text("width") input[type="number"]');
+  await expect(width).toHaveValue("60");
+  // Editing the control rewrites the script and autosaves (900ms debounce).
+  const saved = page.waitForResponse(
+    (r) => r.url().includes("design.save") && r.ok(),
+    { timeout: 30_000 },
+  );
+  await width.fill("75");
+  await saved;
+  await page.reload();
+  await expect(page.locator('label:has-text("width") input[type="number"]')).toHaveValue("75", {
+    timeout: 30_000,
+  });
+});
+
 test("unauthenticated users are redirected to sign-in", async ({ page }) => {
   await page.goto("/workspaces");
   await page.waitForURL("**/auth/sign-in**");
   await expect(page.getByText("Sign in to FOUNDRY")).toBeVisible();
+});
+
+test("render pages and project files require valid tokens/session", async ({ request }) => {
+  // Copilot screenshot targets: no token or a forged token must 404.
+  for (const path of [
+    "/render/model3d",
+    "/render/circuit",
+    "/render/circuit?token=abc.def",
+    "/render/pcb",
+    "/render/pcb?token=abc.def",
+  ]) {
+    const res = await request.get(path);
+    expect(res.status(), path).toBe(404);
+  }
+  // Stored project files (concept images, renders) require a session.
+  const files = await request.get("/api/files/projects/some-project/ai/x.png");
+  expect(files.status()).toBe(401);
 });

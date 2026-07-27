@@ -3,38 +3,70 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { FolderKanban, LayoutGrid, LogOut, Settings } from "lucide-react";
+import { FolderKanban, Globe, LogOut, Settings, Waypoints } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FoundryMark } from "@/components/foundry-mark";
+import { UserAvatar } from "@/components/user-avatar";
 import { WorkspaceSwitcher, type ShellWorkspace } from "@/components/project-shell";
+import {
+  WorkspaceFileTree,
+  type TreeFolder,
+  type TreeProject,
+} from "@/components/workspace-file-tree";
 import { cn } from "@/lib/utils";
 
+export type ShellProject = TreeProject;
+export type ShellFolder = TreeFolder;
+
+/** Sidebar link; the selected one carries the accent so the sidebar has a focal point. */
+function navItemClass(active: boolean) {
+  return cn(
+    "group flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] transition-colors",
+    active
+      ? "bg-primary/10 text-primary font-medium"
+      : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
+  );
+}
+
+function navIconClass(active: boolean) {
+  return cn(
+    "size-[15px] transition-opacity",
+    active ? "opacity-100" : "opacity-70 group-hover:opacity-100",
+  );
+}
+
 /**
- * Shell for non-project pages (workspace list, workspace home, settings):
- * same sidebar language as the project shell so navigation feels continuous.
+ * Shell for non-project pages (workspace home, settings, sites, manage):
+ * projects file tree on top; Settings + Manage workspaces pinned bottom.
  */
 export function HomeShell({
   workspaces,
   current,
-  userName,
+  projects = [],
+  folders = [],
+  user,
   children,
 }: {
   workspaces: ShellWorkspace[];
   current?: ShellWorkspace;
-  userName: string;
+  projects?: ShellProject[];
+  folders?: ShellFolder[];
+  user: { id: string; name: string; avatarUrl?: string | null };
   children: ReactNode;
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const homeHref = current ? `/w/${current.slug}` : "/workspaces?manage=1";
+  const sitesHref = current ? `/w/${current.slug}/sites` : null;
+  const settingsHref = current ? `/w/${current.slug}/settings` : null;
 
-  const navItems = [
-    { href: "/workspaces", label: "All workspaces", icon: LayoutGrid },
-    ...(current
-      ? [
-          { href: `/w/${current.slug}`, label: "Projects", icon: FolderKanban },
-          { href: `/w/${current.slug}/settings`, label: "Settings", icon: Settings },
-        ]
-      : []),
-  ];
+  const onProjectsRoot =
+    Boolean(current) &&
+    (pathname === `/w/${current!.slug}` ||
+      Boolean(pathname?.startsWith(`/w/${current!.slug}/folders/`)));
+  const onSites = Boolean(sitesHref && pathname?.startsWith(sitesHref));
+  const onSettings = Boolean(settingsHref && pathname === settingsHref);
+  const onManage = pathname === "/workspaces";
 
   async function signOut() {
     await fetch("/api/auth/sign-out", { method: "POST" });
@@ -44,49 +76,83 @@ export function HomeShell({
 
   return (
     <div className="bg-background flex h-screen">
-      <nav aria-label="Main" className="bg-card/30 flex w-60 shrink-0 flex-col border-r p-3">
-        <Link href="/workspaces" className="text-primary px-2 py-1 text-sm font-black tracking-tight">
-          FOUNDRY
-        </Link>
-        <div className="mt-3">
+      <nav
+        aria-label="Main"
+        className="border-sidebar-border bg-sidebar flex w-[240px] shrink-0 flex-col border-r"
+      >
+        <div className="border-sidebar-border flex h-12 items-center border-b px-3">
+          <Link href={homeHref}>
+            <FoundryMark />
+          </Link>
+        </div>
+
+        <div className="px-2 pt-3">
           {current ? (
             <WorkspaceSwitcher workspaces={workspaces} current={current} />
+          ) : (
+            <p className="text-muted-foreground px-2 text-xs">Create a workspace to continue</p>
+          )}
+        </div>
+
+        <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
+          {current ? (
+            <div className="flex flex-col gap-0.5">
+              <Link href={`/w/${current.slug}`} className={navItemClass(onProjectsRoot)}>
+                <FolderKanban className={navIconClass(onProjectsRoot)} strokeWidth={1.75} />
+                Projects
+              </Link>
+
+              {sitesHref ? (
+                <Link href={sitesHref} className={navItemClass(onSites)}>
+                  <Globe className={navIconClass(onSites)} strokeWidth={1.75} />
+                  Sites
+                </Link>
+              ) : null}
+            </div>
+          ) : null}
+
+          {current ? (
+            <WorkspaceFileTree
+              workspaceId={current.id}
+              workspaceSlug={current.slug}
+              projects={projects}
+              folders={folders}
+            />
           ) : null}
         </div>
-        <div className="mt-3 flex flex-col gap-0.5">
-          {navItems.map((item) => {
-            const active =
-              item.href === "/workspaces"
-                ? pathname === "/workspaces"
-                : pathname === item.href;
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
-                  active
-                    ? "bg-muted text-foreground font-medium"
-                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                )}
-              >
-                <Icon className={cn("size-4", active ? "text-primary" : "")} />
-                {item.label}
+
+        <div className="border-sidebar-border mt-auto border-t px-2 pt-2 pb-2">
+          <div className="flex flex-col gap-0.5">
+            {settingsHref ? (
+              <Link href={settingsHref} className={navItemClass(onSettings)}>
+                <Settings className={navIconClass(onSettings)} strokeWidth={1.75} />
+                Settings
               </Link>
-            );
-          })}
-        </div>
-        <div className="mt-auto flex items-center justify-between gap-2 border-t pt-3">
-          <span className="text-muted-foreground truncate px-1 text-xs">{userName}</span>
-          <Button variant="ghost" size="icon-sm" onClick={signOut} aria-label="Sign out">
-            <LogOut className="size-4" />
-          </Button>
+            ) : null}
+            <Link href="/workspaces?manage=1" className={navItemClass(onManage)}>
+              <Waypoints className={navIconClass(onManage)} strokeWidth={1.75} />
+              Manage workspaces
+            </Link>
+          </div>
+
+          <div className="mt-2 flex items-center gap-2 border-t px-1 pt-2">
+            <UserAvatar
+              userId={user.id}
+              name={user.name}
+              avatarUrl={user.avatarUrl}
+              className="size-7 text-[10px]"
+            />
+            <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
+              {user.name}
+            </span>
+            <Button variant="ghost" size="icon-sm" onClick={signOut} aria-label="Sign out">
+              <LogOut className="size-3.5" />
+            </Button>
+          </div>
         </div>
       </nav>
-      <main className="min-w-0 flex-1 overflow-auto">
-        <div className="mx-auto max-w-5xl p-6 lg:p-10">{children}</div>
-      </main>
+
+      <main className="min-w-0 flex-1 overflow-y-auto p-8">{children}</main>
     </div>
   );
 }

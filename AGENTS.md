@@ -15,8 +15,8 @@ are NOT implemented. Do not fake them.
 
 1. Small, reviewable changes. Never implement multiple phases in one pass.
 2. Domain logic never imports vendor SDKs directly. All external services
-   (Supabase Auth/Storage/Realtime today) sit behind ports in
-   `packages/auth`, `packages/storage`, `packages/realtime`.
+   (Supabase Auth/Storage/Realtime, Zoo CAD) sit behind ports in
+   `packages/auth`, `packages/storage`, `packages/realtime`, `packages/cad`.
 3. Local/demo adapters are allowed but their output MUST be labeled
    `SIMULATED` or `UNVERIFIED`. Never present mocked output as verified.
 4. Every mutating API procedure must check capabilities
@@ -31,10 +31,12 @@ are NOT implemented. Do not fake them.
 - `packages/db`: Prisma + Postgres (Supabase-hosted or local Docker).
 - Auth: Supabase Auth behind `AuthPort`; `AUTH_MODE=local` provides a
   clearly-labeled LOCAL credentials adapter for dev/e2e only.
-- Storage: Supabase Storage behind `ObjectStoragePort`; `STORAGE_MODE=local`
-  writes to `.local-storage/` (dev only).
+- Storage: Supabase Storage behind `ObjectStoragePort` (required; no local
+  filesystem adapter).
 - Realtime presence: Supabase Realtime behind `RealtimePort`;
   `NEXT_PUBLIC_REALTIME_MODE=off` disables presence.
+- Mechanical CAD: Zoo / KittyCAD behind `CadPort` (`packages/cad`);
+  requires `ZOO_API_TOKEN`. Models are KCL; viewport is Zoo WebRTC.
 - Env is validated in `packages/config` (zod). Add new vars there and to
   `.env.example` and `turbo.json` `globalEnv`.
 
@@ -50,7 +52,7 @@ are NOT implemented. Do not fake them.
 - `apps/web` — Next.js app; tRPC routers in `apps/web/server`
 - `packages/domain` — entities, capabilities, stage/status enums, event types
 - `packages/db` — Prisma schema, client, seed
-- `packages/auth`, `packages/storage`, `packages/realtime` — ports + adapters
+- `packages/auth`, `packages/storage`, `packages/realtime`, `packages/cad` — ports + adapters
 - `packages/config` — env validation
 - `packages/observability` — logger + audit helpers
 - `docs/` — architecture notes and runbooks

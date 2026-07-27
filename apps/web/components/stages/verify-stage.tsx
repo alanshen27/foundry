@@ -5,6 +5,7 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
 import { trpc } from "@/lib/trpc";
@@ -77,6 +78,47 @@ export function VerifyStage({ projectId, branchId, canRun, canApprove, verifySta
           setWaiverReason("");
         },
       },
+    );
+  }
+
+  if (list.isLoading) {
+    return (
+      <div className="flex flex-col gap-6" aria-busy="true" aria-label="Loading verification">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <div className="flex flex-col gap-2">
+              <Skeleton className="h-5 w-40" />
+              <Skeleton className="h-4 w-56" />
+            </div>
+            <Skeleton className="h-8 w-40" />
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-5 w-44" />
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <div className="flex flex-wrap gap-2">
+              <Skeleton className="h-8 min-w-60 flex-1" />
+              <Skeleton className="h-8 w-28" />
+              <Skeleton className="h-8 w-24" />
+              <Skeleton className="h-8 w-24" />
+            </div>
+            {Array.from({ length: 4 }, (_, i) => (
+              <div key={i} className="flex items-start justify-between gap-3 py-2">
+                <div className="flex min-w-0 flex-1 flex-col gap-2">
+                  <Skeleton className="h-4 w-3/5" />
+                  <div className="flex gap-1.5">
+                    <Skeleton className="h-5 w-16 rounded-full" />
+                    <Skeleton className="h-5 w-14 rounded-full" />
+                  </div>
+                </div>
+                <Skeleton className="h-8 w-24" />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
@@ -182,7 +224,7 @@ export function VerifyStage({ projectId, branchId, canRun, canApprove, verifySta
                         <p className="text-muted-foreground text-sm">{c.detail}</p>
                       ) : null}
                       <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                        <StatusBadge status={c.category.replace("_", " ")} className="bg-zinc-800" />
+                        <StatusBadge status={c.category.replace("_", " ")} />
                         <StatusBadge status={c.severity} />
                         <StatusBadge status={c.status} />
                         {c.waived ? <StatusBadge status="SKIPPED" className="italic" /> : null}

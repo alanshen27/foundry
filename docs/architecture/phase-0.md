@@ -13,8 +13,7 @@ the decisions Phase 0 committed to and the boundaries later phases must respect.
   Supabase surface is wrapped by a port so it can be replaced:
   - `AuthPort` (`packages/auth`) — Supabase Auth or LOCAL (dev/e2e; HMAC
     session cookie + scrypt password, never for production).
-  - `ObjectStoragePort` (`packages/storage`) — Supabase Storage or a local
-    filesystem adapter whose objects are labeled `SIMULATED`.
+  - `ObjectStoragePort` (`packages/storage`) — Supabase Storage.
   - `RealtimePort` (`packages/realtime`) — Supabase Realtime presence or a
     no-op "off" adapter. This is NOT the Yjs layer; Phase 2 will add document
     collaboration with its own persistence (ADR required).

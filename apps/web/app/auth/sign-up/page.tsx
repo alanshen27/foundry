@@ -33,7 +33,7 @@ function SignUpForm() {
     if (response.ok) {
       const body = (await response.json().catch(() => null)) as { signedIn?: boolean } | null;
       if (body?.signedIn) {
-        router.push(nextParam ?? "/workspaces");
+        router.push(nextParam ?? "/");
         router.refresh();
       } else {
         setConfirmSent(true);

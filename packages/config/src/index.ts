@@ -5,15 +5,32 @@ const serverEnvSchema = z
     DATABASE_URL: z.string(),
     AUTH_MODE: z.enum(["supabase", "local"]).default("local"),
     AUTH_SECRET: z.string().min(8).optional(),
-    STORAGE_MODE: z.enum(["supabase", "local"]).default("local"),
     STORAGE_BUCKET: z.string().default("artifacts"),
-    NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(),
-    SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+    NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
+    SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
     NEXT_PUBLIC_REALTIME_MODE: z.enum(["supabase", "off"]).default("off"),
+    REDIS_URL: z.preprocess((value) => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    }, z.string().url().default("redis://localhost:6379")),
     // AI copilot (optional; chat is disabled with a clear notice when unset)
     OPENAI_API_KEY: z.string().optional(),
-    AI_MODEL: z.string().default("gpt-4o-mini"),
+    AI_MODEL: z.string().default("gpt-5.6"),
+    APP_ORIGIN: z.string().url().optional(),
+    // Zoo / KittyCAD engine + text-to-CAD (required for mechanical MODEL3D)
+    ZOO_API_TOKEN: z.preprocess((value) => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    }, z.string().min(1).optional()),
+    // Optional: land signed-in users on this workspace slug when they are a member.
+    FOUNDRY_DEFAULT_WORKSPACE_SLUG: z.preprocess((value) => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    }, z.string().min(1).max(64).optional()),
   })
   .superRefine((env, ctx) => {
     if (env.AUTH_MODE === "local" && !env.AUTH_SECRET) {
@@ -21,31 +38,6 @@ const serverEnvSchema = z
         code: z.ZodIssueCode.custom,
         path: ["AUTH_SECRET"],
         message: "AUTH_SECRET is required when AUTH_MODE=local",
-      });
-    }
-    const needsSupabase =
-      env.AUTH_MODE === "supabase" ||
-      env.STORAGE_MODE === "supabase" ||
-      env.NEXT_PUBLIC_REALTIME_MODE === "supabase";
-    if (needsSupabase) {
-      for (const key of ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY"] as const) {
-        if (!env[key]) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [key],
-            message: `${key} is required when a Supabase-backed mode is enabled`,
-          });
-        }
-      }
-    }
-    if (
-      (env.AUTH_MODE === "supabase" || env.STORAGE_MODE === "supabase") &&
-      !env.SUPABASE_SERVICE_ROLE_KEY
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["SUPABASE_SERVICE_ROLE_KEY"],
-        message: "SUPABASE_SERVICE_ROLE_KEY is required for supabase auth/storage",
       });
     }
   });

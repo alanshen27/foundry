@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 
@@ -23,14 +23,15 @@ export function CreateWorkspaceForm() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-sm font-semibold tracking-wide uppercase">
-          New workspace
-        </CardTitle>
+    <Card className="gap-0 rounded-xl p-0">
+      <CardHeader className="border-b px-4 py-3">
+        <CardTitle className="text-[13px] font-medium">New workspace</CardTitle>
+        <CardDescription className="text-[12px]">
+          A shared home for your team and product projects.
+        </CardDescription>
       </CardHeader>
-      <CardContent>
-        <form onSubmit={onSubmit} className="flex gap-3">
+      <CardContent className="px-4 py-4">
+        <form onSubmit={onSubmit} className="flex gap-2.5">
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -43,7 +44,7 @@ export function CreateWorkspaceForm() {
           </Button>
         </form>
         {create.error ? (
-          <p role="alert" className="text-destructive mt-2 text-sm">
+          <p role="alert" className="text-destructive mt-2 text-[13px]">
             {create.error.message}
           </p>
         ) : null}

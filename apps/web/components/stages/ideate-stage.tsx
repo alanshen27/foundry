@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
@@ -93,6 +94,33 @@ function BriefCard({ projectId, branchId, canEdit }: Props) {
       performanceTargets: form.performanceTargets || null,
       manufacturingNotes: form.manufacturingNotes || null,
     });
+  }
+
+  if (brief.isLoading) {
+    return (
+      <Card aria-busy="true" aria-label="Loading product brief">
+        <CardHeader className="gap-2">
+          <Skeleton className="h-5 w-32" />
+          <Skeleton className="h-4 w-72" />
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Skeleton className="h-3.5 w-40" />
+            <Skeleton className="h-20 w-full" />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {Array.from({ length: 6 }, (_, i) => (
+              <div key={i} className="flex flex-col gap-1.5">
+                <Skeleton className="h-3.5 w-28" />
+                <Skeleton className="h-8 w-full" />
+              </div>
+            ))}
+          </div>
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-8 w-28" />
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
@@ -221,6 +249,38 @@ function RequirementsCard({ projectId, branchId, canEdit }: Props) {
   }
 
   const requirements = list.data ?? [];
+
+  if (list.isLoading) {
+    return (
+      <Card aria-busy="true" aria-label="Loading requirements">
+        <CardHeader className="gap-2">
+          <Skeleton className="h-5 w-36" />
+          <Skeleton className="h-4 w-48" />
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex flex-wrap gap-2">
+            <Skeleton className="h-8 min-w-60 flex-1" />
+            <Skeleton className="h-8 w-28" />
+            <Skeleton className="h-8 w-24" />
+            <Skeleton className="h-8 w-14" />
+          </div>
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="flex items-start justify-between gap-3 py-2">
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                <Skeleton className="h-4 w-3/5" />
+                <div className="flex gap-1.5">
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                  <Skeleton className="h-5 w-14 rounded-full" />
+                  <Skeleton className="h-5 w-20 rounded-full" />
+                </div>
+              </div>
+              <Skeleton className="h-8 w-28" />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card>

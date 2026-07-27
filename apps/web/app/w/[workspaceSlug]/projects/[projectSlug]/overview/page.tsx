@@ -5,6 +5,8 @@ import { prisma } from "@foundry/db";
 import { STAGE_LABELS, STAGES, type Stage } from "@foundry/domain";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
+import { STAGE_THEME } from "@/lib/stage-theme";
+import { cn } from "@/lib/utils";
 import { PipelineKickoff } from "./pipeline-kickoff";
 
 const STAGE_ICONS: Record<Stage, typeof Lightbulb> = {
@@ -79,12 +81,18 @@ export default async function ProjectOverviewPage({
             (s) => s.stage === stage && s.branchId === project.activeBranchId,
           );
           const Icon = STAGE_ICONS[stage];
+          const phase = STAGE_THEME[stage];
           return (
             <Link key={stage} href={`${base}/${stage.toLowerCase()}`}>
-              <Card className="hover:border-primary/40 group h-full gap-3 p-4 transition-colors">
+              <Card className={cn("group h-full gap-3 p-4 transition-colors", phase.cardHover)}>
                 <div className="flex items-center justify-between">
-                  <span className="bg-muted group-hover:bg-primary/10 flex size-8 items-center justify-center rounded-lg transition-colors">
-                    <Icon className="group-hover:text-primary size-4 transition-colors" />
+                  <span
+                    className={cn(
+                      "flex size-8 items-center justify-center rounded-lg",
+                      phase.tile,
+                    )}
+                  >
+                    <Icon className="size-4" />
                   </span>
                   <StatusBadge status={state?.status ?? "NOT_STARTED"} />
                 </div>

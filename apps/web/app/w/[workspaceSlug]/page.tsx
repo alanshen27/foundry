@@ -1,11 +1,8 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@foundry/db";
-import { Card } from "@/components/ui/card";
-import { StatusBadge } from "@/components/status-badge";
 import { HomeShell } from "@/components/home-shell";
+import { WorkspaceFolderBrowser } from "@/components/workspace-folder-browser";
 import { getCurrentUser } from "@/server/session";
-import { CreateProjectForm } from "./create-project-form";
 
 export default async function WorkspacePage({
   params,
@@ -25,6 +22,9 @@ export default async function WorkspacePage({
           include: { stageStates: true },
           orderBy: { createdAt: "asc" },
         },
+        folders: {
+          orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+        },
       },
     }),
     prisma.workspaceMembership.findMany({
@@ -43,46 +43,42 @@ export default async function WorkspacePage({
         slug: m.workspace.slug,
       }))}
       current={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
-      userName={user.name}
+      projects={workspace.projects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        folderId: p.folderId,
+      }))}
+      folders={workspace.folders.map((f) => ({
+        id: f.id,
+        name: f.name,
+        parentId: f.parentId,
+        sortOrder: f.sortOrder,
+        color: f.color,
+      }))}
+      user={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
     >
-      <div className="mb-8">
-        <h1 className="text-3xl font-semibold tracking-tight">{workspace.name}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          {workspace.projects.length} active project{workspace.projects.length === 1 ? "" : "s"}
-        </p>
-      </div>
-
-      <div className="mb-8 grid gap-3">
-        {workspace.projects.map((project) => (
-          <Link key={project.id} href={`/w/${workspace.slug}/projects/${project.slug}/overview`}>
-            <Card className="hover:border-primary/40 p-4 transition-colors">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="font-medium">{project.name}</p>
-                  {project.description ? (
-                    <p className="text-muted-foreground text-sm">{project.description}</p>
-                  ) : null}
-                </div>
-                <div className="flex shrink-0 gap-1.5">
-                  {(["IDEATE", "ENGINEER", "VERIFY", "LAUNCH"] as const).map((stage) => {
-                    const state = project.stageStates.find((s) => s.stage === stage);
-                    return (
-                      <span key={stage} title={`${stage}: ${state?.status ?? "NOT_STARTED"}`}>
-                        <StatusBadge status={state?.status ?? "NOT_STARTED"} />
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            </Card>
-          </Link>
-        ))}
-        {workspace.projects.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No projects yet.</p>
-        ) : null}
-      </div>
-
-      <CreateProjectForm workspaceId={workspace.id} workspaceSlug={workspace.slug} />
+      <WorkspaceFolderBrowser
+        workspaceId={workspace.id}
+        workspaceSlug={workspace.slug}
+        workspaceName={workspace.name}
+        folderId={null}
+        folders={workspace.folders.map((f) => ({
+          id: f.id,
+          name: f.name,
+          parentId: f.parentId,
+          sortOrder: f.sortOrder,
+          color: f.color,
+        }))}
+        projects={workspace.projects.map((p) => ({
+          id: p.id,
+          name: p.name,
+          slug: p.slug,
+          description: p.description,
+          folderId: p.folderId,
+          stageStates: p.stageStates.map((s) => ({ stage: s.stage, status: s.status })),
+        }))}
+      />
     </HomeShell>
   );
 }

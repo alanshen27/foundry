@@ -1,0 +1,15 @@
+{
+  "/api/auth/sign-in/route": "app/api/auth/sign-in/route.js",
+  "/api/trpc/[trpc]/route": "app/api/trpc/[trpc]/route.js",
+  "/api/files/[...path]/route": "app/api/files/[...path]/route.js",
+  "/page": "app/page.js",
+  "/auth/sign-in/page": "app/auth/sign-in/page.js",
+  "/workspaces/page": "app/workspaces/page.js",
+  "/w/[workspaceSlug]/page": "app/w/[workspaceSlug]/page.js",
+  "/w/[workspaceSlug]/settings/page": "app/w/[workspaceSlug]/settings/page.js",
+  "/invite/[token]/page": "app/invite/[token]/page.js",
+  "/render/model3d/page": "app/render/model3d/page.js",
+  "/render/circuit/page": "app/render/circuit/page.js",
+  "/w/[workspaceSlug]/projects/[projectSlug]/overview/page": "app/w/[workspaceSlug]/projects/[projectSlug]/overview/page.js",
+  "/w/[workspaceSlug]/projects/[projectSlug]/[stage]/page": "app/w/[workspaceSlug]/projects/[projectSlug]/[stage]/page.js"
+}

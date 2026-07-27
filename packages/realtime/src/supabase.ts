@@ -2,6 +2,7 @@
  * Supabase Realtime presence adapter (browser-side).
  */
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js";
+import { dedupePresenceMembers } from "./dedupe";
 import type { PresenceHandle, PresenceMember, RealtimePort } from "./port";
 
 export type SupabaseRealtimeConfig = {
@@ -22,13 +23,16 @@ export function createSupabaseRealtimeAdapter(config: SupabaseRealtimeConfig): R
 
       room.on("presence", { event: "sync" }, () => {
         const state = room.presenceState<PresenceMember>();
-        const members = Object.values(state)
-          .flat()
-          .map((entry) => ({
-            userId: entry.userId,
-            name: entry.name,
-            joinedAt: entry.joinedAt,
-          }));
+        const members = dedupePresenceMembers(
+          Object.values(state)
+            .flat()
+            .map((entry) => ({
+              userId: entry.userId,
+              name: entry.name,
+              joinedAt: entry.joinedAt,
+              avatarUrl: entry.avatarUrl ?? null,
+            })),
+        );
         onMembers(members);
       });
 

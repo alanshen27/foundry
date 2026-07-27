@@ -1,44 +1,20 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import {
-  convertToModelMessages,
-  stepCountIs,
-  streamText,
-  validateUIMessages,
-  type UIMessage,
-} from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
-import { prisma, type Prisma } from "@foundry/db";
+import { validateUIMessages } from "ai";
+import { prisma } from "@foundry/db";
 import { getServerEnv } from "@foundry/config";
 import { getCurrentUser } from "@/server/session";
 import { requireProjectCapability } from "@/server/access";
-import { buildProjectTools } from "@/server/ai/tools";
-
-export const maxDuration = 120;
+import { ensureDefaultChannel } from "@/server/chat";
 
 const bodySchema = z.object({
   projectId: z.string(),
   branchId: z.string(),
+  channelId: z.string().optional(),
   messages: z.array(z.unknown()),
 });
 
-const SYSTEM_PROMPT = `You are the FOUNDRY copilot: an AI hardware engineer embedded in a product-development workspace with four stages — Ideate, Engineer, Verify, Launch.
-
-You have tools that write directly into the project. Use them; don't just describe what could be done.
-
-When the user describes a product idea (especially a first prompt), bootstrap the whole pipeline:
-1. update_brief — capture intent, environment, audience, budget, dimensions, performance targets.
-2. add_requirements — 6-12 concrete, testable requirements with sensible priorities and units.
-3. add_components — a realistic starter BOM across ELECTRONICS / MECHANICAL / SOFTWARE / DESIGN with real part numbers where you know them and rough unit costs in cents.
-4. save_circuit — a plausible schematic connecting the main electronic components.
-5. save_model3d — a simple parametric mock-up of the physical product (millimetres).
-6. add_validation_checks — checks derived from the requirements (every MUST gets one).
-7. write_code_file — starter firmware (e.g. src/main.cpp) matching the circuit's MCU and sensors.
-
-For follow-up edits, call get_project_state first if you're unsure what exists, change only what the user asked for, and keep other stages consistent. If your change invalidates previously approved downstream work, the system marks those stages STALE automatically — mention it when it happens. Use request_review when a human should re-check a stage you altered significantly.
-
-Be concise in prose. Summarise what you changed and why in a few sentences after the tool calls. Never invent tool results.`;
-
+/** Enqueue a copilot turn for the background worker; clients stream via SSE. */
 export async function POST(request: Request) {
   const env = getServerEnv();
   if (!env.OPENAI_API_KEY) {
@@ -63,34 +39,81 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing capability: agent.invoke" }, { status: 403 });
   }
 
-  const tools = buildProjectTools({ userId: user.id, projectId, branchId });
-  const messages = await validateUIMessages({ messages: parsed.data.messages });
+  try {
+    let channelId = parsed.data.channelId ?? null;
+    if (channelId) {
+      const channel = await prisma.chatChannel.findFirst({
+        where: { id: channelId, projectId, branchId },
+      });
+      if (!channel) return NextResponse.json({ error: "Unknown channel" }, { status: 400 });
+    } else {
+      channelId = (await ensureDefaultChannel(projectId, branchId)).id;
+    }
 
-  const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
-  const result = streamText({
-    model: openai(env.AI_MODEL),
-    system: SYSTEM_PROMPT,
-    messages: await convertToModelMessages(messages),
-    tools,
-    stopWhen: stepCountIs(14),
-  });
+    const messages = await validateUIMessages({ messages: parsed.data.messages });
 
-  return result.toUIMessageStreamResponse({
-    originalMessages: messages,
-    onFinish: async ({ messages: finalMessages }) => {
-      // Persist the whole thread (last-write-wins) so the sidebar restores
-      // history on reload.
-      await prisma.$transaction([
-        prisma.chatMessage.deleteMany({ where: { projectId, branchId } }),
-        prisma.chatMessage.createMany({
-          data: (finalMessages as UIMessage[]).map((m) => ({
-            projectId,
-            branchId,
-            role: m.role,
-            parts: m.parts as unknown as Prisma.InputJsonValue,
-          })),
-        }),
-      ]);
-    },
-  });
+    // One in-flight run per channel — client must Stop before sending again.
+    const { expireStaleChatRuns } = await import("@/server/chat-run/stale");
+    await expireStaleChatRuns(channelId);
+
+    const active = await prisma.chatRun.findFirst({
+      where: {
+        channelId,
+        status: { in: ["PENDING", "RUNNING"] },
+      },
+      select: { id: true },
+    });
+    if (active) {
+      return NextResponse.json(
+        { error: "A reply is already in progress. Stop it before sending another message." },
+        { status: 409 },
+      );
+    }
+
+    // Store the turn before the model runs. If the run is cancelled, errors, or
+    // the worker dies, the user's message is still in the history.
+    const { saveNewMessages } = await import("@/server/chat-run/persist");
+    await saveNewMessages({ projectId, branchId, channelId }, messages);
+
+    const run = await prisma.chatRun.create({
+      data: {
+        projectId,
+        branchId,
+        channelId,
+        actorId: user.id,
+        inputMessages: messages as object,
+      },
+      select: { id: true },
+    });
+
+    try {
+      const { enqueueChatRun } = await import("@/server/chat-run/queue");
+      await enqueueChatRun(run.id);
+    } catch (err) {
+      console.error("enqueueChatRun failed:", err);
+      await prisma.chatRun.update({
+        where: { id: run.id },
+        data: {
+          status: "ERROR",
+          error: "Failed to enqueue chat run (is Redis up?)",
+          finishedAt: new Date(),
+        },
+      });
+      return NextResponse.json(
+        { error: "Chat queue unavailable. Check REDIS_URL and that Redis is reachable." },
+        { status: 503 },
+      );
+    }
+
+    return NextResponse.json({ runId: run.id, channelId }, { status: 202 });
+  } catch (err) {
+    console.error("POST /api/ai/chat failed:", err);
+    return NextResponse.json(
+      {
+        error:
+          "Copilot unavailable. Run `pnpm db:generate && pnpm db:push` and restart the dev server.",
+      },
+      { status: 500 },
+    );
+  }
 }

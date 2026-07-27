@@ -13,7 +13,7 @@ This repository currently implements **Phase 0 — repository and foundations**:
 - pnpm + Turborepo monorepo with strict TypeScript, ESLint, Prettier, Vitest, Playwright, CI
 - Postgres (Supabase or local Docker) with Prisma migrations
 - Auth behind an `AuthPort` (Supabase Auth, plus a clearly-labeled LOCAL dev adapter)
-- Object storage behind an `ObjectStoragePort` (Supabase Storage, plus a SIMULATED local adapter)
+- Object storage behind an `ObjectStoragePort` (Supabase Storage)
 - Realtime presence behind a `RealtimePort` (Supabase Realtime, or off)
 - Workspace/project CRUD with capability-based permissions and audit events
 - Collaborator invitations with accept flow
@@ -31,13 +31,12 @@ Prerequisites: Node 20+, pnpm 9+, Docker (only if you don't use hosted Supabase)
 ```bash
 pnpm install
 
-# Option A: local Postgres (no Supabase account needed)
-docker compose -f infra/local/docker-compose.yml up -d
-cp .env.example .env    # defaults work as-is for local mode
-
-# Option B: hosted Supabase
-# Set DATABASE_URL, NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
-# SUPABASE_SERVICE_ROLE_KEY in .env and switch AUTH_MODE/STORAGE_MODE to "supabase".
+# Local Postgres (optional) + Supabase project for Auth/Storage
+docker compose -f infra/local/docker-compose.yml up -d   # or use Supabase Postgres
+cp .env.example .env
+# Fill NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+# SUPABASE_SERVICE_ROLE_KEY (storage always uses Supabase). Create a private
+# `artifacts` bucket. Set AUTH_MODE=supabase when using Supabase Auth.
 
 pnpm db:generate
 pnpm db:push
@@ -61,7 +60,7 @@ pnpm dev                # http://localhost:3000
 - `apps/web` — Next.js App Router application with tRPC routers in `apps/web/server`
 - `packages/domain` — capabilities, stage/state machines, domain event contracts
 - `packages/db` — Prisma schema, client, and seed
-- `packages/auth` / `packages/storage` / `packages/realtime` — ports + Supabase/local adapters
+- `packages/auth` / `packages/storage` / `packages/realtime` — ports + adapters
 - `packages/config` — zod-validated environment
 - `packages/ui` — shared UI primitives
 - `packages/observability` — structured logging

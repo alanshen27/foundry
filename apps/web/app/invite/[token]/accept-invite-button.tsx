@@ -7,8 +7,12 @@ import { trpc } from "@/lib/trpc";
 export function AcceptInviteButton({ token }: { token: string }) {
   const router = useRouter();
   const accept = trpc.workspace.acceptInvitation.useMutation({
-    onSuccess: ({ workspaceSlug }) => {
-      router.push(`/w/${workspaceSlug}`);
+    onSuccess: ({ workspaceSlug, projectSlug }) => {
+      router.push(
+        projectSlug
+          ? `/w/${workspaceSlug}/projects/${projectSlug}/overview`
+          : `/w/${workspaceSlug}`,
+      );
       router.refresh();
     },
   });

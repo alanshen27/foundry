@@ -4,6 +4,8 @@ import type { UIMessage } from "ai";
 import { prisma } from "@foundry/db";
 import type { Stage } from "@foundry/domain";
 import { getCurrentUser } from "@/server/session";
+import { ensureDefaultChannel } from "@/server/chat";
+import { loadChannelHistory } from "@/server/chat-run/persist";
 import { ProjectShell } from "@/components/project-shell";
 
 export default async function ProjectShellLayout({
@@ -39,11 +41,20 @@ export default async function ProjectShellLayout({
     project.branches.find((b) => b.id === project.activeBranchId) ?? project.branches[0];
   if (!activeBranch) notFound();
 
-  const chatRows = await prisma.chatMessage.findMany({
-    where: { projectId: project.id, branchId: activeBranch.id },
-    orderBy: { createdAt: "asc" },
-    take: 200,
-  });
+  const defaultChannel = await ensureDefaultChannel(project.id, activeBranch.id);
+  const [categories, channels, chatRows] = await Promise.all([
+    prisma.chatChannelCategory.findMany({
+      where: { projectId: project.id, branchId: activeBranch.id },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, name: true, sortOrder: true },
+    }),
+    prisma.chatChannel.findMany({
+      where: { projectId: project.id, branchId: activeBranch.id },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, name: true, categoryId: true, sortOrder: true },
+    }),
+    loadChannelHistory(project.id, defaultChannel.id),
+  ]);
 
   const stageStatuses = Object.fromEntries(
     project.stageStates
@@ -63,7 +74,10 @@ export default async function ProjectShellLayout({
       branchId={activeBranch.id}
       branchName={activeBranch.name}
       stageStatuses={stageStatuses}
-      user={{ id: user.id, name: user.name }}
+      user={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
+      chatChannels={channels}
+      chatCategories={categories}
+      defaultChannelId={defaultChannel.id}
       initialChatMessages={chatRows.map(
         (row, i) =>
           ({

@@ -7,6 +7,8 @@ export type PresenceMember = {
   userId: string;
   name: string;
   joinedAt: string;
+  /** Optional profile picture URL shown in presence avatars. */
+  avatarUrl?: string | null;
 };
 
 export type PresenceHandle = {

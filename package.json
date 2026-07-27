@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev",
+    "dev": "turbo run dev worker:chat --parallel --filter=@foundry/web",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

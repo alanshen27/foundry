@@ -26,7 +26,7 @@ function SignInForm() {
       body: JSON.stringify({ email, password }),
     });
     if (response.ok) {
-      router.push(searchParams.get("next") ?? "/workspaces");
+      router.push(searchParams.get("next") ?? "/");
       router.refresh();
     } else {
       const body = (await response.json().catch(() => null)) as { error?: string } | null;

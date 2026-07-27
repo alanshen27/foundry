@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 
@@ -55,6 +56,31 @@ export function DesignPanel({
     },
     [canEdit, projectId, branchId, save],
   );
+
+  if (query.isLoading) {
+    return (
+      <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading design notes">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <Skeleton className="h-3.5 w-32" />
+            <Skeleton className="h-8 w-full" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Skeleton className="h-3.5 w-20" />
+            <Skeleton className="h-8 w-full" />
+          </div>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Skeleton className="h-3.5 w-36" />
+          <Skeleton className="h-8 w-full" />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Skeleton className="h-3.5 w-28" />
+          <Skeleton className="h-28 w-full" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4">

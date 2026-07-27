@@ -5,6 +5,7 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
@@ -69,6 +70,47 @@ export function LaunchStage({ projectId, branchId, canCreate, verifyApproved }: 
     a.download = `release-${release.version}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  if (list.isLoading) {
+    return (
+      <div className="flex flex-col gap-6" aria-busy="true" aria-label="Loading releases">
+        <Card>
+          <CardHeader className="gap-2">
+            <Skeleton className="h-5 w-32" />
+            <Skeleton className="h-4 w-full max-w-lg" />
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <div className="flex gap-2">
+              <Skeleton className="h-8 w-48" />
+              <Skeleton className="h-8 w-32" />
+            </div>
+            <Skeleton className="h-16 w-full" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="gap-2">
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="h-4 w-28" />
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            {Array.from({ length: 3 }, (_, i) => (
+              <div key={i} className="flex items-center justify-between gap-3 py-2">
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                  <Skeleton className="h-4 w-16" />
+                  <Skeleton className="h-4 w-40" />
+                </div>
+                <div className="flex gap-2">
+                  <Skeleton className="h-7 w-16" />
+                  <Skeleton className="h-7 w-28" />
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   return (

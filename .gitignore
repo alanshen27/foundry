@@ -19,6 +19,10 @@ test-results/
 
 # local adapters
 .local-storage/
+apps/web/public/cad/
+# Copied from @kittycad/kcl-wasm-lib on predev/prebuild (~14MB)
+apps/web/public/kcl_wasm_lib_bg.wasm
+.pnpm-store/
 
 # misc
 .DS_Store

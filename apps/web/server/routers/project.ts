@@ -13,11 +13,20 @@ export const projectRouter = router({
         workspaceId: z.string(),
         name: z.string().min(1).max(80),
         description: z.string().max(500).optional(),
+        folderId: z.string().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       // Any member with research.edit can start a project (MEMBER default).
       await requireWorkspaceCapability(ctx.user.id, input.workspaceId, "research.edit");
+
+      const folderId = input.folderId ?? null;
+      if (folderId) {
+        const folder = await prisma.projectFolder.findFirst({
+          where: { id: folderId, workspaceId: input.workspaceId },
+        });
+        if (!folder) throw new TRPCError({ code: "BAD_REQUEST", message: "Folder not found" });
+      }
 
       const base = slugify(input.name);
       let slug = base;
@@ -34,6 +43,7 @@ export const projectRouter = router({
       const project = await prisma.project.create({
         data: {
           workspaceId: input.workspaceId,
+          folderId,
           name: input.name,
           slug,
           description: input.description,
@@ -68,6 +78,37 @@ export const projectRouter = router({
         payload: { name: "main", isDefault: true },
       });
       return { ...project, slug };
+    }),
+
+  moveToFolder: protectedProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        folderId: z.string().nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const project = await prisma.project.findUnique({ where: { id: input.projectId } });
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      await requireWorkspaceCapability(ctx.user.id, project.workspaceId, "research.edit");
+      if (input.folderId) {
+        const folder = await prisma.projectFolder.findFirst({
+          where: { id: input.folderId, workspaceId: project.workspaceId },
+        });
+        if (!folder) throw new TRPCError({ code: "BAD_REQUEST", message: "Folder not found" });
+      }
+      const updated = await prisma.project.update({
+        where: { id: input.projectId },
+        data: { folderId: input.folderId },
+      });
+      await recordAudit({
+        type: "ProjectMovedToFolder",
+        workspaceId: project.workspaceId,
+        projectId: project.id,
+        actorId: ctx.user.id,
+        payload: { folderId: input.folderId },
+      });
+      return updated;
     }),
 
   createBranch: protectedProcedure

@@ -17,6 +17,9 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useTheme } from "@/components/theme-provider";
+import { monacoThemeFor } from "@/lib/theme";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
@@ -170,6 +173,8 @@ export function CodeWorkspace({
   branchId: string;
   canEdit: boolean;
 }) {
+  const { theme } = useTheme();
+  const monacoTheme = monacoThemeFor(theme.mode);
   const utils = trpc.useUtils();
   const reposQuery = trpc.engineer.listRepos.useQuery({ projectId, branchId });
   const repos = useMemo(() => reposQuery.data ?? [], [reposQuery.data]);
@@ -268,6 +273,26 @@ export function CodeWorkspace({
   const [newRepoUrl, setNewRepoUrl] = useState("");
   const [newRepoRole, setNewRepoRole] = useState("firmware");
 
+  if (reposQuery.isLoading) {
+    return (
+      <div className="flex h-full min-h-0 flex-col overflow-hidden" aria-busy="true" aria-label="Loading code workspace">
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+          <Skeleton className="size-3.5 rounded-sm" />
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="ml-auto h-7 w-24" />
+        </div>
+        <div className="flex min-h-0 flex-1">
+          <div className="flex w-56 shrink-0 flex-col gap-2 border-r p-3">
+            {Array.from({ length: 8 }, (_, i) => (
+              <Skeleton key={i} className="h-4 w-full" style={{ width: `${60 + (i % 3) * 15}%` }} />
+            ))}
+          </div>
+          <Skeleton className="min-w-0 flex-1 rounded-none" />
+        </div>
+      </div>
+    );
+  }
+
   if (repos.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
@@ -327,7 +352,7 @@ export function CodeWorkspace({
   const tree = buildTree(files);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* Workspace navbar: repo switcher + actions */}
       <div className="bg-card/60 flex h-10 shrink-0 items-center gap-2 border-b px-2">
         <GitBranch className="text-muted-foreground ml-1 size-3.5" />
@@ -471,9 +496,9 @@ export function CodeWorkspace({
           <div className="min-h-0 flex-1">
             {activeFileId && fileQuery.data ? (
               <MonacoEditor
-                key={activeFileId}
+                key={`${activeFileId}-${monacoTheme}`}
                 height="100%"
-                theme="vs-dark"
+                theme={monacoTheme}
                 language={languageFor(fileQuery.data.path)}
                 value={content}
                 onChange={onChange}

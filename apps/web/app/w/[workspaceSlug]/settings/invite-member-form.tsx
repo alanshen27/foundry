@@ -35,7 +35,7 @@ export function InviteMemberForm({
     <Card>
       <CardHeader>
         <CardTitle className="text-sm font-semibold tracking-wide uppercase">
-          Invite a collaborator
+          Invite to workspace
         </CardTitle>
       </CardHeader>
       <CardContent>

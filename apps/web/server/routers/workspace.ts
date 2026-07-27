@@ -49,6 +49,8 @@ export const workspaceRouter = router({
         workspaceId: z.string(),
         email: z.string().email(),
         role: z.enum(WORKSPACE_ROLES),
+        /** Optional: invite was sent from a project; membership stays workspace-scoped. */
+        projectId: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -63,6 +65,22 @@ export const workspaceRouter = router({
           message: `A ${actorRole} cannot invite a ${input.role}`,
         });
       }
+      if (input.role === "OWNER") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot invite as OWNER" });
+      }
+      let projectSlug: string | null = null;
+      if (input.projectId) {
+        const project = await prisma.project.findFirst({
+          where: { id: input.projectId, workspaceId: input.workspaceId },
+        });
+        if (!project) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Project not found in this workspace",
+          });
+        }
+        projectSlug = project.slug;
+      }
       const existingUser = await prisma.user.findUnique({ where: { email: input.email } });
       if (existingUser) {
         const existingMembership = await prisma.workspaceMembership.findUnique({
@@ -71,12 +89,13 @@ export const workspaceRouter = router({
           },
         });
         if (existingMembership) {
-          throw new TRPCError({ code: "CONFLICT", message: "Already a member" });
+          throw new TRPCError({ code: "CONFLICT", message: "Already a workspace member" });
         }
       }
       const invitation = await prisma.invitation.create({
         data: {
           workspaceId: input.workspaceId,
+          projectId: input.projectId,
           email: input.email,
           role: input.role,
           token: randomBytes(24).toString("base64url"),
@@ -87,10 +106,16 @@ export const workspaceRouter = router({
       await recordAudit({
         type: "WorkspaceMemberInvited",
         workspaceId: input.workspaceId,
+        projectId: input.projectId ?? null,
         actorId: ctx.user.id,
-        payload: { email: input.email, role: input.role, invitationId: invitation.id },
+        payload: {
+          email: input.email,
+          role: input.role,
+          invitationId: invitation.id,
+          projectId: input.projectId ?? null,
+        },
       });
-      return invitation;
+      return { ...invitation, projectSlug };
     }),
 
   acceptInvitation: protectedProcedure
@@ -98,7 +123,7 @@ export const workspaceRouter = router({
     .mutation(async ({ ctx, input }) => {
       const invitation = await prisma.invitation.findUnique({
         where: { token: input.token },
-        include: { workspace: true },
+        include: { workspace: true, project: true },
       });
       if (!invitation || invitation.status !== "PENDING") {
         throw new TRPCError({ code: "NOT_FOUND", message: "Invitation not found or already used" });
@@ -116,8 +141,8 @@ export const workspaceRouter = router({
           message: "This invitation was issued for a different email address",
         });
       }
-      await prisma.$transaction([
-        prisma.workspaceMembership.upsert({
+      const membership = await prisma.$transaction(async (tx) => {
+        const member = await tx.workspaceMembership.upsert({
           where: {
             workspaceId_userId: { workspaceId: invitation.workspaceId, userId: ctx.user.id },
           },
@@ -127,18 +152,48 @@ export const workspaceRouter = router({
             userId: ctx.user.id,
             role: invitation.role,
           },
-        }),
-        prisma.invitation.update({
+        });
+        // Guests invited from a project get an explicit project.read grant so
+        // access can later be narrowed without changing membership scope.
+        if (invitation.role === "GUEST" && invitation.projectId) {
+          await tx.capabilityGrant.upsert({
+            where: {
+              membershipId_capability_projectId: {
+                membershipId: member.id,
+                capability: "project.read",
+                projectId: invitation.projectId,
+              },
+            },
+            update: {},
+            create: {
+              membershipId: member.id,
+              capability: "project.read",
+              projectId: invitation.projectId,
+              grantedById: invitation.invitedById,
+            },
+          });
+        }
+        await tx.invitation.update({
           where: { id: invitation.id },
           data: { status: "ACCEPTED", acceptedAt: new Date() },
-        }),
-      ]);
+        });
+        return member;
+      });
       await recordAudit({
         type: "WorkspaceMemberAdded",
         workspaceId: invitation.workspaceId,
+        projectId: invitation.projectId,
         actorId: ctx.user.id,
-        payload: { role: invitation.role, invitationId: invitation.id },
+        payload: {
+          role: invitation.role,
+          invitationId: invitation.id,
+          membershipId: membership.id,
+          projectId: invitation.projectId,
+        },
       });
-      return { workspaceSlug: invitation.workspace.slug };
+      return {
+        workspaceSlug: invitation.workspace.slug,
+        projectSlug: invitation.project?.slug ?? null,
+      };
     }),
 });

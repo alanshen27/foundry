@@ -30,6 +30,15 @@ export function createSupabaseStorageAdapter(config: SupabaseStorageConfig): Obj
       };
     },
 
+    async get(key): Promise<{ body: Uint8Array; contentType: string } | null> {
+      const { data, error } = await bucket().download(key);
+      if (error || !data) return null;
+      return {
+        body: new Uint8Array(await data.arrayBuffer()),
+        contentType: data.type || "application/octet-stream",
+      };
+    },
+
     async getSignedUrl(key, expiresInSeconds = 3600): Promise<string> {
       const { data, error } = await bucket().createSignedUrl(key, expiresInSeconds);
       if (error || !data) {
