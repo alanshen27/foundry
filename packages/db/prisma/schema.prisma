@@ -153,6 +153,10 @@ model Project {
   activeBranchId String?
   createdById    String
   createdAt      DateTime      @default(now())
+  /// Storage key for the cached 3D preview shown on workspace cards.
+  thumbnailKey       String?
+  /// Compared against the MODEL3D doc's updatedAt to detect a stale preview.
+  thumbnailUpdatedAt DateTime?
 
   workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   folder           ProjectFolder?    @relation(fields: [folderId], references: [id], onDelete: SetNull)

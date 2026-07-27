@@ -30,7 +30,22 @@ async function getBrowser(): Promise<Browser> {
 
 export async function screenshotRenderPage(
   url: string,
-  { width, height }: { width: number; height: number },
+  {
+    width,
+    height,
+    readyTimeout = 15_000,
+    requireReady = false,
+  }: {
+    width: number;
+    height: number;
+    /**
+     * How long to wait for the page to report a painted canvas. A cold Zoo
+     * connection plus KCL execution can take well over the default.
+     */
+    readyTimeout?: number;
+    /** Fail instead of capturing a half-drawn viewport. */
+    requireReady?: boolean;
+  },
 ): Promise<Buffer> {
   const browser = await getBrowser();
   const page = await browser.newPage({
@@ -40,9 +55,13 @@ export async function screenshotRenderPage(
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
     // Render pages set data-render-ready once canvases have painted.
-    await page
-      .waitForSelector("body[data-render-ready='1']", { timeout: 15_000 })
-      .catch(() => undefined);
+    const ready = await page
+      .waitForSelector("body[data-render-ready='1']", { timeout: readyTimeout })
+      .then(() => true)
+      .catch(() => false);
+    if (!ready && requireReady) {
+      throw new Error(`Viewport did not finish drawing within ${readyTimeout}ms`);
+    }
     await page.addStyleTag({ content: HIDE_DEV_OVERLAY_CSS }).catch(() => undefined);
     return await page.screenshot({ type: "png" });
   } finally {

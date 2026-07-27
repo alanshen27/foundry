@@ -15,6 +15,7 @@ export const DOMAIN_EVENT_TYPES = [
   "ProjectFolderRecolored",
   "ProjectFolderDeleted",
   "ProjectMovedToFolder",
+  "ProjectThumbnailRendered",
   "ProjectBranchCreated",
   "StageOpened",
   "StageStatusChanged",

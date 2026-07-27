@@ -10,6 +10,7 @@ import {
 } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { buildProjectTools, withToolLogging } from "@/server/ai/tools";
+import { appOrigin } from "@/server/app-origin";
 import { COPILOT_SYSTEM_PROMPT } from "./prompt";
 import { saveNewMessages } from "./persist";
 import {
@@ -23,11 +24,6 @@ import {
   stripOrphanToolCalls,
   stripProviderExecutedToolParts,
 } from "./sanitize-messages";
-
-function appOrigin(): string {
-  const env = getServerEnv();
-  return env.APP_ORIGIN ?? "http://localhost:3000";
-}
 
 function isMissingToolResultsError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;

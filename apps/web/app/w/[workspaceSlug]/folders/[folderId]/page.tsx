@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { prisma } from "@foundry/db";
 import { HomeShell } from "@/components/home-shell";
 import { WorkspaceFolderBrowser } from "@/components/workspace-folder-browser";
+import { projectPreview } from "@/lib/project-preview";
 import { getCurrentUser } from "@/server/session";
 
 export default async function WorkspaceFolderPage({
@@ -19,7 +20,13 @@ export default async function WorkspaceFolderPage({
       include: {
         projects: {
           where: { status: "ACTIVE" },
-          include: { stageStates: true },
+          include: {
+            stageStates: true,
+            designDocs: {
+              where: { kind: "MODEL3D" },
+              select: { branchId: true, updatedAt: true },
+            },
+          },
           orderBy: { createdAt: "asc" },
         },
         folders: {
@@ -80,6 +87,7 @@ export default async function WorkspaceFolderPage({
           description: p.description,
           folderId: p.folderId,
           stageStates: p.stageStates.map((s) => ({ stage: s.stage, status: s.status })),
+          ...projectPreview(p),
         }))}
       />
     </HomeShell>

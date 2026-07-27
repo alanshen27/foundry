@@ -16,6 +16,7 @@ export function ModelRenderView({
   engineBaseUrl,
   projectFiles,
   entryPath,
+  tight,
 }: {
   script: string;
   view: CadView;
@@ -24,6 +25,8 @@ export function ModelRenderView({
   /** Multi-file KCL project — required for assemblies that import parts. */
   projectFiles?: Record<string, string>;
   entryPath?: string;
+  /** Card thumbnail: fill the frame and drop the grid/axes. */
+  tight?: boolean;
 }) {
   return (
     <Inner
@@ -33,6 +36,7 @@ export function ModelRenderView({
       engineBaseUrl={engineBaseUrl}
       projectFiles={projectFiles}
       entryPath={entryPath}
+      tight={tight}
     />
   );
 }

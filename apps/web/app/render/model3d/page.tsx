@@ -18,9 +18,9 @@ import type { CadView } from "@/components/engineer/cad-viewport";
 export default async function ModelRenderPage({
   searchParams,
 }: {
-  searchParams: Promise<{ token?: string; view?: string }>;
+  searchParams: Promise<{ token?: string; view?: string; tight?: string }>;
 }) {
-  const { token, view } = await searchParams;
+  const { token, view, tight } = await searchParams;
   const claims = token ? verifyRenderToken(token) : null;
   if (!claims || claims.kind !== "model3d") notFound();
 
@@ -62,6 +62,7 @@ export default async function ModelRenderPage({
         engineBaseUrl="https://api.zoo.dev"
         projectFiles={project?.files}
         entryPath={project?.entryPath}
+        tight={tight === "1"}
       />
     </div>
   );

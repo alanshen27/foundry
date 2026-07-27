@@ -71,9 +71,12 @@ const STANDARD_VIEWS: { id: StandardView; label: string; title: string }[] = [
   { id: "bottom", label: "B", title: "Bottom (−Z)" },
 ];
 
-function cameraCmd(view: CadView): zoo.ModelingCmd {
+/** Margin left around the model when fitting the camera. */
+const FIT_PADDING = 0.18;
+
+function cameraCmd(view: CadView, padding = FIT_PADDING): zoo.ModelingCmd {
   if (view === "iso" || view === "orbit") {
-    return { type: "view_isometric", padding: 0.18 };
+    return { type: "view_isometric", padding };
   }
   const center = { x: 0, y: 0, z: 0 };
   const dist = 220;
@@ -314,6 +317,8 @@ export function CadViewport({
   foreignImportOnly = false,
   projectFiles,
   entryPath,
+  fitPadding = FIT_PADDING,
+  scenery = true,
   onReady,
   onError,
 }: {
@@ -322,6 +327,10 @@ export function CadViewport({
   view?: CadView;
   /** Editor chrome (toolbar / view cube). Off for headless screenshots. */
   chrome?: boolean;
+  /** Margin around the model when framing. Tighten for thumbnails. */
+  fitPadding?: number;
+  /** Ground grid and axes gizmo. Off for a clean product shot. */
+  scenery?: boolean;
   /** Foreign mesh files to load via Zoo `import_files` (browser can't resolve KCL imports). */
   meshAssets?: CadMeshAsset[];
   /** Skip KCL submit and only import meshes (import-only stub scripts). */
@@ -382,21 +391,21 @@ export function CadViewport({
   const applyView = useCallback(
     async (next: CadView) => {
       if (next !== "orbit") setActiveView(next);
-      await runCmd(cameraCmd(next));
-      await runCmd({ type: "zoom_to_fit", padding: 0.18 });
+      await runCmd(cameraCmd(next, fitPadding));
+      await runCmd({ type: "zoom_to_fit", padding: fitPadding });
     },
-    [runCmd],
+    [runCmd, fitPadding],
   );
 
   const fit = useCallback(async () => {
-    await runCmd({ type: "zoom_to_fit", padding: 0.18 });
-  }, [runCmd]);
+    await runCmd({ type: "zoom_to_fit", padding: fitPadding });
+  }, [runCmd, fitPadding]);
 
   const home = useCallback(async () => {
     setActiveView("iso");
-    await runCmd({ type: "view_isometric", padding: 0.18 });
-    await runCmd({ type: "zoom_to_fit", padding: 0.18 });
-  }, [runCmd]);
+    await runCmd({ type: "view_isometric", padding: fitPadding });
+    await runCmd({ type: "zoom_to_fit", padding: fitPadding });
+  }, [runCmd, fitPadding]);
 
   const setNav = useCallback(
     async (tool: NavTool) => {
@@ -516,7 +525,7 @@ export function CadViewport({
       fps: 30,
       unlocked_framerate: true,
       post_effect: "ssao",
-      show_grid: true,
+      show_grid: scenery,
       order_independent_transparency: true,
       webrtc: true,
     });
@@ -614,7 +623,7 @@ export function CadViewport({
       rtc?.deconstructor();
       host.replaceChildren();
     };
-  }, [engine.token, engine.baseUrl, chrome]);
+  }, [engine.token, engine.baseUrl, chrome, scenery]);
 
   // Re-execute KCL on the live session (params / autosave must not reconnect).
   useEffect(() => {
@@ -708,7 +717,9 @@ export function CadViewport({
 
       try {
         if (!framedOnceRef.current) {
-          await sendCmd(rtc, { type: "make_axes_gizmo", clobber: true, gizmo_mode: true });
+          if (scenery) {
+            await sendCmd(rtc, { type: "make_axes_gizmo", clobber: true, gizmo_mode: true });
+          }
           await sendCmd(rtc, { type: "edge_lines_visible", hidden: false });
           // Camera drags are tool-independent, so the scene tool only needs to
           // decide whether clicks pick entities.
@@ -716,11 +727,11 @@ export function CadViewport({
             type: "set_tool",
             tool: navToolRef.current === "orbit" ? "camera_revolve" : "select",
           });
-          await sendCmd(rtc, cameraCmd(startView));
-          await sendCmd(rtc, { type: "zoom_to_fit", padding: 0.18 });
+          await sendCmd(rtc, cameraCmd(startView, fitPadding));
+          await sendCmd(rtc, { type: "zoom_to_fit", padding: fitPadding });
           await new Promise((r) => setTimeout(r, 200));
           if (!cancelled && gen === execGenRef.current && rtcRef.current) {
-            await sendCmd(rtc, { type: "zoom_to_fit", padding: 0.18 });
+            await sendCmd(rtc, { type: "zoom_to_fit", padding: fitPadding });
           }
           framedOnceRef.current = true;
         }

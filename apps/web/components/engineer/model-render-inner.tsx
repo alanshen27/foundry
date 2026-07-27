@@ -15,6 +15,7 @@ export function ModelRenderInner({
   engineBaseUrl,
   projectFiles,
   entryPath,
+  tight,
 }: {
   script: string;
   view: CadView;
@@ -22,6 +23,7 @@ export function ModelRenderInner({
   engineBaseUrl?: string;
   projectFiles?: Record<string, string>;
   entryPath?: string;
+  tight?: boolean;
 }) {
   const [error, setError] = useState<string | null>(null);
   const onReady = useCallback(() => markReady(), []);
@@ -54,6 +56,8 @@ export function ModelRenderInner({
         chrome={false}
         projectFiles={projectFiles}
         entryPath={entryPath}
+        fitPadding={tight ? 0.01 : undefined}
+        scenery={!tight}
         onReady={onReady}
         onError={onError}
       />
@@ -62,9 +66,11 @@ export function ModelRenderInner({
           CAD error: {error}
         </div>
       ) : null}
-      <span className="text-muted-foreground absolute bottom-2 left-3 z-10 text-xs uppercase">
-        {view}
-      </span>
+      {tight ? null : (
+        <span className="text-muted-foreground absolute bottom-2 left-3 z-10 text-xs uppercase">
+          {view}
+        </span>
+      )}
     </div>
   );
 }
