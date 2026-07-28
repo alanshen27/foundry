@@ -20,12 +20,12 @@ import {
   Send,
   ShoppingBag,
   Smartphone,
-  Sparkles,
   Tablet,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { FoundryMarkIcon } from "@/components/foundry-mark";
 import { CommercePanel } from "@/components/sites/commerce-panel";
 import { SiteCodeWorkspace } from "@/components/sites/site-code-workspace";
 import { trpc } from "@/lib/trpc";
@@ -101,6 +101,14 @@ export function SiteEditorWorkspace({
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [stream, setStream] = useState<StreamState | null>(null);
+  /** Shown immediately on send so status never races ahead of the user bubble. */
+  const [optimisticUser, setOptimisticUser] = useState<{
+    id: string;
+    content: string;
+    createdAt: string;
+  } | null>(null);
+  /** Last known-good preview — don't swap iframe src mid-generation (avoids flash → 404). */
+  const [stablePreviewUrl, setStablePreviewUrl] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const streamClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -113,11 +121,15 @@ export function SiteEditorWorkspace({
 
   const revise = trpc.site.revise.useMutation({
     onSuccess: async () => {
-      setPrompt("");
       setError(null);
       await refresh();
+      setOptimisticUser(null);
     },
-    onError: (nextError) => setError(nextError.message),
+    onError: (nextError) => {
+      setOptimisticUser(null);
+      setStream(null);
+      setError(nextError.message);
+    },
   });
 
   const publish = trpc.site.publish.useMutation({
@@ -131,7 +143,7 @@ export function SiteEditorWorkspace({
   useEffect(() => {
     const element = scrollRef.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [workspace.data?.messages, revise.isPending]);
+  }, [workspace.data?.messages, optimisticUser, revise.isPending, stream]);
 
   useEffect(() => {
     const broadcast = createSiteBroadcastPort();
@@ -142,7 +154,10 @@ export function SiteEditorWorkspace({
       if (streamClearTimer.current) clearTimeout(streamClearTimer.current);
       setStream(next);
 
-      if (next.status === "generated") void refresh();
+      // Only refresh conversation while generating — hold preview URL until completed.
+      if (next.status === "generated") {
+        void utils.site.workspace.invalidate({ id: siteId });
+      }
 
       if (next.status === "completed" || next.status === "published" || next.status === "failed") {
         void refresh();
@@ -153,16 +168,22 @@ export function SiteEditorWorkspace({
       subscription.leave();
       if (streamClearTimer.current) clearTimeout(streamClearTimer.current);
     };
-  }, [refresh, siteId]);
+  }, [refresh, siteId, utils.site.workspace]);
 
   const currentSite = site.data;
   const currentWorkspace = workspace.data;
-  const previewUrl = currentSite?.previewUrl ?? currentWorkspace?.revision.previewUrl;
+  const livePreviewUrl = currentSite?.previewUrl ?? currentWorkspace?.revision.previewUrl ?? null;
   const streamBusy =
     stream?.status === "started" ||
     stream?.status === "generated" ||
     stream?.status === "publishing";
-  const busy = revise.isPending || publish.isPending || streamBusy;
+  const busy = revise.isPending || publish.isPending || streamBusy || Boolean(optimisticUser);
+
+  // Commit a new preview URL only when idle — never mid-revise.
+  useEffect(() => {
+    if (busy) return;
+    setStablePreviewUrl(livePreviewUrl);
+  }, [busy, livePreviewUrl]);
 
   useEffect(() => {
     if (!streamBusy && !revise.isPending) return;
@@ -174,6 +195,45 @@ export function SiteEditorWorkspace({
     return () => clearInterval(interval);
   }, [revise.isPending, siteId, streamBusy, utils]);
 
+  function sendPrompt(raw: string) {
+    const text = raw.trim();
+    if (!text || busy || !canEdit) return;
+    setOptimisticUser({
+      id: `local-${Date.now()}`,
+      content: text,
+      createdAt: new Date().toISOString(),
+    });
+    setPrompt("");
+    setError(null);
+    setStream({ status: "started", prompt: text });
+    setStablePreviewUrl(livePreviewUrl);
+    revise.mutate({ id: siteId, prompt: text });
+  }
+
+  const serverMessages = (currentWorkspace?.messages ?? []).filter(
+    (message) => message.content.trim().length > 0,
+  );
+  const optimisticAlreadySynced =
+    optimisticUser != null &&
+    serverMessages.some(
+      (message) =>
+        message.role === "user" && message.content.trim() === optimisticUser.content.trim(),
+    );
+  const messages =
+    optimisticUser && !optimisticAlreadySynced
+      ? [
+          ...serverMessages,
+          {
+            id: optimisticUser.id,
+            role: "user" as const,
+            content: optimisticUser.content,
+            createdAt: optimisticUser.createdAt,
+          },
+        ]
+      : serverMessages;
+
+  const displayPreviewUrl = busy ? stablePreviewUrl : livePreviewUrl;
+
   const views: { id: EditorView; label: string; icon: typeof Globe }[] = [
     { id: "preview", label: "Preview", icon: Globe },
     { id: "code", label: "Code", icon: Code2 },
@@ -181,8 +241,8 @@ export function SiteEditorWorkspace({
   ];
 
   return (
-    <div className="bg-background flex h-screen min-h-0 flex-col overflow-hidden">
-      <header className="bg-card/80 flex h-12 shrink-0 items-center gap-2 border-b px-3 backdrop-blur">
+    <div className="bg-background flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+      <header className="bg-card flex h-12 shrink-0 items-center gap-2 border-b px-3">
         <Button
           variant="ghost"
           size="icon-sm"
@@ -193,25 +253,32 @@ export function SiteEditorWorkspace({
         </Button>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="truncate text-sm font-semibold">{siteName}</h1>
-            <Badge variant={currentSite?.status === "PUBLISHED" ? "default" : "secondary"}>
+            <h1 className="truncate font-mono text-sm font-medium tracking-[-0.02em]">{siteName}</h1>
+            <Badge
+              variant={currentSite?.status === "PUBLISHED" ? "default" : "secondary"}
+              className="rounded-none"
+            >
               {currentSite?.status === "PUBLISHED" ? "Live" : "Draft"}
             </Badge>
-            {currentSite?.simulated ? <Badge variant="destructive">SIMULATED</Badge> : null}
+            {currentSite?.simulated ? (
+              <Badge variant="destructive" className="rounded-none">
+                SIMULATED
+              </Badge>
+            ) : null}
           </div>
-          <p className="text-muted-foreground truncate text-[10px]">/{siteSlug}</p>
+          <p className="text-muted-foreground truncate font-mono text-[10px]">/{siteSlug}</p>
         </div>
 
-        <nav className="bg-muted/60 ml-4 hidden items-center rounded-lg p-0.5 sm:flex">
+        <nav className="bg-muted ml-4 hidden items-center border p-0.5 sm:flex">
           {views.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => setView(item.id)}
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition",
+                "flex items-center gap-1.5 px-2.5 py-1.5 text-xs transition",
                 view === item.id
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "bg-background text-foreground"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
@@ -226,6 +293,7 @@ export function SiteEditorWorkspace({
             <Button
               variant="ghost"
               size="sm"
+              className="rounded-none"
               render={<a href={currentSite.builderUrl} target="_blank" rel="noreferrer" />}
             >
               <ExternalLink />
@@ -245,6 +313,7 @@ export function SiteEditorWorkspace({
           {canPublish && !currentSite?.simulated ? (
             <Button
               size="sm"
+              className="rounded-none"
               disabled={busy || !currentSite?.builderVersionId}
               onClick={() => publish.mutate({ id: siteId })}
             >
@@ -256,13 +325,10 @@ export function SiteEditorWorkspace({
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="bg-card/40 flex w-[340px] shrink-0 flex-col border-r">
-          <div className="flex h-11 shrink-0 items-center gap-2 border-b px-4">
-            <Sparkles className="text-primary size-4" />
-            <div>
-              <p className="text-xs font-semibold">Foundry Site Agent</p>
-              <p className="text-muted-foreground text-[10px]">Persistent v0 conversation</p>
-            </div>
+        <aside className="bg-card flex w-[340px] shrink-0 flex-col border-r">
+          <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+            <FoundryMarkIcon className="size-4" />
+            <p className="font-mono text-xs font-medium tracking-[0.04em]">Foundry Site Agent</p>
           </div>
 
           <div ref={scrollRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-4">
@@ -271,13 +337,13 @@ export function SiteEditorWorkspace({
                 <Loader2 className="size-3.5 animate-spin" />
                 Loading conversation…
               </div>
-            ) : currentWorkspace?.messages.length ? (
-              currentWorkspace.messages.map((message) => (
+            ) : messages.length ? (
+              messages.map((message) => (
                 <article key={message.id} className="space-y-1.5">
                   <div className="flex items-center gap-2">
                     <span
                       className={cn(
-                        "flex size-6 items-center justify-center rounded-full text-[10px] font-semibold",
+                        "flex size-6 items-center justify-center text-[10px] font-semibold",
                         message.role === "assistant"
                           ? "bg-primary/15 text-primary"
                           : "bg-muted text-foreground",
@@ -307,7 +373,7 @@ export function SiteEditorWorkspace({
             ) : (
               <p className="text-muted-foreground text-xs">No messages yet.</p>
             )}
-            {streamBusy || revise.isPending ? (
+            {streamBusy || revise.isPending || optimisticUser ? (
               <div className="flex items-center gap-2 pl-8">
                 <Loader2 className="text-primary size-3.5 animate-spin" />
                 <span className="text-muted-foreground text-xs">
@@ -330,15 +396,15 @@ export function SiteEditorWorkspace({
             className="shrink-0 border-t p-3"
             onSubmit={(event) => {
               event.preventDefault();
-              if (prompt.trim()) revise.mutate({ id: siteId, prompt });
+              sendPrompt(prompt);
             }}
           >
             {error ? (
-              <p className="text-destructive mb-2 rounded-lg border border-current/20 px-2 py-1.5 text-[10px]">
+              <p className="text-destructive mb-2 border border-current/20 px-2 py-1.5 font-mono text-[10px]">
                 {error}
               </p>
             ) : null}
-            <div className="bg-background focus-within:border-ring focus-within:ring-ring/40 rounded-xl border p-2 focus-within:ring-2">
+            <div className="bg-background focus-within:border-primary border p-2 transition-colors">
               <Textarea
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
@@ -346,21 +412,22 @@ export function SiteEditorWorkspace({
                 rows={3}
                 maxLength={2000}
                 disabled={!canEdit || busy}
-                className="min-h-16 resize-none border-0 bg-transparent p-1 shadow-none focus-visible:ring-0"
+                className="min-h-16 resize-none rounded-none border-0 bg-transparent p-1 shadow-none focus-visible:ring-0"
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey && prompt.trim() && !busy) {
+                  if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
-                    revise.mutate({ id: siteId, prompt });
+                    sendPrompt(prompt);
                   }
                 }}
               />
               <div className="mt-1 flex items-center justify-between">
-                <span className="text-muted-foreground px-1 text-[9px]">
+                <span className="text-muted-foreground px-1 font-mono text-[9px]">
                   Enter to send · Shift+Enter for newline
                 </span>
                 <Button
                   type="submit"
                   size="icon-sm"
+                  className="rounded-none"
                   disabled={!canEdit || busy || !prompt.trim()}
                   aria-label="Send site revision"
                 >
@@ -375,7 +442,7 @@ export function SiteEditorWorkspace({
           </form>
         </aside>
 
-        <section className="flex min-w-0 flex-1 flex-col">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex h-10 shrink-0 items-center border-b px-3 sm:hidden">
             {views.map((item) => (
               <button
@@ -395,8 +462,8 @@ export function SiteEditorWorkspace({
 
           {view === "preview" ? (
             <>
-              <div className="bg-card/50 flex h-10 shrink-0 items-center border-b px-3">
-                <div className="bg-muted/60 mx-auto flex items-center rounded-md p-0.5">
+              <div className="bg-card flex h-10 shrink-0 items-center justify-center border-b px-3">
+                <div className="bg-muted flex items-center border p-0.5">
                   {(
                     [
                       ["desktop", Monitor],
@@ -409,9 +476,9 @@ export function SiteEditorWorkspace({
                       type="button"
                       onClick={() => setPreviewSize(size)}
                       className={cn(
-                        "rounded p-1.5",
+                        "p-1.5",
                         previewSize === size
-                          ? "bg-background text-foreground shadow-sm"
+                          ? "bg-background text-foreground"
                           : "text-muted-foreground",
                       )}
                       aria-label={`${size} preview`}
@@ -421,21 +488,52 @@ export function SiteEditorWorkspace({
                   ))}
                 </div>
               </div>
-              <div className="bg-muted/30 min-h-0 flex-1 overflow-auto p-4">
+              <div
+                className={cn(
+                  "min-h-0 flex-1",
+                  previewSize === "desktop" ? "overflow-hidden" : "overflow-auto bg-muted/40",
+                )}
+              >
                 <div
-                  className="bg-background mx-auto h-full min-h-[520px] overflow-hidden rounded-xl border shadow-sm transition-[width]"
-                  style={{ width: PREVIEW_WIDTH[previewSize], maxWidth: "100%" }}
+                  className={cn(
+                    "bg-background relative h-full overflow-hidden transition-[width]",
+                    previewSize === "desktop"
+                      ? "w-full"
+                      : "border-border mx-auto min-h-full border-x",
+                  )}
+                  style={
+                    previewSize === "desktop"
+                      ? undefined
+                      : { width: PREVIEW_WIDTH[previewSize], maxWidth: "100%" }
+                  }
                 >
-                  {previewUrl ? (
-                    <iframe
-                      key={previewUrl}
-                      src={previewUrl}
-                      title={`${siteName} preview`}
-                      className="h-full w-full border-0"
-                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                    />
+                  {displayPreviewUrl ? (
+                    <>
+                      <iframe
+                        key={displayPreviewUrl}
+                        src={displayPreviewUrl}
+                        title={`${siteName} preview`}
+                        className="block h-full w-full border-0"
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                      />
+                      {busy && (revise.isPending || streamBusy) ? (
+                        <div className="bg-background/70 absolute inset-0 flex flex-col items-center justify-center gap-2">
+                          <Loader2 className="text-primary size-5 animate-spin" />
+                          <p className="text-muted-foreground font-mono text-[11px] tracking-[0.12em] uppercase">
+                            Updating preview…
+                          </p>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : busy && (revise.isPending || streamBusy) ? (
+                    <div className="text-muted-foreground flex h-full min-h-0 flex-col items-center justify-center gap-3 text-center">
+                      <Loader2 className="text-primary size-5 animate-spin" />
+                      <p className="font-mono text-[11px] tracking-[0.12em] uppercase">
+                        Building preview…
+                      </p>
+                    </div>
                   ) : (
-                    <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 text-center">
+                    <div className="text-muted-foreground flex h-full min-h-0 flex-col items-center justify-center gap-3 text-center">
                       <PanelRight className="size-6" />
                       <div>
                         <p className="text-foreground text-sm font-medium">No preview available</p>

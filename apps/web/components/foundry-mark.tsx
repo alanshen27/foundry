@@ -14,17 +14,17 @@ export function FoundryMark({
   const box = size === "sm" ? "size-5" : "size-6";
   return (
     <span className={cn("inline-flex items-center gap-2", className)}>
-      <FoundyrMarkIcon className={box} />
+      <FoundryMarkIcon className={box} />
       {showWord ? (
         <span className="text-foreground font-mono text-[13px] font-medium tracking-[0.08em] uppercase">
-          Foundyr
+          Foundry
         </span>
       ) : null}
     </span>
   );
 }
 
-export function FoundyrMarkIcon({ className }: { className?: string }) {
+export function FoundryMarkIcon({ className }: { className?: string }) {
   return (
     <Image
       src="/logo.png"

@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InteractiveDotField } from "@/components/interactive-dot-field";
 import { useCopilot } from "@/components/copilot/copilot-provider";
 
 /**
- * The "describe it" box: one prompt bootstraps the whole pipeline via the
- * copilot (brief -> requirements -> BOM -> circuit -> model -> checks).
+ * Lovable-style creation box: one big prompt bootstraps the pipeline
+ * (brief → requirements → BOM → circuit → model → checks).
  */
 export function PipelineKickoff({ hasBrief }: { hasBrief: boolean }) {
   const { send, status } = useCopilot();
@@ -27,38 +28,65 @@ export function PipelineKickoff({ hasBrief }: { hasBrief: boolean }) {
 
   return (
     <div className="border-border bg-card relative overflow-hidden border">
+      <div className="pointer-events-none absolute inset-0 opacity-35">
+        <InteractiveDotField gap={16} radius={52} className="absolute inset-0" />
+      </div>
       <div className="bg-primary absolute top-0 bottom-0 left-0 w-1" aria-hidden />
-      <div className="px-5 py-4 pl-6">
-        <p className="text-muted-foreground font-mono text-[11px] tracking-[0.14em] uppercase">
-          Copilot
+
+      <div className="relative z-10 mx-auto max-w-3xl px-6 py-10 sm:py-12">
+        <p className="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
+          {hasBrief ? "Copilot" : "Create"}
         </p>
-        <h2 className="mt-1 font-mono text-[15px] font-medium tracking-[-0.02em]">
-          {hasBrief ? "Ask the copilot to change anything" : "Describe your product"}
+        <h2 className="mt-2 font-mono text-[clamp(1.35rem,3vw,1.85rem)] leading-[1.1] font-medium tracking-[-0.03em]">
+          {hasBrief ? "Ask the copilot to change anything" : "Build something Foundry"}
         </h2>
-        <form onSubmit={onSubmit} className="mt-4 flex flex-col gap-2.5 sm:flex-row">
-          <input
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder={
-              hasBrief
-                ? "e.g. Swap the MCU for an ESP32-C3 and update the checks"
-                : "e.g. A pocket-size air quality monitor with an e-ink display, under $60"
-            }
-            aria-label="Describe your product"
-            className="placeholder:text-muted-foreground bg-background focus-visible:border-primary h-9 flex-1 border px-3 font-mono text-[13px] outline-none"
-          />
-          <Button
-            type="submit"
-            disabled={!prompt.trim() || busy}
-            className="h-9 rounded-none px-4 font-mono text-[12px] tracking-[0.08em] uppercase"
-          >
-            {busy ? "Working…" : hasBrief ? "Send" : "Build"}
-            <ArrowRight className="size-3.5" />
-          </Button>
-        </form>
-        <p className="text-muted-foreground mt-3 font-mono text-[11px] leading-relaxed">
-          Brief · requirements · BOM · circuit · model · checks — then you review each stage.
+        <p className="text-muted-foreground mt-2 max-w-xl text-[14px] leading-relaxed">
+          {hasBrief
+            ? "One message updates brief, BOM, circuit, CAD, and checks."
+            : "Describe the product. AI fills the pipeline — then you review each stage."}
         </p>
+
+        <form onSubmit={onSubmit} className="mt-6">
+          <div className="border-border bg-background focus-within:border-primary border transition-colors">
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  onSubmit(e);
+                }
+              }}
+              placeholder={
+                hasBrief
+                  ? "e.g. Swap the MCU for an ESP32-C3 and update the checks"
+                  : "e.g. A pocket-size air quality monitor with an e-ink display, under $60"
+              }
+              aria-label={hasBrief ? "Ask the copilot" : "Describe your product"}
+              rows={hasBrief ? 2 : 3}
+              className="placeholder:text-muted-foreground min-h-[72px] w-full resize-none bg-transparent px-4 py-3.5 text-[15px] leading-relaxed outline-none"
+            />
+            <div className="border-border flex items-center justify-between gap-3 border-t px-3 py-2">
+              <span className="text-muted-foreground hidden font-mono text-[10px] tracking-[0.12em] uppercase sm:inline">
+                Brief · BOM · circuit · model · checks
+              </span>
+              <Button
+                type="submit"
+                disabled={!prompt.trim() || busy}
+                className="ml-auto h-9 rounded-none px-4 font-mono text-[12px] tracking-[0.1em] uppercase"
+              >
+                {busy ? (
+                  "Working…"
+                ) : (
+                  <>
+                    {hasBrief ? <ArrowRight className="size-3.5" /> : <Sparkles className="size-3.5" />}
+                    {hasBrief ? "Send" : "Build"}
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </form>
       </div>
     </div>
   );

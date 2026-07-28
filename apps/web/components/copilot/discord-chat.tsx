@@ -10,7 +10,7 @@ import {
 } from "react";
 import type { UIMessage } from "ai";
 import { AtSign, Hash, Loader2, Send, Sparkles, Square, XCircle } from "lucide-react";
-import { FoundyrMarkIcon } from "@/components/foundry-mark";
+import { FoundryMarkIcon } from "@/components/foundry-mark";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -47,7 +47,7 @@ function Avatar({ message, viewer }: { message: UIMessage; viewer: Viewer }) {
   if (message.role !== "user") {
     return (
       <div className="size-10 shrink-0 overflow-hidden rounded-full">
-        <FoundyrMarkIcon className="size-10" />
+        <FoundryMarkIcon className="size-10" />
       </div>
     );
   }

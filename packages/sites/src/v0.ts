@@ -151,12 +151,15 @@ export function createV0SiteBuilder(options: V0SiteBuilderOptions): SiteBuilderP
     return {
       chatId,
       revision: toRevision(chatId, chat),
-      messages: (chat.messages ?? []).map((message) => ({
-        id: message.id,
-        role: message.role,
-        content: message.content,
-        createdAt: message.createdAt ?? null,
-      })),
+      // v0 sometimes returns placeholder assistant rows with empty content mid-turn.
+      messages: (chat.messages ?? [])
+        .filter((message) => message.content.trim().length > 0)
+        .map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          createdAt: message.createdAt ?? null,
+        })),
       files: (chat.latestVersion?.files ?? []).map((file) => ({
         name: file.name,
         content: file.content,

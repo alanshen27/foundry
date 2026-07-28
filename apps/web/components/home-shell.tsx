@@ -151,11 +151,25 @@ export function HomeShell({
         </div>
       </nav>
 
-      <main className={cn("relative min-w-0 flex-1 overflow-y-auto p-8", contentClassName)}>
-        <div className="pointer-events-none sticky top-0 -mb-[100dvh] h-[100dvh] w-full">
-          <InteractiveDotField gap={16} radius={52} />
+      <main
+        className={cn(
+          "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-8",
+          contentClassName,
+        )}
+      >
+        {!contentClassName?.includes("p-0") ? (
+          <div className="pointer-events-none sticky top-0 -mb-[100dvh] h-[100dvh] w-full">
+            <InteractiveDotField gap={16} radius={52} />
+          </div>
+        ) : null}
+        <div
+          className={cn(
+            "relative z-10",
+            contentClassName?.includes("p-0") && "flex min-h-0 flex-1 flex-col",
+          )}
+        >
+          {children}
         </div>
-        <div className="relative z-10">{children}</div>
       </main>
     </div>
   );
