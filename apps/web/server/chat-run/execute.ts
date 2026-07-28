@@ -64,7 +64,7 @@ function isDuplicateProviderItemError(err: unknown): boolean {
 
 async function toModelMessages(
   uiMessages: UIMessage[],
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   tools: any,
 ): Promise<{ ui: UIMessage[]; model: ModelMessage[] }> {
   const sanitized = sanitizeUiMessagesForModel(uiMessages);
@@ -120,7 +120,7 @@ export async function executeChatRun(runId: string): Promise<void> {
   await publishRunStarted(runId, run.channelId);
 
   const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   const tools: any = withToolLogging(
     {
       ...buildProjectTools({

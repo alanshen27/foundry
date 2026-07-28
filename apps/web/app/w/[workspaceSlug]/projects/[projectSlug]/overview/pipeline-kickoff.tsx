@@ -41,7 +41,6 @@ export function PipelineKickoff({ hasBrief }: { hasBrief: boolean }) {
     if (!pending?.trim()) return;
     kickedOff.current = true;
     bootstrap(pending);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasBrief, busy]);
 
   function onSubmit(e: FormEvent) {

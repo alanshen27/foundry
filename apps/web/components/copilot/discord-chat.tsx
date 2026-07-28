@@ -46,7 +46,6 @@ function Avatar({ message, viewer }: { message: UIMessage; viewer: Viewer }) {
   }
   if (viewer.avatarUrl) {
     return (
-      // eslint-disable-next-line @next/next/no-img-element
       <img
         src={viewer.avatarUrl}
         alt={viewer.name}

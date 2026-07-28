@@ -300,13 +300,13 @@ function summarizeForLog(value: unknown, max = 240): string {
 }
 
 /** Log every tool start/finish/error so worker stalls are visible in the terminal. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export function withToolLogging<T extends Record<string, any>>(
   tools: T,
   meta?: { runId?: string },
 ): T {
   const prefix = meta?.runId ? `[tool run=${meta.runId}]` : "[tool]";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   const wrapped: Record<string, any> = {};
   for (const [name, tool] of Object.entries(tools)) {
     if (!tool || typeof tool.execute !== "function") {
