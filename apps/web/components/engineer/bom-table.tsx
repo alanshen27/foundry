@@ -50,7 +50,6 @@ function ComponentPreview({
   return (
     <div className="bg-muted/40 flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-none border">
       {showImage ? (
-        // eslint-disable-next-line @next/next/no-img-element -- remote distributor URLs; no next/image allowlist
         <img
           src={imageUrl!}
           alt=""
@@ -60,7 +59,6 @@ function ComponentPreview({
           onError={() => setImageFailed(true)}
         />
       ) : showFavicon ? (
-        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(sourceHost(sourceUrl!))}&sz=64`}
           alt=""

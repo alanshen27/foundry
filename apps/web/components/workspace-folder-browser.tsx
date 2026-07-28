@@ -63,7 +63,6 @@ function PreviewFace({ project, className }: { project: BrowserProject; classNam
   if (project.thumbnailUrl && !project.stale && !broken) {
     return (
       // Not next/image: these are authenticated proxy URLs, not optimizable assets.
-      // eslint-disable-next-line @next/next/no-img-element
       <img
         src={project.thumbnailUrl}
         alt=""
@@ -255,7 +254,6 @@ export function WorkspaceFolderBrowser({
         });
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [router],
   );
 
@@ -275,7 +273,6 @@ export function WorkspaceFolderBrowser({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsPreview]);
 
   /** "2 projects · 1 folder" — more useful on a card than the word "Folder". */

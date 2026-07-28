@@ -224,7 +224,6 @@ export function PcbPreview3d({ doc }: { doc: PcbDoc }) {
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
     };
     // theme/doc applied in sibling effects; mount is once.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

@@ -28,11 +28,11 @@ every service). Web-only vars (`NEXT_PUBLIC_COLLAB_URL`,
 
 ## Services
 
-| Service               | Role                                      |
-| --------------------- | ----------------------------------------- |
-| `foundry-web`         | Next.js App Router (`@foundry/web`)       |
-| `foundry-chat-worker` | BullMQ worker for AI chat runs            |
-| `foundry-collab`      | Hocuspocus Yjs WebSocket server           |
+| Service               | Role                                |
+| --------------------- | ----------------------------------- |
+| `foundry-web`         | Next.js App Router (`@foundry/web`) |
+| `foundry-chat-worker` | BullMQ worker for AI chat runs      |
+| `foundry-collab`      | Hocuspocus Yjs WebSocket server     |
 
 `APP_ORIGIN` is wired from `RENDER_EXTERNAL_URL` on `foundry-web`. Auth email
 redirects and screenshot tools both use it. `AUTH_SECRET` is generated once in

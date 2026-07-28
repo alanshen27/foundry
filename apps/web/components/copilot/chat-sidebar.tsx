@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import type { UIMessage } from "ai";
 import { usePathname } from "next/navigation";
+import { AnimatedSignalGlyph } from "@/components/animated-signal-glyph";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -612,7 +613,7 @@ export function ChatSidebar() {
         <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
           {messages.length === 0 ? (
             <div className="mt-6 flex flex-col items-center gap-4 text-center">
-              <div className="bg-primary relative flex size-12 items-center justify-center overflow-hidden">
+              <div className="bg-primary relative flex h-20 w-full items-center justify-center overflow-hidden">
                 <span
                   aria-hidden
                   className="pointer-events-none absolute inset-0 opacity-30"
@@ -621,6 +622,9 @@ export function ChatSidebar() {
                     backgroundSize: "3.5px 3.5px",
                   }}
                 />
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-70">
+                  <AnimatedSignalGlyph seed="copilot-idle" rows={9} cols={34} fontSize={7} />
+                </div>
                 <Sparkles className="relative z-10 size-5 text-[#faf9f5]" />
               </div>
               <div>
