@@ -116,7 +116,8 @@ function FieldGrid({
   return (
     <div className="grid grid-cols-2 gap-2">
       {tool.fields.map((field) => {
-        const wide = field.type === "select" || field.type === "boolean" || tool.fields.length === 1;
+        const wide =
+          field.type === "select" || field.type === "boolean" || tool.fields.length === 1;
         return (
           <label
             key={field.key}
@@ -174,7 +175,9 @@ function FieldGrid({
                 <span
                   className={cn(
                     "relative h-4 w-7 rounded-full transition-colors",
-                    Boolean(values[field.key] ?? field.default) ? "bg-primary" : "bg-muted-foreground/30",
+                    Boolean(values[field.key] ?? field.default)
+                      ? "bg-primary"
+                      : "bg-muted-foreground/30",
                   )}
                 >
                   <span
@@ -324,7 +327,9 @@ export function CadToolsPanel({
             </div>
             <div className="min-w-0 flex-1 pt-0.5">
               <div className="truncate text-sm font-medium leading-none">{active.label}</div>
-              <p className="text-muted-foreground mt-1 text-[11px] leading-snug">{active.description}</p>
+              <p className="text-muted-foreground mt-1 text-[11px] leading-snug">
+                {active.description}
+              </p>
             </div>
             <button
               type="button"
@@ -343,7 +348,9 @@ export function CadToolsPanel({
             {active.requiresSolid && lastSolid ? (
               <div className="bg-muted/50 text-muted-foreground flex items-center gap-2 rounded-none px-2.5 py-1.5 text-[11px]">
                 <span className="shrink-0">Target</span>
-                <span className="text-foreground ml-auto truncate font-mono text-[11px]">{lastSolid}</span>
+                <span className="text-foreground ml-auto truncate font-mono text-[11px]">
+                  {lastSolid}
+                </span>
               </div>
             ) : null}
 
@@ -353,9 +360,7 @@ export function CadToolsPanel({
               onChange={(key, value) => setValues((v) => ({ ...v, [key]: value }))}
             />
 
-            {error ? (
-              <p className="text-destructive text-[11px] leading-snug">{error}</p>
-            ) : null}
+            {error ? <p className="text-destructive text-[11px] leading-snug">{error}</p> : null}
           </div>
 
           <div className="border-border/70 bg-muted/30 flex items-center justify-between gap-2 border-t px-3 py-2.5">

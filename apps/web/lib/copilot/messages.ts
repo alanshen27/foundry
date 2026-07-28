@@ -1,11 +1,7 @@
 import { isToolUIPart, type ModelMessage, type UIMessage } from "ai";
 
 /** Terminal tool states that include a result the model can consume. */
-const COMPLETE_TOOL_STATES = new Set([
-  "output-available",
-  "output-error",
-  "output-denied",
-]);
+const COMPLETE_TOOL_STATES = new Set(["output-available", "output-error", "output-denied"]);
 
 function isToolPart(part: UIMessage["parts"][number]): boolean {
   return isToolUIPart(part) || part.type.startsWith("tool-");
@@ -205,10 +201,7 @@ export function isAssistantFailureText(text: string): boolean {
  * Keep the last assistant turn on failure and stamp a visible failure note
  * instead of deleting the empty "Working…" placeholder.
  */
-export function markFailedAssistantMessages(
-  messages: UIMessage[],
-  reason?: string,
-): UIMessage[] {
+export function markFailedAssistantMessages(messages: UIMessage[], reason?: string): UIMessage[] {
   let lastAssistantIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]!.role === "assistant") {

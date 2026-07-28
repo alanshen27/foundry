@@ -575,7 +575,9 @@ export function PcbCanvas({
     const set = query.data ? normalizePcbSet(query.data.data) : emptyPcbSet();
     setBoards(set.boards);
     setActiveBoardId((current) =>
-      set.boards.some((b) => b.id === current) ? current : (set.activeBoardId ?? set.boards[0]!.id!),
+      set.boards.some((b) => b.id === current)
+        ? current
+        : (set.activeBoardId ?? set.boards[0]!.id!),
     );
   }, [query.data]);
 
@@ -708,7 +710,9 @@ export function PcbCanvas({
 
   const patchBoardMeta = useCallback(
     (patch: Partial<Pick<PcbDoc, "name" | "groupId">>) => {
-      setBoards((bs) => bs.map((b) => (b.id === activeBoardIdRef.current ? { ...b, ...patch } : b)));
+      setBoards((bs) =>
+        bs.map((b) => (b.id === activeBoardIdRef.current ? { ...b, ...patch } : b)),
+      );
       scheduleSave();
     },
     [scheduleSave],
@@ -779,7 +783,13 @@ export function PcbCanvas({
     (points: PcbPoint[], layer: PcbLayer, net?: string) => {
       if (points.length < 2) return;
       pushHistory();
-      const track: PcbTrack = { id: pcbId("tr"), layer, widthMm: docRef.current.rules.trackWidthMm, net, points };
+      const track: PcbTrack = {
+        id: pcbId("tr"),
+        layer,
+        widthMm: docRef.current.rules.trackWidthMm,
+        net,
+        points,
+      };
       setDoc((d) => ({ ...d, tracks: [...d.tracks, track] }));
       scheduleSave();
     },
@@ -795,7 +805,14 @@ export function PcbCanvas({
         ...d,
         vias: [
           ...d.vias,
-          { id: pcbId("via"), xMm: at.xMm, yMm: at.yMm, diameterMm: viaDiameterMm, drillMm: viaDrillMm, net },
+          {
+            id: pcbId("via"),
+            xMm: at.xMm,
+            yMm: at.yMm,
+            diameterMm: viaDiameterMm,
+            drillMm: viaDrillMm,
+            net,
+          },
         ],
       }));
       scheduleSave();
@@ -931,7 +948,11 @@ export function PcbCanvas({
         const point = quantize(mm);
         // Clicking near the first vertex closes the outline.
         const first = zoneDraft?.[0];
-        if (first && zoneDraft!.length >= 3 && Math.hypot(first.xMm - point.xMm, first.yMm - point.yMm) < 1) {
+        if (
+          first &&
+          zoneDraft!.length >= 3 &&
+          Math.hypot(first.xMm - point.xMm, first.yMm - point.yMm) < 1
+        ) {
           finishZone();
           return;
         }
@@ -1440,7 +1461,8 @@ export function PcbCanvas({
                   ? ratsnest.airwires.map((wire, i) => {
                       const touchesSelection =
                         selectedId !== null &&
-                        (wire.from.footprintId === selectedId || wire.to.footprintId === selectedId);
+                        (wire.from.footprintId === selectedId ||
+                          wire.to.footprintId === selectedId);
                       return (
                         <line
                           key={`${wire.net}-${i}`}
@@ -1481,7 +1503,9 @@ export function PcbCanvas({
                       d={trackPath(track.points)}
                       fill="none"
                       stroke={
-                        track.id === selectedTrackId ? "var(--color-primary)" : COPPER_COLOR[track.layer]
+                        track.id === selectedTrackId
+                          ? "var(--color-primary)"
+                          : COPPER_COLOR[track.layer]
                       }
                       strokeWidth={highlighted ? track.widthMm * 1.4 : track.widthMm}
                       strokeLinecap="round"
@@ -1960,9 +1984,7 @@ export function PcbCanvas({
                   variant="outline"
                   size="xs"
                   disabled={!canEdit}
-                  onClick={() =>
-                    patchSelected({ rotationDeg: ((selected.rotationDeg + 90) % 360) })
-                  }
+                  onClick={() => patchSelected({ rotationDeg: (selected.rotationDeg + 90) % 360 })}
                 >
                   <RotateCw className="size-3" /> Rotate
                 </Button>
@@ -2008,8 +2030,8 @@ export function PcbCanvas({
           {doc.vias.length === 1 ? "" : "s"} · {doc.zones.length} pour
           {doc.zones.length === 1 ? "" : "s"}
           <br />
-          {ratsnest.routedCount}/{ratsnest.totalConnections} routed ·{" "}
-          {ratsnest.airwires.length} airwire
+          {ratsnest.routedCount}/{ratsnest.totalConnections} routed · {ratsnest.airwires.length}{" "}
+          airwire
           {ratsnest.airwires.length === 1 ? "" : "s"} left
           {issueCount > 0 ? (
             <>

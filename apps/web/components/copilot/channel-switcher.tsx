@@ -241,9 +241,7 @@ export function ChannelSwitcher() {
             <div className="border-t p-1">
               <button
                 type="button"
-                onClick={() =>
-                  openModal({ kind: "create-channel", categoryId: defaultCategoryId })
-                }
+                onClick={() => openModal({ kind: "create-channel", categoryId: defaultCategoryId })}
                 className="text-muted-foreground hover:bg-muted flex w-full items-center gap-2 rounded-none px-2 py-1.5 text-sm"
               >
                 <Plus className="size-3.5" /> New channel
@@ -324,9 +322,8 @@ export function ChannelSwitcher() {
                 </>
               ) : modal?.kind === "delete-channel" ? (
                 <>
-                  Delete{" "}
-                  <span className="text-foreground font-medium">#{modal.channelName}</span>? This
-                  removes the channel and its messages.
+                  Delete <span className="text-foreground font-medium">#{modal.channelName}</span>?
+                  This removes the channel and its messages.
                 </>
               ) : null}
             </DialogDescription>

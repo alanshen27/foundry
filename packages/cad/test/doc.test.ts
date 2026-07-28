@@ -112,7 +112,9 @@ describe("addCadComponent", () => {
       kind: "instructions",
       content: "# Pack\n",
     });
-    expect(doc.components.filter((c) => c.kind === "instructions").length).toBeGreaterThanOrEqual(2);
+    expect(doc.components.filter((c) => c.kind === "instructions").length).toBeGreaterThanOrEqual(
+      2,
+    );
   });
 });
 

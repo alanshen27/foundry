@@ -1,10 +1,4 @@
-import type {
-  CadAsset,
-  CadAssetFormat,
-  CadComponent,
-  CadComponentKind,
-  CadDoc,
-} from "./port";
+import type { CadAsset, CadAssetFormat, CadComponent, CadComponentKind, CadDoc } from "./port";
 
 export type { CadAsset, CadAssetFormat };
 
@@ -147,15 +141,7 @@ function withMirror(doc: Omit<CadDoc, "script">): CadDoc {
   return next;
 }
 
-const ASSET_FORMATS = new Set<CadAssetFormat>([
-  "stl",
-  "step",
-  "stp",
-  "obj",
-  "gltf",
-  "glb",
-  "ply",
-]);
+const ASSET_FORMATS = new Set<CadAssetFormat>(["stl", "step", "stp", "obj", "gltf", "glb", "ply"]);
 
 export function cadAssetFormatFromName(filename: string): CadAssetFormat | null {
   const ext = filename.trim().toLowerCase().split(".").pop();
@@ -175,9 +161,12 @@ export function importAssetPath(filename: string, format: CadAssetFormat): strin
  * KCL foreign-import stub for a mesh/B-Rep file.
  * Not parametric — labeled UNVERIFIED per product rules.
  */
-export function kclForForeignImport(asset: Pick<CadAsset, "path" | "name" | "format" | "lengthUnit">): string {
+export function kclForForeignImport(
+  asset: Pick<CadAsset, "path" | "name" | "format" | "lengthUnit">,
+): string {
   const file = asset.path.split("/").pop() ?? asset.path;
-  const alias = slugifyCadName(asset.name || file.replace(/\.[^.]+$/, "")).replace(/-/g, "_") || "mesh";
+  const alias =
+    slugifyCadName(asset.name || file.replace(/\.[^.]+$/, "")).replace(/-/g, "_") || "mesh";
   const needsUnit = asset.format === "stl" || asset.format === "obj" || asset.format === "ply";
   const unit = asset.lengthUnit ?? "mm";
   const attr = needsUnit ? `@(lengthUnit = ${unit})\n` : "";
@@ -189,11 +178,10 @@ ${alias}
 }
 
 /** Parse `import "path.ext" as alias` from a KCL script. */
-export function parseForeignImports(
-  kcl: string,
-): { path: string; alias: string }[] {
+export function parseForeignImports(kcl: string): { path: string; alias: string }[] {
   const out: { path: string; alias: string }[] = [];
-  const re = /^\s*import\s+["']([^"']+\.(?:stl|step|stp|obj|gltf|glb|ply))["']\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/gim;
+  const re =
+    /^\s*import\s+["']([^"']+\.(?:stl|step|stp|obj|gltf|glb|ply))["']\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/gim;
   let m: RegExpExecArray | null;
   while ((m = re.exec(kcl)) !== null) {
     out.push({ path: m[1]!, alias: m[2]! });
@@ -251,7 +239,10 @@ export function rewriteKclModuleImportPaths(
     .split("\n")
     .map((line) => {
       if (!/^\s*(export\s+)?import\s+/i.test(line)) return line;
-      return line.replace(/(["'])([^"']+\.kcl)\1/g, (_m, q: string, p: string) => `${q}${mapPath(p)}${q}`);
+      return line.replace(
+        /(["'])([^"']+\.kcl)\1/g,
+        (_m, q: string, p: string) => `${q}${mapPath(p)}${q}`,
+      );
     })
     .join("\n");
 }
@@ -263,8 +254,7 @@ function modulePathsEqual(a: string, b: string): boolean {
 /** KCL module import: `import "parts/foo.kcl" as foo` (and bare import). */
 export function parseKclModuleImports(kcl: string): { path: string; alias: string }[] {
   const out: { path: string; alias: string }[] = [];
-  const withAs =
-    /^\s*import\s+["']([^"']+\.kcl)["']\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/gim;
+  const withAs = /^\s*import\s+["']([^"']+\.kcl)["']\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/gim;
   let m: RegExpExecArray | null;
   while ((m = withAs.exec(kcl)) !== null) {
     out.push({ path: m[1]!, alias: m[2]! });
@@ -320,11 +310,7 @@ function ensureModuleImport(kcl: string, path: string, alias: string): string {
  * Add a part into an assembly via KCL whole-module import.
  * Replaces the stock envelope the first time a part is inserted.
  */
-export function insertPartIntoAssembly(
-  doc: CadDoc,
-  assemblyId: string,
-  partId: string,
-): CadDoc {
+export function insertPartIntoAssembly(doc: CadDoc, assemblyId: string, partId: string): CadDoc {
   const assembly = doc.components.find((c) => c.id === assemblyId);
   const part = doc.components.find((c) => c.id === partId);
   if (!assembly || assembly.kind !== "assembly" || !part || part.kind !== "part") {
@@ -401,10 +387,7 @@ export function buildKclProject(doc: CadDoc, entryPath: string): KclProjectBuild
   return { files, entryPath: zooEntry, meshAssets };
 }
 
-export function addCadAsset(
-  doc: CadDoc,
-  asset: Omit<CadAsset, "id"> & { id?: string },
-): CadDoc {
+export function addCadAsset(doc: CadDoc, asset: Omit<CadAsset, "id"> & { id?: string }): CadDoc {
   const id = asset.id ?? newId();
   const assets = [...(doc.assets ?? [])];
   const existingIdx = assets.findIndex((a) => a.path === asset.path);
@@ -593,7 +576,11 @@ function matchComponent(
 }
 
 /** Write KCL into a named part (create if missing); activates it. */
-export function upsertPartScript(doc: CadDoc, pathOrName: string | undefined, script: string): CadDoc {
+export function upsertPartScript(
+  doc: CadDoc,
+  pathOrName: string | undefined,
+  script: string,
+): CadDoc {
   const key = (pathOrName ?? "parts/main.kcl").trim();
   const byPath = matchComponent(doc, key, "part");
   if (byPath) {
@@ -639,9 +626,7 @@ export function upsertCadContent(
   if (existing) {
     return setActiveComponent(updateComponentContent(doc, existing.id, content), existing.id);
   }
-  const name = key.includes("/")
-    ? displayNameFromCadPath(key)
-    : key.replace(/\.(kcl|md)$/, "");
+  const name = key.includes("/") ? displayNameFromCadPath(key) : key.replace(/\.(kcl|md)$/, "");
   return addCadComponent(doc, { name, kind, content });
 }
 
@@ -666,12 +651,9 @@ function normalizeComponent(raw: unknown): CadComponent | null {
   // Only parts need the …/main.kcl layout. Assemblies stay at assembly/*.kcl
   // (MCP copies the entry to root main.kcl for execute).
   const path = kind === "part" ? toZooKclPath(c.path) : c.path;
-  const content =
-    kind === "instructions" ? c.content : rewriteKclModuleImportPaths(c.content);
+  const content = kind === "instructions" ? c.content : rewriteKclModuleImportPaths(c.content);
   const name =
-    kind === "part" && path !== c.path && c.name === "main"
-      ? displayNameFromCadPath(path)
-      : c.name;
+    kind === "part" && path !== c.path && c.name === "main" ? displayNameFromCadPath(path) : c.name;
   return {
     id: c.id,
     name,

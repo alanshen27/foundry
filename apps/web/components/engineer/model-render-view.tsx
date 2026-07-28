@@ -4,10 +4,9 @@ import dynamic from "next/dynamic";
 import type { CadView } from "@/components/engineer/cad-viewport";
 
 // Zoo WebRTC + WebGL are client-only.
-const Inner = dynamic(
-  () => import("./model-render-inner").then((m) => m.ModelRenderInner),
-  { ssr: false },
-);
+const Inner = dynamic(() => import("./model-render-inner").then((m) => m.ModelRenderInner), {
+  ssr: false,
+});
 
 export function ModelRenderView({
   script,

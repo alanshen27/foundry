@@ -214,9 +214,7 @@ export function SitesPanel({
           <div className="mb-4 flex items-baseline justify-between gap-3">
             <h3 className="font-mono text-[12px] tracking-[0.14em] uppercase">
               Your sites
-              <span className="text-muted-foreground ml-2 font-normal">
-                {sites.data!.length}
-              </span>
+              <span className="text-muted-foreground ml-2 font-normal">{sites.data!.length}</span>
             </h3>
           </div>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

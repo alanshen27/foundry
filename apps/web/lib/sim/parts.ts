@@ -146,8 +146,4 @@ export function partModel(type: string): PartModel | undefined {
 export const SIMULATED_TYPES = Object.keys(PART_MODELS);
 
 /** MCU boards are where a sketch's pins live. */
-export const MCU_TYPES = new Set([
-  "wokwi-arduino-uno",
-  "wokwi-arduino-nano",
-  "wokwi-arduino-mega",
-]);
+export const MCU_TYPES = new Set(["wokwi-arduino-uno", "wokwi-arduino-nano", "wokwi-arduino-mega"]);

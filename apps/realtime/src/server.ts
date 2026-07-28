@@ -1,9 +1,11 @@
 /**
- * Yjs collaboration server (Hocuspocus) for Engineer > Code Monaco sessions.
+ * Yjs collaboration server (Hocuspocus).
  *
- * Document name: `codefile:{fileId}` — see @foundry/collaboration.
- * Auth: short-lived HMAC tokens minted by apps/web tRPC collaboration.session.
- * Persistence: CodeFile.content in Postgres on store; seed empty docs from DB.
+ * Rooms:
+ *   codefile:{fileId}   — Engineer > Code Monaco (persisted to CodeFile.content)
+ *   siteprompt:{siteId} — Site editor shared revision-prompt draft (ephemeral)
+ *
+ * Auth: short-lived HMAC tokens minted by apps/web tRPC collaboration.*.
  *
  * Run: pnpm --filter @foundry/collab-server dev
  */
@@ -11,6 +13,7 @@ import { Server } from "@hocuspocus/server";
 import {
   MONACO_YTEXT_KEY,
   parseCodeFileRoom,
+  parseSitePromptRoom,
   verifyCollabToken,
   type CollabClaims,
 } from "@foundry/collaboration";
@@ -26,6 +29,18 @@ function secretMaterial(): string {
   return env.AUTH_SECRET ?? env.DATABASE_URL;
 }
 
+function resourceMatchesRoom(claims: CollabClaims, documentName: string): boolean {
+  if (claims.kind === "codefile") {
+    const fileId = parseCodeFileRoom(documentName);
+    return Boolean(fileId && fileId === claims.resourceId);
+  }
+  if (claims.kind === "siteprompt") {
+    const siteId = parseSitePromptRoom(documentName);
+    return Boolean(siteId && siteId === claims.resourceId);
+  }
+  return false;
+}
+
 const port = Number(process.env.COLLAB_PORT ?? "1234");
 
 const server = Server.configure({
@@ -38,8 +53,7 @@ const server = Server.configure({
     if (!claims) {
       throw new Error("Invalid or expired collaboration token");
     }
-    const fileId = parseCodeFileRoom(documentName);
-    if (!fileId || fileId !== claims.fileId) {
+    if (!resourceMatchesRoom(claims, documentName)) {
       throw new Error("Token does not match document");
     }
     if (!claims.canEdit) {
@@ -50,7 +64,10 @@ const server = Server.configure({
 
   async onLoadDocument({ document, documentName }) {
     const fileId = parseCodeFileRoom(documentName);
-    if (!fileId) return;
+    if (!fileId) {
+      // siteprompt rooms are ephemeral drafts — start empty.
+      return;
+    }
 
     const ytext = document.getText(MONACO_YTEXT_KEY);
     if (ytext.length > 0) return;
@@ -66,7 +83,10 @@ const server = Server.configure({
 
   async onStoreDocument({ document, documentName, context }) {
     const fileId = parseCodeFileRoom(documentName);
-    if (!fileId) return;
+    if (!fileId) {
+      // Do not persist site prompt drafts — they are session scratchpads.
+      return;
+    }
 
     const claims = (context as CollabContext | undefined)?.claims;
     const content = document.getText(MONACO_YTEXT_KEY).toString();

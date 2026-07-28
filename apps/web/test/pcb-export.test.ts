@@ -14,7 +14,15 @@ function board(extra: Record<string, unknown> = {}): PcbDoc {
   return normalizePcbDoc({
     board: { widthMm: 80, heightMm: 50, thicknessMm: 1.6, cornerRadiusMm: 0 },
     footprints: [
-      { id: "f1", libraryId: "R_0603", refDes: "R1", xMm: 10, yMm: 10, rotationDeg: 0, side: "front" },
+      {
+        id: "f1",
+        libraryId: "R_0603",
+        refDes: "R1",
+        xMm: 10,
+        yMm: 10,
+        rotationDeg: 0,
+        side: "front",
+      },
     ],
     ...extra,
   });
@@ -43,7 +51,15 @@ describe("gerberCopper", () => {
       board({
         tracks: [
           track,
-          { id: "t2", layer: "F.Cu", widthMm: 0.5, points: [{ xMm: 30, yMm: 30 }, { xMm: 40, yMm: 30 }] },
+          {
+            id: "t2",
+            layer: "F.Cu",
+            widthMm: 0.5,
+            points: [
+              { xMm: 30, yMm: 30 },
+              { xMm: 40, yMm: 30 },
+            ],
+          },
         ],
       }),
       "F.Cu",
@@ -91,7 +107,15 @@ describe("gerberCopper", () => {
       normalizePcbDoc({
         board: { widthMm: 80, heightMm: 50, cornerRadiusMm: 0 },
         footprints: [
-          { id: "f1", libraryId: "R_0603", refDes: "R1", xMm: 10, yMm: 10, rotationDeg: 90, side: "front" },
+          {
+            id: "f1",
+            libraryId: "R_0603",
+            refDes: "R1",
+            xMm: 10,
+            yMm: 10,
+            rotationDeg: 90,
+            side: "front",
+          },
         ],
       }),
       "F.Cu",
@@ -123,7 +147,15 @@ describe("gerberSilk", () => {
       normalizePcbDoc({
         board: { widthMm: 80, heightMm: 50 },
         footprints: [
-          { id: "f1", libraryId: "R_0603", refDes: "R1", xMm: 10, yMm: 10, rotationDeg: 0, side: "back" },
+          {
+            id: "f1",
+            libraryId: "R_0603",
+            refDes: "R1",
+            xMm: 10,
+            yMm: 10,
+            rotationDeg: 0,
+            side: "back",
+          },
         ],
       }),
     );
@@ -133,7 +165,9 @@ describe("gerberSilk", () => {
 
 describe("excellonDrill", () => {
   it("writes the Excellon envelope", () => {
-    const d = excellonDrill(board({ vias: [{ id: "v1", xMm: 30, yMm: 20, diameterMm: 0.6, drillMm: 0.3 }] }));
+    const d = excellonDrill(
+      board({ vias: [{ id: "v1", xMm: 30, yMm: 20, diameterMm: 0.6, drillMm: 0.3 }] }),
+    );
     expect(d.startsWith("M48")).toBe(true);
     expect(d).toContain("METRIC,TZ");
     expect(d.trimEnd().endsWith("M30")).toBe(true);
@@ -160,7 +194,15 @@ describe("excellonDrill", () => {
       normalizePcbDoc({
         board: { widthMm: 80, heightMm: 50 },
         footprints: [
-          { id: "j1", libraryId: "PinHeader_1x04", refDes: "J1", xMm: 10, yMm: 10, rotationDeg: 0, side: "front" },
+          {
+            id: "j1",
+            libraryId: "PinHeader_1x04",
+            refDes: "J1",
+            xMm: 10,
+            yMm: 10,
+            rotationDeg: 0,
+            side: "front",
+          },
         ],
       }),
     );
@@ -169,7 +211,9 @@ describe("excellonDrill", () => {
   });
 
   it("flips Y to match the Gerber layers", () => {
-    const d = excellonDrill(board({ vias: [{ id: "v1", xMm: 30, yMm: 20, diameterMm: 0.6, drillMm: 0.3 }] }));
+    const d = excellonDrill(
+      board({ vias: [{ id: "v1", xMm: 30, yMm: 20, diameterMm: 0.6, drillMm: 0.3 }] }),
+    );
     expect(d).toContain("X30.000Y30.000");
   });
 });

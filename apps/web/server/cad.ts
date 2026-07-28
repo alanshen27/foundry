@@ -10,9 +10,7 @@ export function getCad(): CadPort {
   const env = getServerEnv();
   const token = env.ZOO_API_TOKEN?.trim();
   if (!token) {
-    throw new Error(
-      "ZOO_API_TOKEN is not configured. Add it to the root .env (see .env.example).",
-    );
+    throw new Error("ZOO_API_TOKEN is not configured. Add it to the root .env (see .env.example).");
   }
   instance = createZooCadAdapter({ token });
   return instance;

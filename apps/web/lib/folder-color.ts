@@ -116,17 +116,11 @@ export function defaultFolderColor(seed: string): FolderColor {
   return colored[hashSeed(seed || "?") % colored.length]!;
 }
 
-export function resolveFolderColor(
-  color: string | null | undefined,
-  seed: string,
-): FolderColor {
+export function resolveFolderColor(color: string | null | undefined, seed: string): FolderColor {
   return isFolderColor(color) ? color : defaultFolderColor(seed);
 }
 
-export function folderColorStyle(
-  color: string | null | undefined,
-  seed: string,
-): FolderColorStyle {
+export function folderColorStyle(color: string | null | undefined, seed: string): FolderColorStyle {
   return STYLES[resolveFolderColor(color, seed)];
 }
 

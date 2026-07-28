@@ -27,3 +27,8 @@ export function copilotBroadcastChannel(channelId: string): string {
 export function siteBroadcastChannel(siteId: string): string {
   return `foundry:site:${siteId}`;
 }
+
+/** Who-is-here presence for a site editor (Supabase RealtimePort, not Yjs). */
+export function sitePresenceChannel(siteId: string): string {
+  return `presence:site:${siteId}`;
+}

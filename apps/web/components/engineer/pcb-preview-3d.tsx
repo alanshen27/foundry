@@ -42,9 +42,7 @@ function buildScene(doc: PcbDoc): THREE.Group {
   });
   const corner = Math.max(0, Math.min(radius, t / 2 - 0.02, w / 2 - 0.02, h / 2 - 0.02));
   const boardGeom =
-    corner > 0.05
-      ? new RoundedBoxGeometry(w, t, h, 4, corner)
-      : new THREE.BoxGeometry(w, t, h);
+    corner > 0.05 ? new RoundedBoxGeometry(w, t, h, 4, corner) : new THREE.BoxGeometry(w, t, h);
   root.add(new THREE.Mesh(boardGeom, boardMat));
 
   const topCu = new THREE.Mesh(

@@ -127,8 +127,7 @@ export async function chooseZooOrientation(
   partKcl: string,
   unit = "mm",
 ): Promise<{ rotate: AssemblyRotationDeg; bbox: CadBoundingBox } | null> {
-  let best: { rotate: AssemblyRotationDeg; bbox: CadBoundingBox; score: number } | null =
-    null;
+  let best: { rotate: AssemblyRotationDeg; bbox: CadBoundingBox; score: number } | null = null;
 
   for (const rot of ORIENTATION_CANDIDATES) {
     const code = kclWithOrientation(partKcl, rot);
@@ -210,9 +209,7 @@ export function renderAssemblyKcl(placements: AssemblyPlacement[]): string {
     if (!hasRotate && !hasTranslate) {
       lines.push(p.alias);
     } else if (hasRotate && hasTranslate) {
-      lines.push(
-        `translate(${formatRotateCall(p.alias, p.rotate)}, x = ${x}, y = ${y}, z = ${z})`,
-      );
+      lines.push(`translate(${formatRotateCall(p.alias, p.rotate)}, x = ${x}, y = ${y}, z = ${z})`);
     } else if (hasRotate) {
       lines.push(formatRotateCall(p.alias, p.rotate));
     } else {

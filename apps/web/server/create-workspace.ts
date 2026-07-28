@@ -12,10 +12,7 @@ export function defaultWorkspaceName(userName: string): string {
 }
 
 /** Create a workspace owned by `userId`, with unique slug and audit event. */
-export async function createWorkspaceForOwner(params: {
-  userId: string;
-  name: string;
-}) {
+export async function createWorkspaceForOwner(params: { userId: string; name: string }) {
   const name = params.name.trim().slice(0, 80);
   if (!name) {
     throw new Error("Workspace name is required");

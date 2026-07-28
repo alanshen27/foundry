@@ -213,9 +213,7 @@ describe("markFailedAssistantMessages", () => {
     ] as unknown as UIMessage[];
     const next = markFailedAssistantMessages(messages, "Zoo MCP blew up");
     expect(next.map((m) => m.id)).toEqual(["u1", "a1"]);
-    expect(next[1]!.parts).toEqual([
-      { type: "text", text: "Failed: Zoo MCP blew up" },
-    ]);
+    expect(next[1]!.parts).toEqual([{ type: "text", text: "Failed: Zoo MCP blew up" }]);
   });
 
   it("appends a failure note when the turn already has content", () => {

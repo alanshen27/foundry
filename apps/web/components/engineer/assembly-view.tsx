@@ -9,14 +9,7 @@
  * add_part_to_assembly (PCB is parts/pcb.kcl with board dim params).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ArrowUpRight,
-  Boxes,
-  CircuitBoard,
-  Package,
-  RefreshCw,
-  Waypoints,
-} from "lucide-react";
+import { ArrowUpRight, Boxes, CircuitBoard, Package, RefreshCw, Waypoints } from "lucide-react";
 import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import { CadViewport } from "@/components/engineer/cad-viewport";
 import { normalizeCadDoc, type CadComponent } from "@/lib/cad/engine";
@@ -27,9 +20,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
 export type AssemblyOpenTarget =
-  | "pcb"
-  | "schematic"
-  | { editor: "model"; componentId?: string; label?: string };
+  "pcb" | "schematic" | { editor: "model"; componentId?: string; label?: string };
 
 type Props = {
   projectId: string;
@@ -154,8 +145,7 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
     [cadDoc, pcbDoc],
   );
 
-  const activeTarget =
-    sceneTargets.find((t) => t.id === (hoveredId ?? selectedId)) ?? null;
+  const activeTarget = sceneTargets.find((t) => t.id === (hoveredId ?? selectedId)) ?? null;
 
   const bomCents = (components.data ?? []).reduce(
     (sum, c) => sum + (c.unitCostCents ?? 0) * c.quantity,
@@ -181,8 +171,8 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
           <Boxes className="text-muted-foreground mx-auto size-8" strokeWidth={1.5} />
           <h2 className="mt-3 text-lg font-semibold">No product assembly</h2>
           <p className="text-muted-foreground mt-1.5 text-sm">
-            Assembly shows <span className="font-mono text-[12px]">assembly/product.kcl</span> —
-            the file where parts are imported and positioned. Ask the copilot to add parts to the
+            Assembly shows <span className="font-mono text-[12px]">assembly/product.kcl</span> — the
+            file where parts are imported and positioned. Ask the copilot to add parts to the
             assembly, or open CAD and edit that file.
           </p>
           <button

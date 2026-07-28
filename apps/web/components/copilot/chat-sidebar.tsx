@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-  type KeyboardEvent,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
   AtSign,
   Camera,
@@ -234,10 +227,7 @@ function toolDetail(name: string, part: ToolPart): string | null {
     bits.push(`${out.generated} parts in parallel`);
   if (name === "text_to_cad" && Array.isArray(out.failed) && out.failed.length > 0)
     bits.push(`${out.failed.length} failed`);
-  if (
-    (name === "save_cad_script" || name === "text_to_cad") &&
-    typeof out.kclChars === "number"
-  )
+  if ((name === "save_cad_script" || name === "text_to_cad") && typeof out.kclChars === "number")
     bits.push(`${out.kclChars} chars KCL`);
   if (
     (name === "save_circuit" || name === "import_wokwi_diagram") &&
@@ -619,15 +609,22 @@ export function ChatSidebar() {
         </span>
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-
         <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
           {messages.length === 0 ? (
             <div className="mt-6 flex flex-col items-center gap-4 text-center">
-              <div className="bg-primary/10 flex size-12 items-center justify-center rounded-none">
-                <Sparkles className="text-primary size-5" />
+              <div className="bg-primary relative flex size-12 items-center justify-center overflow-hidden">
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 opacity-30"
+                  style={{
+                    backgroundImage: "radial-gradient(circle, #faf9f5 0.55px, transparent 0.65px)",
+                    backgroundSize: "3.5px 3.5px",
+                  }}
+                />
+                <Sparkles className="relative z-10 size-5 text-[#faf9f5]" />
               </div>
               <div>
-                <p className="text-sm font-medium">Build with the copilot</p>
+                <p className="font-mono text-sm font-medium tracking-[0.04em]">Foundry Copilot</p>
                 <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
                   Mention <span className="text-foreground font-medium">@AI</span> to ask the
                   copilot — it fills out the brief, requirements, BOM, circuit, 3D model, and
@@ -653,11 +650,7 @@ export function ChatSidebar() {
               <Message
                 key={m.id}
                 message={m}
-                failed={
-                  status === "error" &&
-                  m.role === "assistant" &&
-                  i === messages.length - 1
-                }
+                failed={status === "error" && m.role === "assistant" && i === messages.length - 1}
               />
             ))
           )}
@@ -665,8 +658,7 @@ export function ChatSidebar() {
             <p className="text-destructive text-xs leading-relaxed">
               {error.message.includes("OPENAI_API_KEY") || error.message.includes("not configured")
                 ? "AI is not configured. Add OPENAI_API_KEY to the root .env and restart the dev server."
-                : error.message.includes("Unexpected end of JSON") ||
-                    error.message.includes("431")
+                : error.message.includes("Unexpected end of JSON") || error.message.includes("431")
                   ? "Request failed (cookies/headers too large or empty response). Clear cookies for localhost:3000, reload, and try again."
                   : error.message}
             </p>

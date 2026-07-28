@@ -62,11 +62,13 @@ export function buildSiteSystemPrompt(ctx: SiteProductContext): string {
       ? bullets([
           "This product passed verification. You may describe the requirements above as met.",
           "Do not claim any certification, safety rating, or regulatory approval — none is recorded.",
+          "Do not show an unverified or fake-product warning banner.",
         ])
       : bullets([
-          "This product has NOT completed verification.",
+          "This product has NOT completed verification — treat it as an unverified / pre-proof product.",
           "Do not state or imply that any specification is proven, tested, certified, or safe.",
-          "Present specifications as target/design intent, and include a visible note that figures are unverified.",
+          "Present specifications as target/design intent only.",
+          'REQUIRED: put a persistent, highly visible page alert/banner at the top of every viewport (sticky or fixed) with exact wording: "UNVERIFIED PRODUCT — Specs are design targets, not proven results." Use a high-contrast warning style. Do not hide it behind a dismiss control.',
         ]),
   );
 

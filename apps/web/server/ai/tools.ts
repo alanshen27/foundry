@@ -84,7 +84,9 @@ const circuitSchema = z.object({
         attrs: z
           .record(z.string(), z.string())
           .optional()
-          .describe('Wokwi element attrs, e.g. {"value":"220"} for a resistor or {"color":"red"} for an LED'),
+          .describe(
+            'Wokwi element attrs, e.g. {"value":"220"} for a resistor or {"color":"red"} for an LED',
+          ),
         x: z.number(),
         y: z.number(),
         rotation: z.number().default(0),
@@ -670,13 +672,7 @@ export function buildProjectTools(ctx: ToolContext) {
         ids: z.array(z.string()).max(50).optional(),
         titleContains: z.array(z.string().min(1).max(200)).max(20).optional(),
       }),
-      execute: async ({
-        ids,
-        titleContains,
-      }: {
-        ids?: string[];
-        titleContains?: string[];
-      }) =>
+      execute: async ({ ids, titleContains }: { ids?: string[]; titleContains?: string[] }) =>
         guard(ctx, "ideate.edit", async (workspaceId) => {
           if ((!ids || ids.length === 0) && (!titleContains || titleContains.length === 0)) {
             return { error: "Provide ids and/or titleContains" };
@@ -688,8 +684,7 @@ export function buildProjectTools(ctx: ToolContext) {
           const idSet = new Set(ids ?? []);
           const needles = (titleContains ?? []).map((t) => t.toLowerCase());
           const toDelete = existing.filter(
-            (r) =>
-              idSet.has(r.id) || needles.some((n) => r.title.toLowerCase().includes(n)),
+            (r) => idSet.has(r.id) || needles.some((n) => r.title.toLowerCase().includes(n)),
           );
           if (toDelete.length === 0) return { ok: true, deleted: 0 };
           await prisma.requirement.deleteMany({
@@ -776,13 +771,7 @@ export function buildProjectTools(ctx: ToolContext) {
         ids: z.array(z.string()).max(50).optional(),
         titleContains: z.array(z.string().min(1).max(200)).max(20).optional(),
       }),
-      execute: async ({
-        ids,
-        titleContains,
-      }: {
-        ids?: string[];
-        titleContains?: string[];
-      }) =>
+      execute: async ({ ids, titleContains }: { ids?: string[]; titleContains?: string[] }) =>
         guard(ctx, "verification.run", async (workspaceId) => {
           if ((!ids || ids.length === 0) && (!titleContains || titleContains.length === 0)) {
             return { error: "Provide ids and/or titleContains" };
@@ -794,8 +783,7 @@ export function buildProjectTools(ctx: ToolContext) {
           const idSet = new Set(ids ?? []);
           const needles = (titleContains ?? []).map((t) => t.toLowerCase());
           const toDelete = existing.filter(
-            (c) =>
-              idSet.has(c.id) || needles.some((n) => c.title.toLowerCase().includes(n)),
+            (c) => idSet.has(c.id) || needles.some((n) => c.title.toLowerCase().includes(n)),
           );
           if (toDelete.length === 0) return { ok: true, deleted: 0 };
           await prisma.validationCheck.deleteMany({
@@ -899,8 +887,7 @@ export function buildProjectTools(ctx: ToolContext) {
     },
 
     save_circuit: {
-      description:
-        `Replace the circuit schematic (Engineer > Schematic view) with realistic Wokwi parts. Same conventions as wokwi.com: parts are wokwi-* element types and wires connect named pins (e.g. LED A/C, resistor 1/2, Arduino Uno GND.1/5V/A0/13, ESP32 DevKit GND.1/VIN/D2). Lay parts out with generous spacing (~150px grid) on a 1200x800 canvas. ONLY these part types render with real graphics — use them exclusively, substituting the closest supported part for anything else (e.g. wokwi-dht22 for any climate/BME/SHT sensor, wokwi-ntc-temperature-sensor for analog temperature, wokwi-ssd1306 for small I2C displays): ${PART_TYPES.join(", ")}.`,
+      description: `Replace the circuit schematic (Engineer > Schematic view) with realistic Wokwi parts. Same conventions as wokwi.com: parts are wokwi-* element types and wires connect named pins (e.g. LED A/C, resistor 1/2, Arduino Uno GND.1/5V/A0/13, ESP32 DevKit GND.1/VIN/D2). Lay parts out with generous spacing (~150px grid) on a 1200x800 canvas. ONLY these part types render with real graphics — use them exclusively, substituting the closest supported part for anything else (e.g. wokwi-dht22 for any climate/BME/SHT sensor, wokwi-ntc-temperature-sensor for analog temperature, wokwi-ssd1306 for small I2C displays): ${PART_TYPES.join(", ")}.`,
       inputSchema: circuitSchema,
       execute: async (doc: CircuitInput) =>
         guard(ctx, "electronics.edit", async (workspaceId) => {
@@ -934,12 +921,9 @@ export function buildProjectTools(ctx: ToolContext) {
 
     import_wokwi_diagram: {
       description:
-        "Import a full Wokwi diagram.json (from wokwi.com or one you author) as the project's circuit schematic. Accepts the standard format: { version, parts: [{ type, id, top, left, attrs }], connections: [[\"part:PIN\", \"part:PIN\", color, []], ...] }. Replaces the current schematic.",
+        'Import a full Wokwi diagram.json (from wokwi.com or one you author) as the project\'s circuit schematic. Accepts the standard format: { version, parts: [{ type, id, top, left, attrs }], connections: [["part:PIN", "part:PIN", color, []], ...] }. Replaces the current schematic.',
       inputSchema: z.object({
-        diagram: z
-          .string()
-          .max(200_000)
-          .describe("The diagram.json contents as a JSON string"),
+        diagram: z.string().max(200_000).describe("The diagram.json contents as a JSON string"),
       }),
       execute: async ({ diagram }: { diagram: string }) =>
         guard(ctx, "electronics.edit", async (workspaceId) => {
@@ -1210,7 +1194,9 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             .min(10)
             .max(4000)
             .optional()
-            .describe("Detailed mechanical description of the part to generate (mm). Required for new jobs."),
+            .describe(
+              "Detailed mechanical description of the part to generate (mm). Required for new jobs.",
+            ),
           partName: z
             .string()
             .min(1)
@@ -1292,7 +1278,8 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
           const generated: { partName?: string; script: string }[] = [];
           const succeeded: { partName?: string; operationId: string; kclChars: number }[] = [];
-          const failed: { partName?: string; error: string; zooOpId?: string; hint?: string }[] = [];
+          const failed: { partName?: string; error: string; zooOpId?: string; hint?: string }[] =
+            [];
 
           for (const { job, result } of outcomes) {
             if (!result.ok) {
@@ -1583,7 +1570,10 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
         return {
           type: "content" as const,
           value: [
-            { type: "text" as const, text: "Concept image generated — use it as the design reference:" },
+            {
+              type: "text" as const,
+              text: "Concept image generated — use it as the design reference:",
+            },
             ...(image ? [image] : []),
           ],
         };
@@ -1616,9 +1606,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
                 (c) => c.kind === "assembly" && c.path === "assembly/product.kcl",
               ) ?? doc.components.find((c) => c.kind === "assembly");
             const entry =
-              assembly ??
-              doc.components.find((c) => c.kind === "part" && c.content.trim()) ??
-              null;
+              assembly ?? doc.components.find((c) => c.kind === "part" && c.content.trim()) ?? null;
 
             if (entry) {
               const snap = await withKclProjectDir(doc, entry.path, (projectDir) =>
@@ -1677,8 +1665,9 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
         if (!out?.images) {
           return { type: "error-text" as const, value: out?.error ?? "Rendering failed" };
         }
-        const value: ({ type: "text"; text: string } | NonNullable<Awaited<ReturnType<typeof imagePart>>>)[] =
-          [];
+        const value: (
+          { type: "text"; text: string } | NonNullable<Awaited<ReturnType<typeof imagePart>>>
+        )[] = [];
         for (const image of out.images) {
           const part = await imagePart(image.key);
           value.push({ type: "text" as const, text: `${image.view} view:` });
@@ -1720,10 +1709,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
         const image = await imagePart(out.key);
         return {
           type: "content" as const,
-          value: [
-            { type: "text" as const, text: "Current schematic:" },
-            ...(image ? [image] : []),
-          ],
+          value: [{ type: "text" as const, text: "Current schematic:" }, ...(image ? [image] : [])],
         };
       },
     },
@@ -1846,19 +1832,25 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
       description:
         "Create or overwrite a file in the project's code workspace (Engineer > Code tab). Files belong to a linked repository; if none is linked yet, one is created automatically with role 'firmware'. Use for firmware, configs, or app scaffolding.",
       inputSchema: z.object({
-        path: z
-          .string()
-          .min(1)
-          .max(300)
-          .describe("Repo-relative path, e.g. src/main.cpp"),
+        path: z.string().min(1).max(300).describe("Repo-relative path, e.g. src/main.cpp"),
         content: z.string().max(200_000),
         repoRole: z
           .string()
           .max(80)
           .optional()
-          .describe("Which linked repo to write into (matches the repo's role); defaults to the first repo"),
+          .describe(
+            "Which linked repo to write into (matches the repo's role); defaults to the first repo",
+          ),
       }),
-      execute: async ({ path, content, repoRole }: { path: string; content: string; repoRole?: string }) =>
+      execute: async ({
+        path,
+        content,
+        repoRole,
+      }: {
+        path: string;
+        content: string;
+        repoRole?: string;
+      }) =>
         guard(ctx, "software.edit", async (workspaceId) => {
           if (path.includes("..") || path.startsWith("/")) {
             return { error: "Invalid path" };

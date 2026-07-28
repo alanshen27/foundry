@@ -26,10 +26,7 @@ export function buildFolderTree(folders: FolderRef[]): FolderNode[] {
 }
 
 /** Root → … → current folder (empty if folderId is null / missing). */
-export function folderBreadcrumbs(
-  folders: FolderRef[],
-  folderId: string | null,
-): FolderRef[] {
+export function folderBreadcrumbs(folders: FolderRef[], folderId: string | null): FolderRef[] {
   if (!folderId) return [];
   const byId = new Map(folders.map((f) => [f.id, f]));
   const chain: FolderRef[] = [];

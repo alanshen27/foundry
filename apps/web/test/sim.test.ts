@@ -199,9 +199,13 @@ describe("engine — faults", () => {
 describe("sketch runtime", () => {
   it("drives a pin from setup", () => {
     const sim = new Simulator(blinkCircuit());
-    const sketch = runSketch(sim, "uno", `
+    const sketch = runSketch(
+      sim,
+      "uno",
+      `
       function setup() { pinMode(13, OUTPUT); digitalWrite(13, HIGH); }
-    `);
+    `,
+    );
     sketch.advance(1000);
     expect(sketch.error).toBeNull();
     expect(sim.step().outputs.get("led")).toBe(1);
@@ -209,7 +213,10 @@ describe("sketch runtime", () => {
 
   it("blinks on the virtual clock", () => {
     const sim = new Simulator(blinkCircuit());
-    const sketch = runSketch(sim, "uno", `
+    const sketch = runSketch(
+      sim,
+      "uno",
+      `
       function setup() { pinMode(13, OUTPUT); }
       function* loop() {
         digitalWrite(13, HIGH);
@@ -217,23 +224,28 @@ describe("sketch runtime", () => {
         digitalWrite(13, LOW);
         yield delay(500);
       }
-    `);
+    `,
+    );
 
-    sketch.advance(1_000);       // 1 ms in: the LED is on
+    sketch.advance(1_000); // 1 ms in: the LED is on
     expect(sim.step().outputs.get("led")).toBe(1);
 
-    sketch.advance(600_000);     // 600 ms: past the first delay, now off
+    sketch.advance(600_000); // 600 ms: past the first delay, now off
     expect(sim.step().outputs.get("led")).toBe(0);
 
-    sketch.advance(1_100_000);   // 1.1 s: back on for the next cycle
+    sketch.advance(1_100_000); // 1.1 s: back on for the next cycle
     expect(sim.step().outputs.get("led")).toBe(1);
   });
 
   it("advances millis with the virtual clock", () => {
     const sim = new Simulator(blinkCircuit());
-    const sketch = runSketch(sim, "uno", `
+    const sketch = runSketch(
+      sim,
+      "uno",
+      `
       function* loop() { yield delay(100); print(millis()); }
-    `);
+    `,
+    );
     sketch.advance(350_000);
     expect(sketch.logs.length).toBeGreaterThan(0);
     expect(Number(sketch.logs[0])).toBeGreaterThanOrEqual(100);
@@ -241,10 +253,14 @@ describe("sketch runtime", () => {
 
   it("reads a button through INPUT_PULLUP", () => {
     const sim = new Simulator(buttonCircuit());
-    const sketch = runSketch(sim, "uno", `
+    const sketch = runSketch(
+      sim,
+      "uno",
+      `
       function setup() { pinMode(2, INPUT_PULLUP); }
       function* loop() { print(digitalRead(2)); yield delay(10); }
-    `);
+    `,
+    );
 
     sketch.advance(5_000);
     sim.step();
@@ -262,13 +278,17 @@ describe("sketch runtime", () => {
     // and the first loop() — otherwise pin 2 still reads floating, which is LOW,
     // and the sketch sees a press that never happened.
     const sim = new Simulator(buttonCircuit());
-    const sketch = runSketch(sim, "uno", `
+    const sketch = runSketch(
+      sim,
+      "uno",
+      `
       function setup() { pinMode(2, INPUT_PULLUP); }
       function* loop() { print(digitalRead(2)); yield delay(10); }
-    `);
+    `,
+    );
 
     sketch.advance(0); // setup only
-    sim.step();        // settle the pull-up into a level
+    sim.step(); // settle the pull-up into a level
     sketch.advance(15_000);
 
     expect(sketch.logs[0]).toBe("1");
@@ -284,10 +304,14 @@ describe("sketch runtime", () => {
     );
     const sim = new Simulator(doc);
     sim.setPartState("pot", { value: 750 });
-    const sketch = runSketch(sim, "uno", `
+    const sketch = runSketch(
+      sim,
+      "uno",
+      `
       function* loop() { print(analogRead(A0_PIN)); yield delay(10); }
       const A0_PIN = "A0";
-    `);
+    `,
+    );
     sketch.advance(30_000);
     expect(sketch.logs.at(-1)).toBe("750");
   });
@@ -307,10 +331,14 @@ describe("sketch runtime", () => {
 
   it("does not spin forever on a loop with no delay", () => {
     const sim = new Simulator(blinkCircuit());
-    const sketch = runSketch(sim, "uno", `
+    const sketch = runSketch(
+      sim,
+      "uno",
+      `
       function setup() { pinMode(13, OUTPUT); }
       function loop() { digitalWrite(13, HIGH); }
-    `);
+    `,
+    );
     // A non-generator loop is charged a tick per call, so this terminates.
     sketch.advance(10_000);
     expect(sketch.error).toBeNull();

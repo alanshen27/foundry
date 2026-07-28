@@ -226,9 +226,7 @@ export function BomTable({
               aria-label="Preview image URL"
             />
           </div>
-          {create.error ? (
-            <p className="text-destructive text-xs">{create.error.message}</p>
-          ) : null}
+          {create.error ? <p className="text-destructive text-xs">{create.error.message}</p> : null}
         </form>
       ) : null}
 

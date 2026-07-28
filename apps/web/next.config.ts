@@ -8,10 +8,7 @@ config({ path: join(__dirname, "..", "..", ".env") });
 
 // monaco-editor >=0.55 package exports remap `monaco-editor/esm/vs/*` to a
 // doubled path. y-monaco (and similar) still deep-import the old form.
-const monacoEditorApi = join(
-  __dirname,
-  "node_modules/monaco-editor/esm/vs/editor/editor.api.js",
-);
+const monacoEditorApi = join(__dirname, "node_modules/monaco-editor/esm/vs/editor/editor.api.js");
 
 const nextConfig: NextConfig = {
   // Lets a second instance (tests, agents) run without clobbering the main

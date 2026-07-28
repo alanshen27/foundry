@@ -9,7 +9,7 @@ describe("buildSiteSystemPrompt", () => {
     });
 
     expect(prompt).toContain("has NOT completed verification");
-    expect(prompt).toContain("unverified");
+    expect(prompt).toContain("UNVERIFIED PRODUCT");
     expect(prompt).toContain("Release: none");
   });
 
@@ -22,6 +22,7 @@ describe("buildSiteSystemPrompt", () => {
 
     expect(prompt).toContain("passed verification");
     expect(prompt).toContain("Do not claim any certification");
+    expect(prompt).toContain("Do not show an unverified or fake-product warning banner");
     expect(prompt).toContain("Release: 1.0.0");
   });
 

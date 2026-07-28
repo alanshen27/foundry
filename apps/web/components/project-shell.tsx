@@ -89,7 +89,12 @@ export function WorkspaceSwitcher({
         aria-haspopup="listbox"
         aria-expanded={open}
       >
-        <SignalIconTile kind="workspace" seed={current.id} letter={current.name} className="size-6" />
+        <SignalIconTile
+          kind="workspace"
+          seed={current.id}
+          letter={current.name}
+          className="size-6"
+        />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-medium">{current.name}</span>
           <span className="text-muted-foreground block font-mono text-[10px] tracking-[0.08em] uppercase">

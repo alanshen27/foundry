@@ -42,11 +42,7 @@ async function findOrCreateCategory(projectId: string, branchId: string) {
   }
 }
 
-async function findOrCreateChannel(
-  projectId: string,
-  branchId: string,
-  categoryId: string,
-) {
+async function findOrCreateChannel(projectId: string, branchId: string, categoryId: string) {
   const where = {
     projectId_branchId_name: { projectId, branchId, name: DEFAULT_CHANNEL_NAME },
   } as const;

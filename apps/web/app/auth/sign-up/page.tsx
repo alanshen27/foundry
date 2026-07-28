@@ -20,7 +20,9 @@ function SignUpForm() {
   const [submitting, setSubmitting] = useState(false);
 
   const nextParam = searchParams.get("next");
-  const signInHref = nextParam ? `/auth/sign-in?next=${encodeURIComponent(nextParam)}` : "/auth/sign-in";
+  const signInHref = nextParam
+    ? `/auth/sign-in?next=${encodeURIComponent(nextParam)}`
+    : "/auth/sign-in";
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -132,7 +134,10 @@ function SignUpForm() {
                 />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="password" className="font-mono text-[11px] tracking-[0.1em] uppercase">
+                <Label
+                  htmlFor="password"
+                  className="font-mono text-[11px] tracking-[0.1em] uppercase"
+                >
                   Password
                 </Label>
                 <Input
@@ -145,14 +150,20 @@ function SignUpForm() {
                   autoComplete="new-password"
                   className="rounded-none"
                 />
-                <p className="text-muted-foreground font-mono text-[11px]">At least 8 characters.</p>
+                <p className="text-muted-foreground font-mono text-[11px]">
+                  At least 8 characters.
+                </p>
               </div>
               {error ? (
                 <p role="alert" className="text-destructive font-mono text-sm">
                   {error}
                 </p>
               ) : null}
-              <Button type="submit" disabled={submitting} className="rounded-none font-mono uppercase tracking-[0.08em]">
+              <Button
+                type="submit"
+                disabled={submitting}
+                className="rounded-none font-mono uppercase tracking-[0.08em]"
+              >
                 {submitting ? "Creating account…" : "Create account"}
               </Button>
             </form>

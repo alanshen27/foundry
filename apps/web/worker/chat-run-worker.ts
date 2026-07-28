@@ -51,9 +51,7 @@ const worker = new Worker(
     } catch (err) {
       console.error(`[chat-worker] run ${runId} failed`, err);
       if (isPrismaDisconnect(err)) {
-        await reconnectPrisma().catch((e) =>
-          console.error("[chat-worker] reconnect failed", e),
-        );
+        await reconnectPrisma().catch((e) => console.error("[chat-worker] reconnect failed", e));
         throw err; // Let BullMQ retry
       }
       throw err;
@@ -62,10 +60,9 @@ const worker = new Worker(
   {
     connection: getRedisConnection(),
     concurrency: 10,
-  }
+  },
 );
 
 worker.on("error", (err) => {
   console.error("[chat-worker] queue error", err);
 });
-

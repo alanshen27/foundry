@@ -12,8 +12,26 @@ function board(extra: Record<string, unknown> = {}): PcbDoc {
   return normalizePcbDoc({
     board: { widthMm: 40, heightMm: 30, thicknessMm: 1.6, cornerRadiusMm: 0 },
     footprints: [
-      { id: "f1", libraryId: "R_0603", refDes: "R1", xMm: 10, yMm: 10, rotationDeg: 0, side: "front", partId: "r1" },
-      { id: "f2", libraryId: "R_0603", refDes: "R2", xMm: 25, yMm: 10, rotationDeg: 0, side: "front", partId: "r2" },
+      {
+        id: "f1",
+        libraryId: "R_0603",
+        refDes: "R1",
+        xMm: 10,
+        yMm: 10,
+        rotationDeg: 0,
+        side: "front",
+        partId: "r1",
+      },
+      {
+        id: "f2",
+        libraryId: "R_0603",
+        refDes: "R2",
+        xMm: 25,
+        yMm: 10,
+        rotationDeg: 0,
+        side: "front",
+        partId: "r2",
+      },
     ],
     ...extra,
   });
@@ -57,7 +75,16 @@ describe("normalizePcbDoc — zones", () => {
 
   it("drops an outline with fewer than three points", () => {
     const doc = board({
-      zones: [{ id: "z", layer: "F.Cu", points: [{ xMm: 1, yMm: 1 }, { xMm: 5, yMm: 5 }] }],
+      zones: [
+        {
+          id: "z",
+          layer: "F.Cu",
+          points: [
+            { xMm: 1, yMm: 1 },
+            { xMm: 5, yMm: 5 },
+          ],
+        },
+      ],
     });
     expect(doc.zones).toHaveLength(0);
   });
@@ -172,7 +199,9 @@ describe("zone DRC", () => {
   const check = (doc: PcbDoc) => runDrc(doc, buildRatsnest(gndCircuit(), doc));
 
   it("warns about a pour with no net", () => {
-    const rules = check(board({ zones: [{ ...FULL_POUR, net: undefined }] })).violations.map((v) => v.rule);
+    const rules = check(board({ zones: [{ ...FULL_POUR, net: undefined }] })).violations.map(
+      (v) => v.rule,
+    );
     expect(rules).toContain("zone-no-net");
   });
 
@@ -215,7 +244,11 @@ describe("zone DRC", () => {
 
 describe("fabrication output", () => {
   it("pours with dark fill then clear knockouts", () => {
-    const g = gerberCopper(board({ zones: [FULL_POUR] }), "F.Cu", padNetMap(gndCircuit(), board({ zones: [FULL_POUR] })));
+    const g = gerberCopper(
+      board({ zones: [FULL_POUR] }),
+      "F.Cu",
+      padNetMap(gndCircuit(), board({ zones: [FULL_POUR] })),
+    );
     expect(g).toContain("%LPD*%");
     expect(g).toContain("%LPC*%");
     // The clear section must come after the pour is laid down.
@@ -240,7 +273,15 @@ describe("fabrication output", () => {
       normalizePcbDoc({
         board: { widthMm: 40, heightMm: 30 },
         footprints: [
-          { id: "j1", libraryId: "PinHeader_1x04", refDes: "J1", xMm: 10, yMm: 10, rotationDeg: 0, side: "front" },
+          {
+            id: "j1",
+            libraryId: "PinHeader_1x04",
+            refDes: "J1",
+            xMm: 10,
+            yMm: 10,
+            rotationDeg: 0,
+            side: "front",
+          },
         ],
       }),
       "F.Cu",

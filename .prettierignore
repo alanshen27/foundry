@@ -1,5 +1,6 @@
 node_modules
 .next
+.next-test
 .turbo
 dist
 coverage

@@ -60,7 +60,12 @@ export function CircuitRenderInner({ doc }: { doc: CircuitDoc }) {
         colorMode={theme.mode}
         className="!bg-transparent"
       >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--color-border)" />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={22}
+          size={1}
+          color="var(--color-border)"
+        />
       </ReactFlow>
     </div>
   );

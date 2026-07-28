@@ -396,9 +396,7 @@ export function footprintDef(libraryId: string): PcbFootprintDef | undefined {
 }
 
 /** Library ids in a proposed footprint list that are not in FOOTPRINT_LIBRARY. */
-export function unsupportedFootprintIds(
-  footprints: { libraryId: string }[],
-): string[] {
+export function unsupportedFootprintIds(footprints: { libraryId: string }[]): string[] {
   const unknown = new Set<string>();
   for (const f of footprints) {
     if (!footprintDef(f.libraryId)) unknown.add(f.libraryId);
@@ -548,7 +546,12 @@ function normalizeVias(raw: unknown, board: PcbBoard): PcbVia[] {
     const v = item as Record<string, unknown>;
     const diameterMm = num(v.diameterMm, DEFAULT_RULES.viaDiameterMm, 0.1, 10);
     // Drill can never reach the annular ring's outer edge or there is no ring.
-    const drillMm = num(v.drillMm, DEFAULT_RULES.viaDrillMm, 0.05, Math.max(0.05, diameterMm - 0.05));
+    const drillMm = num(
+      v.drillMm,
+      DEFAULT_RULES.viaDrillMm,
+      0.05,
+      Math.max(0.05, diameterMm - 0.05),
+    );
     out.push({
       id: typeof v.id === "string" && v.id ? v.id : pcbId("via"),
       net: typeof v.net === "string" && v.net.trim() ? v.net.trim().slice(0, 60) : undefined,
@@ -630,9 +633,7 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
       rotationDeg: num(f.rotationDeg, 0, 0, 359),
       side,
       partId:
-        typeof f.partId === "string" && f.partId.trim()
-          ? f.partId.trim().slice(0, 60)
-          : undefined,
+        typeof f.partId === "string" && f.partId.trim() ? f.partId.trim().slice(0, 60) : undefined,
       pinMap: cleanPinMap(f.pinMap, libraryId),
     });
   }
@@ -640,7 +641,8 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
   return {
     version: 1,
     id: typeof obj.id === "string" && obj.id ? obj.id.slice(0, 60) : undefined,
-    name: typeof obj.name === "string" && obj.name.trim() ? obj.name.trim().slice(0, 60) : undefined,
+    name:
+      typeof obj.name === "string" && obj.name.trim() ? obj.name.trim().slice(0, 60) : undefined,
     groupId:
       typeof obj.groupId === "string" && obj.groupId.trim()
         ? obj.groupId.trim().slice(0, 60)

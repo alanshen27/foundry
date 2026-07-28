@@ -7,15 +7,7 @@ import { requireProjectCapability } from "../access";
 import { ensureStageStarted, markDownstreamStale, setStageStatus } from "../stage-state";
 
 const category = z.enum(["VISUAL", "ELECTRICAL", "MECHANICAL", "SOFTWARE", "CROSS_DOMAIN"]);
-const status = z.enum([
-  "PENDING",
-  "PASS",
-  "FAIL",
-  "WARNING",
-  "SKIPPED",
-  "SIMULATED",
-  "ERROR",
-]);
+const status = z.enum(["PENDING", "PASS", "FAIL", "WARNING", "SKIPPED", "SIMULATED", "ERROR"]);
 const severity = z.enum(["INFO", "MINOR", "MAJOR", "CRITICAL"]);
 
 /** A check is satisfied for gating if it passed (or was waived/skipped). */

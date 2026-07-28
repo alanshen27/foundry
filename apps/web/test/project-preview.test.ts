@@ -86,9 +86,7 @@ describe("projectPreview", () => {
   });
 
   it("cache-busts the URL with the render time", () => {
-    const preview = projectPreview(
-      source({ thumbnailKey: KEY, thumbnailUpdatedAt: RENDERED }),
-    );
+    const preview = projectPreview(source({ thumbnailKey: KEY, thumbnailUpdatedAt: RENDERED }));
     expect(preview.thumbnailUrl).toBe(`/api/files/${KEY}?v=${RENDERED.getTime()}`);
   });
 

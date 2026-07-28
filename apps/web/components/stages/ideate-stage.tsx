@@ -206,15 +206,15 @@ function BriefCard({ projectId, branchId, canEdit }: Props) {
               <Button type="submit" disabled={save.isPending}>
                 {save.isPending ? "Saving…" : "Save brief"}
               </Button>
-              {save.isSuccess ? (
-                <span className="text-sm text-emerald-400">Saved</span>
-              ) : null}
+              {save.isSuccess ? <span className="text-sm text-emerald-400">Saved</span> : null}
               {save.error ? (
                 <span className="text-destructive text-sm">{save.error.message}</span>
               ) : null}
             </div>
           ) : (
-            <p className="text-muted-foreground text-sm">You have read-only access to this stage.</p>
+            <p className="text-muted-foreground text-sm">
+              You have read-only access to this stage.
+            </p>
           )}
         </form>
       </CardContent>

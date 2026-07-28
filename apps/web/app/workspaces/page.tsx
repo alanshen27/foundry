@@ -57,9 +57,7 @@ export default async function WorkspacesPage({
         <p className="text-muted-foreground font-mono text-[11px] tracking-[0.14em] uppercase">
           Manage
         </p>
-        <h1 className="mt-1 font-mono text-[28px] font-medium tracking-[-0.04em]">
-          Workspaces
-        </h1>
+        <h1 className="mt-1 font-mono text-[28px] font-medium tracking-[-0.04em]">Workspaces</h1>
         <p className="text-muted-foreground mt-1 text-[13px]">
           Create or switch workspaces. Day-to-day work lives inside a single workspace home.
         </p>

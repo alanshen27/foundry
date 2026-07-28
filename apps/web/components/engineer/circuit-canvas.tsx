@@ -313,9 +313,12 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
   const [groups, setGroups] = useState<CircuitGroup[]>([]);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   /** Region being dragged out, in flow coordinates. */
-  const [groupDraft, setGroupDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(
-    null,
-  );
+  const [groupDraft, setGroupDraft] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
   const [groupTool, setGroupTool] = useState(false);
   const [sketchFileId, setSketchFileId] = useState<string | null>(null);
   const utils = trpc.useUtils();
@@ -580,7 +583,12 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
       const id = uid("g");
       setGroups((gs) => [
         ...gs,
-        { id, label: `Board ${gs.length + 1}`, ...rect, color: GROUP_COLORS[gs.length % GROUP_COLORS.length] },
+        {
+          id,
+          label: `Board ${gs.length + 1}`,
+          ...rect,
+          color: GROUP_COLORS[gs.length % GROUP_COLORS.length],
+        },
       ]);
       setActiveGroupId(id);
       // One region per activation: the tool suppresses panning while it is on,
@@ -628,7 +636,8 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
 
     if (model.interactive === "latching") {
       const current = live.sim.stateOf(partId);
-      if ("position" in current) live.sim.setPartState(partId, { position: current.position ? 0 : 1 });
+      if ("position" in current)
+        live.sim.setPartState(partId, { position: current.position ? 0 : 1 });
       else live.sim.setPartState(partId, { pressed: !current.pressed });
       return;
     }
@@ -710,7 +719,12 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
         colorMode={theme.mode}
         className="!bg-transparent"
       >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--color-border)" />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={22}
+          size={1.2}
+          color="var(--color-border)"
+        />
 
         <CursorLayer peers={cursors.peers} />
 
@@ -813,7 +827,9 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
                 <Button
                   variant="outline"
                   size="xs"
-                  onClick={() => patchSelected({ rotation: ((selected.data.rotation ?? 0) + 90) % 360 })}
+                  onClick={() =>
+                    patchSelected({ rotation: ((selected.data.rotation ?? 0) + 90) % 360 })
+                  }
                 >
                   <RotateCw className="size-3" /> Rotate
                 </Button>
@@ -890,10 +906,8 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
 
               {partition.overlaps.length > 0 ? (
                 <p className="text-[10px] leading-snug text-amber-500">
-                  {partition.overlaps
-                    .map((o) => `${o.aLabel} and ${o.bLabel} overlap`)
-                    .join("; ")}
-                  . Parts in the shared area go to the first region.
+                  {partition.overlaps.map((o) => `${o.aLabel} and ${o.bLabel} overlap`).join("; ")}.
+                  Parts in the shared area go to the first region.
                 </p>
               ) : null}
 

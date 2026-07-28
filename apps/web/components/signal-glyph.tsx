@@ -63,10 +63,7 @@ export function buildSignalField(
       if (t < 0.08) {
         row.push({ char: " ", opacity: 0 });
       } else {
-        const idx = Math.min(
-          GLYPH_CHARS.length - 1,
-          1 + Math.floor(t * (GLYPH_CHARS.length - 2)),
-        );
+        const idx = Math.min(GLYPH_CHARS.length - 1, 1 + Math.floor(t * (GLYPH_CHARS.length - 2)));
         row.push({
           char: GLYPH_CHARS[idx]!,
           opacity: 0.35 + t * 0.65,

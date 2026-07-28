@@ -106,9 +106,7 @@ export async function assembleProductWithZooMcp(params: {
   const assemblyZooPath = toZooKclPath(params.assembly.path);
   files[assemblyZooPath] = rewriteKclModuleImportPaths(seed);
 
-  const prompt =
-    params.prompt?.trim() ||
-    defaultAssemblyIteratePrompt(usable.map((p) => p.path));
+  const prompt = params.prompt?.trim() || defaultAssemblyIteratePrompt(usable.map((p) => p.path));
 
   const iterated = await params.cad.iterateCadProject(files, prompt, {
     focusPath: assemblyZooPath,

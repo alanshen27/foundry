@@ -1,10 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import {
-  CURSOR_STALE_MS,
-  type CursorHandle,
-  type CursorPort,
-  type CursorState,
-} from "./cursors";
+import { CURSOR_STALE_MS, type CursorHandle, type CursorPort, type CursorState } from "./cursors";
 
 export type SupabaseCursorConfig = {
   url: string;

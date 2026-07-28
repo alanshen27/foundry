@@ -1,7 +1,4 @@
-import {
-  footprintDef,
-  type PcbDoc,
-} from "@/lib/pcb/doc";
+import { footprintDef, type PcbDoc } from "@/lib/pcb/doc";
 import { EMPTY_CIRCUIT, type CircuitDoc } from "@/lib/circuit/catalog";
 import { buildRatsnest } from "@/lib/pcb/netlist";
 
@@ -94,10 +91,7 @@ export function PcbRenderView({
         if (!def) return null;
         const copper = fp.side === "front" ? "#c04040" : "#6060d0";
         return (
-          <g
-            key={fp.id}
-            transform={`translate(${fp.xMm} ${fp.yMm}) rotate(${fp.rotationDeg})`}
-          >
+          <g key={fp.id} transform={`translate(${fp.xMm} ${fp.yMm}) rotate(${fp.rotationDeg})`}>
             <rect
               x={-def.bodyWMm / 2}
               y={-def.bodyHMm / 2}
@@ -139,8 +133,8 @@ export function PcbRenderView({
         fontSize={1.4}
         fontFamily="ui-monospace, monospace"
       >
-        {w}×{h}×{doc.board.thicknessMm} mm · {doc.footprints.length} footprints · {nets.length}{" "}
-        nets · {routedCount}/{totalConnections} routed · {airwires.length} airwires
+        {w}×{h}×{doc.board.thicknessMm} mm · {doc.footprints.length} footprints · {nets.length} nets
+        · {routedCount}/{totalConnections} routed · {airwires.length} airwires
       </text>
       {issues.unlinkedParts.length + issues.unmappedPins.length > 0 ? (
         <text

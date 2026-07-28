@@ -6,9 +6,11 @@ import {
   createOffBroadcastPort,
   createSupabaseBroadcastPort,
   siteBroadcastChannel,
+  sitePresenceChannel,
   type BroadcastPort,
 } from "@foundry/realtime";
 import {
+  AlertTriangle,
   ArrowLeft,
   Code2,
   ExternalLink,
@@ -26,7 +28,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { FoundryMarkIcon } from "@/components/foundry-mark";
+import { PresenceBar } from "@/components/presence-bar";
 import { CommercePanel } from "@/components/sites/commerce-panel";
+import { CollaborativeSitePrompt } from "@/components/sites/collaborative-site-prompt";
 import { SiteCodeWorkspace } from "@/components/sites/site-code-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -81,6 +85,7 @@ export function SiteEditorWorkspace({
   siteName,
   siteSlug,
   workspaceSlug,
+  user,
   canEdit,
   canPublish,
   canManageCommerce,
@@ -89,6 +94,7 @@ export function SiteEditorWorkspace({
   siteName: string;
   siteSlug: string;
   workspaceSlug: string;
+  user: { id: string; name: string; avatarUrl?: string | null };
   canEdit: boolean;
   canPublish: boolean;
   canManageCommerce: boolean;
@@ -96,6 +102,14 @@ export function SiteEditorWorkspace({
   const utils = trpc.useUtils();
   const site = trpc.site.get.useQuery({ id: siteId });
   const workspace = trpc.site.workspace.useQuery({ id: siteId });
+  const collabQuery = trpc.collaboration.siteSession.useQuery(
+    { siteId },
+    {
+      staleTime: 30 * 60 * 1000,
+      refetchOnWindowFocus: false,
+    },
+  );
+  const collabSession = collabQuery.data ?? null;
   const [view, setView] = useState<EditorView>("preview");
   const [previewSize, setPreviewSize] = useState<PreviewSize>("desktop");
   const [prompt, setPrompt] = useState("");
@@ -240,6 +254,8 @@ export function SiteEditorWorkspace({
     { id: "commerce", label: "Commerce", icon: ShoppingBag },
   ];
 
+  const productFake = Boolean(currentSite?.simulated) || currentSite?.productVerified === false;
+
   return (
     <div className="bg-background flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <header className="bg-card flex h-12 shrink-0 items-center gap-2 border-b px-3">
@@ -253,7 +269,9 @@ export function SiteEditorWorkspace({
         </Button>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="truncate font-mono text-sm font-medium tracking-[-0.02em]">{siteName}</h1>
+            <h1 className="truncate font-mono text-sm font-medium tracking-[-0.02em]">
+              {siteName}
+            </h1>
             <Badge
               variant={currentSite?.status === "PUBLISHED" ? "default" : "secondary"}
               className="rounded-none"
@@ -263,6 +281,11 @@ export function SiteEditorWorkspace({
             {currentSite?.simulated ? (
               <Badge variant="destructive" className="rounded-none">
                 SIMULATED
+              </Badge>
+            ) : null}
+            {currentSite?.productVerified === false ? (
+              <Badge variant="destructive" className="rounded-none">
+                UNVERIFIED
               </Badge>
             ) : null}
           </div>
@@ -289,6 +312,15 @@ export function SiteEditorWorkspace({
         </nav>
 
         <div className="ml-auto flex items-center gap-1.5">
+          <PresenceBar
+            channel={sitePresenceChannel(siteId)}
+            self={{ userId: user.id, name: user.name, avatarUrl: user.avatarUrl }}
+          />
+          {collabSession ? (
+            <Badge variant="secondary" className="hidden rounded-none sm:inline-flex">
+              Multiplayer
+            </Badge>
+          ) : null}
           {currentSite?.builderUrl ? (
             <Button
               variant="ghost"
@@ -392,54 +424,64 @@ export function SiteEditorWorkspace({
             ) : null}
           </div>
 
-          <form
-            className="shrink-0 border-t p-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              sendPrompt(prompt);
-            }}
-          >
-            {error ? (
-              <p className="text-destructive mb-2 border border-current/20 px-2 py-1.5 font-mono text-[10px]">
-                {error}
-              </p>
-            ) : null}
-            <div className="bg-background focus-within:border-primary border p-2 transition-colors">
-              <Textarea
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder="Ask Foundry to change the site…"
-                rows={3}
-                maxLength={2000}
-                disabled={!canEdit || busy}
-                className="min-h-16 resize-none rounded-none border-0 bg-transparent p-1 shadow-none focus-visible:ring-0"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    sendPrompt(prompt);
-                  }
-                }}
-              />
-              <div className="mt-1 flex items-center justify-between">
-                <span className="text-muted-foreground px-1 font-mono text-[9px]">
-                  Enter to send · Shift+Enter for newline
-                </span>
-                <Button
-                  type="submit"
-                  size="icon-sm"
-                  className="rounded-none"
-                  disabled={!canEdit || busy || !prompt.trim()}
-                  aria-label="Send site revision"
-                >
-                  {revise.isPending ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Send className="size-3.5" />
-                  )}
-                </Button>
+          {collabQuery.isFetched && collabSession ? (
+            <CollaborativeSitePrompt
+              session={collabSession}
+              disabled={!canEdit || busy}
+              sending={revise.isPending || Boolean(optimisticUser)}
+              error={error}
+              onSend={sendPrompt}
+            />
+          ) : (
+            <form
+              className="shrink-0 border-t p-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                sendPrompt(prompt);
+              }}
+            >
+              {error ? (
+                <p className="text-destructive mb-2 border border-current/20 px-2 py-1.5 font-mono text-[10px]">
+                  {error}
+                </p>
+              ) : null}
+              <div className="bg-background focus-within:border-primary border p-2 transition-colors">
+                <Textarea
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  placeholder="Ask Foundry to change the site…"
+                  rows={3}
+                  maxLength={2000}
+                  disabled={!canEdit || busy}
+                  className="min-h-16 resize-none rounded-none border-0 bg-transparent p-1 shadow-none focus-visible:ring-0"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      sendPrompt(prompt);
+                    }
+                  }}
+                />
+                <div className="mt-1 flex items-center justify-between">
+                  <span className="text-muted-foreground px-1 font-mono text-[9px]">
+                    Enter to send · Shift+Enter for newline
+                  </span>
+                  <Button
+                    type="submit"
+                    size="icon-sm"
+                    className="rounded-none"
+                    disabled={!canEdit || busy || !prompt.trim()}
+                    aria-label="Send site revision"
+                  >
+                    {revise.isPending ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Send className="size-3.5" />
+                    )}
+                  </Button>
+                </div>
               </div>
-            </div>
-          </form>
+            </form>
+          )}
         </aside>
 
         <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -462,6 +504,24 @@ export function SiteEditorWorkspace({
 
           {view === "preview" ? (
             <>
+              {productFake ? (
+                <div
+                  role="alert"
+                  className="border-destructive/40 bg-destructive text-destructive-foreground flex shrink-0 items-start gap-2.5 border-b px-3 py-2.5"
+                >
+                  <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                  <div className="min-w-0 font-mono text-[11px] leading-relaxed tracking-[0.02em]">
+                    <p className="font-medium tracking-[0.08em] uppercase">
+                      {currentSite?.simulated ? "SIMULATED site" : "UNVERIFIED product"}
+                    </p>
+                    <p className="mt-0.5 opacity-90">
+                      {currentSite?.simulated
+                        ? "This page is fake demo output — it was not generated by the real builder and must not be published or sold as a real product."
+                        : "Linked product has not passed Verify. Specs are design targets, not proven results — do not present this site as a verified product."}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
               <div className="bg-card flex h-10 shrink-0 items-center justify-center border-b px-3">
                 <div className="bg-muted flex items-center border p-0.5">
                   {(
@@ -557,8 +617,28 @@ export function SiteEditorWorkspace({
           ) : null}
 
           {view === "commerce" ? (
-            <div className="min-h-0 flex-1">
-              <CommercePanel siteId={siteId} canManage={canManageCommerce} />
+            <div className="flex min-h-0 flex-1 flex-col">
+              {productFake ? (
+                <div
+                  role="alert"
+                  className="border-destructive/40 bg-destructive text-destructive-foreground flex shrink-0 items-start gap-2.5 border-b px-3 py-2.5"
+                >
+                  <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                  <div className="min-w-0 font-mono text-[11px] leading-relaxed">
+                    <p className="font-medium tracking-[0.08em] uppercase">
+                      Selling blocked for fake / unverified product
+                    </p>
+                    <p className="mt-0.5 opacity-90">
+                      {currentSite?.simulated
+                        ? "SIMULATED sites cannot connect a real store or activate listings."
+                        : "Approve Verify on the linked project before presenting this as a sellable product."}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+              <div className="min-h-0 flex-1 overflow-auto">
+                <CommercePanel siteId={siteId} canManage={canManageCommerce} />
+              </div>
             </div>
           ) : null}
         </section>

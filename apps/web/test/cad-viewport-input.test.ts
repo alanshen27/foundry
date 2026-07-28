@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  dragInteractionFor,
-  toStreamPoint,
-  wheelZoomMagnitude,
-} from "@/lib/cad/viewport-input";
+import { dragInteractionFor, toStreamPoint, wheelZoomMagnitude } from "@/lib/cad/viewport-input";
 
 const NO_MODS = { shift: false, alt: false, ctrl: false, meta: false };
 

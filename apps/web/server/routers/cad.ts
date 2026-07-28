@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { prisma } from "@foundry/db";
-import {
-  cadAssetFormatFromName,
-  importAssetPath,
-  type CadAssetFormat,
-} from "@foundry/cad";
+import { cadAssetFormatFromName, importAssetPath, type CadAssetFormat } from "@foundry/cad";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";

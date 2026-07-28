@@ -7,8 +7,16 @@ function secretMaterial(): string {
   return env.AUTH_SECRET ?? env.DATABASE_URL;
 }
 
-export function mintCodeFileCollabToken(claims: Omit<CollabClaims, "exp">): string {
-  return mintCollabToken(claims, secretMaterial());
+export function mintCodeFileCollabToken(
+  claims: Omit<CollabClaims, "exp" | "kind"> & { resourceId: string },
+): string {
+  return mintCollabToken({ ...claims, kind: "codefile" }, secretMaterial());
+}
+
+export function mintSitePromptCollabToken(
+  claims: Omit<CollabClaims, "exp" | "kind"> & { resourceId: string },
+): string {
+  return mintCollabToken({ ...claims, kind: "siteprompt" }, secretMaterial());
 }
 
 export function getCollabWebsocketUrl(): string | null {

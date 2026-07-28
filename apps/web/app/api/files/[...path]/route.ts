@@ -8,10 +8,7 @@ import { getObjectStorage } from "@/server/storage";
  * port to authenticated project members. Keys look like
  * `projects/{projectId}/...`.
  */
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
+export async function GET(_request: Request, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params;
   const key = path.map(decodeURIComponent).join("/");
   if (key.includes("..") || path[0] !== "projects" || !path[1]) {

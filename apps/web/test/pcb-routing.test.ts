@@ -30,8 +30,26 @@ function seriesBoard(extra: Record<string, unknown> = {}): PcbDoc {
   return normalizePcbDoc({
     board: { widthMm: 80, heightMm: 50, thicknessMm: 1.6, cornerRadiusMm: 1 },
     footprints: [
-      { id: "f1", libraryId: "R_0603", refDes: "R1", xMm: 10, yMm: 10, rotationDeg: 0, side: "front", partId: "r1" },
-      { id: "f2", libraryId: "R_0603", refDes: "R2", xMm: 20, yMm: 10, rotationDeg: 0, side: "front", partId: "r2" },
+      {
+        id: "f1",
+        libraryId: "R_0603",
+        refDes: "R1",
+        xMm: 10,
+        yMm: 10,
+        rotationDeg: 0,
+        side: "front",
+        partId: "r1",
+      },
+      {
+        id: "f2",
+        libraryId: "R_0603",
+        refDes: "R2",
+        xMm: 20,
+        yMm: 10,
+        rotationDeg: 0,
+        side: "front",
+        partId: "r2",
+      },
     ],
     ...extra,
   });
@@ -62,7 +80,15 @@ describe("normalizePcbDoc — copper", () => {
       tracks: [
         { id: "a", layer: "F.Cu", widthMm: 0.25, points: [{ xMm: 1, yMm: 1 }] },
         // Duplicate vertices collapse to one point, so this is not copper either.
-        { id: "b", layer: "F.Cu", widthMm: 0.25, points: [{ xMm: 2, yMm: 2 }, { xMm: 2, yMm: 2 }] },
+        {
+          id: "b",
+          layer: "F.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: 2, yMm: 2 },
+            { xMm: 2, yMm: 2 },
+          ],
+        },
       ],
     });
     expect(doc.tracks).toHaveLength(0);
@@ -77,7 +103,17 @@ describe("normalizePcbDoc — copper", () => {
 
   it("defaults an unknown layer to F.Cu", () => {
     const doc = seriesBoard({
-      tracks: [{ id: "a", layer: "In1.Cu", widthMm: 0.25, points: [{ xMm: 1, yMm: 1 }, { xMm: 2, yMm: 2 }] }],
+      tracks: [
+        {
+          id: "a",
+          layer: "In1.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: 1, yMm: 1 },
+            { xMm: 2, yMm: 2 },
+          ],
+        },
+      ],
     });
     expect(doc.tracks[0]!.layer).toBe("F.Cu");
   });
@@ -126,8 +162,24 @@ describe("buildCopperGraph", () => {
     // the back and coming up again needs a via at each end of the B.Cu run.
     const doc = seriesBoard({
       tracks: [
-        { id: "t1", layer: "F.Cu", widthMm: 0.25, points: [{ xMm: 10.75, yMm: 10 }, { xMm: 13, yMm: 10 }] },
-        { id: "t2", layer: "B.Cu", widthMm: 0.25, points: [{ xMm: 13, yMm: 10 }, { xMm: 19.25, yMm: 10 }] },
+        {
+          id: "t1",
+          layer: "F.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: 10.75, yMm: 10 },
+            { xMm: 13, yMm: 10 },
+          ],
+        },
+        {
+          id: "t2",
+          layer: "B.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: 13, yMm: 10 },
+            { xMm: 19.25, yMm: 10 },
+          ],
+        },
       ],
       vias: [
         { id: "v1", xMm: 13, yMm: 10, diameterMm: 0.6, drillMm: 0.3 },
@@ -144,8 +196,24 @@ describe("buildCopperGraph", () => {
   it("does not bridge layers without the vias", () => {
     const doc = seriesBoard({
       tracks: [
-        { id: "t1", layer: "F.Cu", widthMm: 0.25, points: [{ xMm: 10.75, yMm: 10 }, { xMm: 13, yMm: 10 }] },
-        { id: "t2", layer: "B.Cu", widthMm: 0.25, points: [{ xMm: 13, yMm: 10 }, { xMm: 19.25, yMm: 10 }] },
+        {
+          id: "t1",
+          layer: "F.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: 10.75, yMm: 10 },
+            { xMm: 13, yMm: 10 },
+          ],
+        },
+        {
+          id: "t2",
+          layer: "B.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: 13, yMm: 10 },
+            { xMm: 19.25, yMm: 10 },
+          ],
+        },
       ],
     });
     const graph = buildCopperGraph(doc);
@@ -168,8 +236,24 @@ describe("buildCopperGraph", () => {
   it("chains connectivity through touching tracks", () => {
     const doc = seriesBoard({
       tracks: [
-        { id: "t1", layer: "F.Cu", widthMm: 0.25, points: [{ xMm: 10.75, yMm: 10 }, { xMm: 15, yMm: 10 }] },
-        { id: "t2", layer: "F.Cu", widthMm: 0.25, points: [{ xMm: 15, yMm: 10 }, { xMm: 19.25, yMm: 10 }] },
+        {
+          id: "t1",
+          layer: "F.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: 10.75, yMm: 10 },
+            { xMm: 15, yMm: 10 },
+          ],
+        },
+        {
+          id: "t2",
+          layer: "F.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: 15, yMm: 10 },
+            { xMm: 19.25, yMm: 10 },
+          ],
+        },
       ],
     });
     const graph = buildCopperGraph(doc);
@@ -186,10 +270,26 @@ describe("buildCopperGraph", () => {
     const doc = normalizePcbDoc({
       board: { widthMm: 80, heightMm: 50 },
       footprints: [
-        { id: "j1", libraryId: "PinHeader_1x04", refDes: "J1", xMm: 10, yMm: 10, rotationDeg: 0, side: "front" },
+        {
+          id: "j1",
+          libraryId: "PinHeader_1x04",
+          refDes: "J1",
+          xMm: 10,
+          yMm: 10,
+          rotationDeg: 0,
+          side: "front",
+        },
       ],
       tracks: [
-        { id: "t1", layer: "B.Cu", widthMm: 0.25, points: [{ xMm: 10, yMm: 10 }, { xMm: 20, yMm: 10 }] },
+        {
+          id: "t1",
+          layer: "B.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: 10, yMm: 10 },
+            { xMm: 20, yMm: 10 },
+          ],
+        },
       ],
     });
     const graph = buildCopperGraph(doc);
@@ -249,9 +349,36 @@ describe("ratsnest with copper", () => {
     const doc = normalizePcbDoc({
       board: { widthMm: 80, heightMm: 50 },
       footprints: [
-        { id: "f1", libraryId: "R_0603", refDes: "R1", xMm: 10, yMm: 10, rotationDeg: 0, side: "front", partId: "r1" },
-        { id: "f2", libraryId: "R_0603", refDes: "R2", xMm: 20, yMm: 10, rotationDeg: 0, side: "front", partId: "r2" },
-        { id: "f3", libraryId: "R_0603", refDes: "R3", xMm: 40, yMm: 10, rotationDeg: 0, side: "front", partId: "r3" },
+        {
+          id: "f1",
+          libraryId: "R_0603",
+          refDes: "R1",
+          xMm: 10,
+          yMm: 10,
+          rotationDeg: 0,
+          side: "front",
+          partId: "r1",
+        },
+        {
+          id: "f2",
+          libraryId: "R_0603",
+          refDes: "R2",
+          xMm: 20,
+          yMm: 10,
+          rotationDeg: 0,
+          side: "front",
+          partId: "r2",
+        },
+        {
+          id: "f3",
+          libraryId: "R_0603",
+          refDes: "R3",
+          xMm: 40,
+          yMm: 10,
+          rotationDeg: 0,
+          side: "front",
+          partId: "r3",
+        },
       ],
       tracks: [JOINING_TRACK],
     });
@@ -305,11 +432,21 @@ describe("geometry", () => {
     const doc = normalizePcbDoc({
       board: { widthMm: 80, heightMm: 50 },
       footprints: [
-        { id: "f1", libraryId: "R_0603", refDes: "R1", xMm: 10, yMm: 10, rotationDeg: 90, side: "front" },
+        {
+          id: "f1",
+          libraryId: "R_0603",
+          refDes: "R1",
+          xMm: 10,
+          yMm: 10,
+          rotationDeg: 90,
+          side: "front",
+        },
       ],
     });
     const pads = boardPads(doc.footprints);
     // Rotated 90 degrees, the ±0.75 mm pad offset moves from x to y.
-    expect(pads.some((p) => Math.abs(p.yMm - 10.75) < 1e-6 && Math.abs(p.xMm - 10) < 1e-6)).toBe(true);
+    expect(pads.some((p) => Math.abs(p.yMm - 10.75) < 1e-6 && Math.abs(p.xMm - 10) < 1e-6)).toBe(
+      true,
+    );
   });
 });

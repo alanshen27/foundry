@@ -66,8 +66,7 @@ export function insertMention(
 }
 
 export type TextSegment =
-  | { kind: "text"; text: string }
-  | { kind: "mention"; text: string; invokesAi: boolean };
+  { kind: "text"; text: string } | { kind: "mention"; text: string; invokesAi: boolean };
 
 /** Split message text so mentions can be highlighted in the transcript. */
 export function splitMentions(text: string): TextSegment[] {
