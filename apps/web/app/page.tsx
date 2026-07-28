@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { Stage } from "@foundry/domain";
+import { AnimatedSignalGlyph } from "@/components/animated-signal-glyph";
 import { FoundryMark } from "@/components/foundry-mark";
 import { InteractiveDotField } from "@/components/interactive-dot-field";
-import { SignalGlyph } from "@/components/signal-glyph";
 import { STAGE_THEME } from "@/lib/stage-theme";
 import { cn } from "@/lib/utils";
 import { getCurrentUser } from "@/server/session";
@@ -226,12 +226,12 @@ export default async function HomePage() {
               </div>
             </div>
             <div className="flex items-center justify-center lg:col-span-7">
-              <SignalGlyph
+              <AnimatedSignalGlyph
                 seed="foundry-close"
                 rows={18}
                 cols={40}
-                className="max-w-full text-[#faf9f5] opacity-95"
-                monoClassName="text-[clamp(8px,1.3vw,12px)] leading-[1.05] tracking-[0.14em]"
+                fontSize={12}
+                className="opacity-95"
               />
             </div>
           </div>
@@ -261,12 +261,12 @@ function SignalHero() {
       </div>
 
       <div className="relative z-10 flex flex-1 items-center justify-center py-8">
-        <SignalGlyph
+        <AnimatedSignalGlyph
           seed="foundry-pulse"
           rows={30}
           cols={42}
-          className="max-w-full text-[#faf9f5] opacity-95"
-          monoClassName="text-[clamp(9px,1.55vw,13px)] leading-[1.05] tracking-[0.14em]"
+          fontSize={13}
+          className="opacity-95"
         />
       </div>
 

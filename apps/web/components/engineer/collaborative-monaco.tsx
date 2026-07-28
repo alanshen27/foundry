@@ -10,6 +10,7 @@ import { HocuspocusProvider } from "@hocuspocus/provider";
 import * as Y from "yjs";
 import { MonacoBinding } from "y-monaco";
 import { MONACO_YTEXT_KEY, awarenessColorForUser } from "@foundry/collaboration/client";
+import { defineFoundryMonacoThemes } from "@/lib/monaco-theme";
 import { cn } from "@/lib/utils";
 
 export type CollabSession = {
@@ -87,6 +88,7 @@ export function CollaborativeMonaco({ session, language, theme, className }: Pro
         theme={theme}
         language={language}
         defaultValue=""
+        beforeMount={defineFoundryMonacoThemes}
         onMount={onMount}
         options={{
           readOnly: !session.canEdit,

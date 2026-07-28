@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { AnimatedSignalGlyph } from "@/components/animated-signal-glyph";
 import { FolderColorPicker } from "@/components/folder-color-picker";
 import { MatrixCover, MatrixScreen } from "@/components/matrix-cover";
 import { MoveToFolderDialog } from "@/components/move-to-folder-dialog";
@@ -371,31 +372,42 @@ export function WorkspaceFolderBrowser({
       </div>
 
       {empty ? (
-        <div className="border-border bg-card flex flex-col items-center justify-center border px-6 py-16 text-center">
+        <div className="bg-primary text-primary-foreground relative flex flex-col items-center justify-center overflow-hidden px-6 py-16 text-center">
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-40">
+            <AnimatedSignalGlyph
+              seed={`${workspaceSlug}-empty`}
+              rows={14}
+              cols={64}
+              fontSize={11}
+            />
+          </div>
           <div
-            className="bg-primary text-[#faf9f5] mb-4 flex size-16 items-center justify-center"
-            style={{ ["--glyph-void" as string]: "#ff5a00" }}
+            className="relative mb-4 flex size-16 items-center justify-center bg-[#faf9f5] text-primary"
+            style={{ ["--glyph-void" as string]: "#faf9f5" }}
           >
             <FolderGlyph className="size-9" />
           </div>
-          <p className="font-mono text-[13px] font-medium tracking-[-0.02em]">
+          <p className="relative font-mono text-[13px] font-medium tracking-[-0.02em]">
             This folder is empty
           </p>
-          <p className="text-muted-foreground mt-1 max-w-sm text-[13px]">
+          <p className="relative mt-1 max-w-sm text-[13px] opacity-85">
             Create a folder or project to organize work here.
           </p>
-          <div className="mt-4 flex gap-2">
-            <Button
+          <div className="relative mt-4 flex gap-2">
+            <button
               type="button"
-              variant="outline"
-              size="sm"
+              className="border border-[#faf9f5]/40 px-4 py-2 font-mono text-[11px] tracking-[0.1em] uppercase transition-colors hover:border-[#faf9f5]/80"
               onClick={() => setNewFolderOpen(true)}
             >
               New folder
-            </Button>
-            <Button type="button" size="sm" onClick={() => setNewProjectOpen(true)}>
+            </button>
+            <button
+              type="button"
+              className="bg-[#faf9f5] px-4 py-2 font-mono text-[11px] tracking-[0.1em] text-[#0c0c0c] uppercase transition-colors hover:bg-[#faf9f5]/90"
+              onClick={() => setNewProjectOpen(true)}
+            >
               Blank project
-            </Button>
+            </button>
           </div>
         </div>
       ) : (

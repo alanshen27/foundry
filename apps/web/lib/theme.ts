@@ -72,9 +72,9 @@ export function applyThemeToDocument(theme: ThemePreference) {
   root.dataset.accent = theme.accent;
 }
 
-/** Monaco built-in themes keyed to our appearance mode. */
-export function monacoThemeFor(mode: ThemeMode): "vs-dark" | "light" {
-  return mode === "dark" ? "vs-dark" : "light";
+/** Foundry Monaco themes (defined in lib/monaco-theme.ts) keyed to mode. */
+export function monacoThemeFor(mode: ThemeMode): "foundry-dark" | "foundry-light" {
+  return mode === "dark" ? "foundry-dark" : "foundry-light";
 }
 
 /** three.js / CAD viewport surface colors for the active mode. */

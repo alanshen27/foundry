@@ -1,9 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { AnimatedSignalGlyph } from "@/components/animated-signal-glyph";
 import { FoundryMark } from "@/components/foundry-mark";
 import { InteractiveDotField } from "@/components/interactive-dot-field";
-import { SignalGlyph } from "@/components/signal-glyph";
 
 /** Shared Nothing/matrix chrome for auth + invite surfaces. */
 export function AuthShell({
@@ -32,12 +32,7 @@ export function AuthShell({
         <div className="bg-primary text-[#faf9f5] relative h-28 overflow-hidden">
           <InteractiveDotField tone="signal" gap={9} radius={44} />
           <div className="absolute inset-0 flex items-center justify-center">
-            <SignalGlyph
-              seed={glyphSeed}
-              rows={12}
-              cols={52}
-              monoClassName="text-[7px] leading-[1.02] tracking-[0.12em]"
-            />
+            <AnimatedSignalGlyph seed={glyphSeed} rows={12} cols={52} fontSize={7} />
           </div>
         </div>
         <div className="px-5 py-6">

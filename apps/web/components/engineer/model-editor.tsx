@@ -39,6 +39,7 @@ import { cadViewportInput } from "@/lib/cad/viewport-project";
 import { CadViewport } from "@/components/engineer/cad-viewport";
 import { CadToolsPanel } from "@/components/engineer/cad-tools-panel";
 import { useTheme } from "@/components/theme-provider";
+import { defineFoundryMonacoThemes } from "@/lib/monaco-theme";
 import { monacoThemeFor } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
@@ -467,6 +468,7 @@ export function ModelEditor({
               key={`${monacoTheme}-${active?.id ?? "none"}`}
               language={isKcl ? "javascript" : "markdown"}
               theme={monacoTheme}
+              beforeMount={defineFoundryMonacoThemes}
               value={active?.content ?? ""}
               onChange={onChangeContent}
               options={{
