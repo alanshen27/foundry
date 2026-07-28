@@ -1,5 +1,3 @@
-"use client";
-
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { Stage } from "@foundry/domain";
@@ -144,12 +142,12 @@ function SignalHero() {
             <span key={i} className="size-[3px] bg-[#faf9f5]" />
           ))}
         </span>
-        Foundyr
+        Foundry
       </div>
 
       <div className="relative z-10 flex flex-1 items-center justify-center py-6">
         <SignalGlyph
-          seed="foundyr-pulse"
+          seed="foundry-pulse"
           rows={28}
           cols={40}
           className="max-w-full text-[#faf9f5]"
