@@ -25,6 +25,13 @@ const serverEnvSchema = z
       const trimmed = value.trim();
       return trimmed.length > 0 ? trimmed : undefined;
     }, z.string().min(1).optional()),
+    // v0 Platform API — generates, previews, and deploys storefront sites.
+    // Unset falls back to a clearly-labeled SIMULATED builder (dev/e2e only).
+    V0_API_KEY: z.preprocess((value) => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    }, z.string().min(1).optional()),
     // Optional: land signed-in users on this workspace slug when they are a member.
     FOUNDRY_DEFAULT_WORKSPACE_SLUG: z.preprocess((value) => {
       if (typeof value !== "string") return undefined;
