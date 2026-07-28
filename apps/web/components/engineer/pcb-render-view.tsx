@@ -57,6 +57,20 @@ export function PcbRenderView({
           opacity={0.6}
         />
       ))}
+      {/* Pours, drawn as a translucent wash: the copilot only needs to see
+          where copper is, not the exact cleared outline. */}
+      {doc.zones.map((zone) => (
+        <polygon
+          key={zone.id}
+          points={zone.points.map((p) => `${p.xMm},${p.yMm}`).join(" ")}
+          fill={zone.layer === "F.Cu" ? "#c04040" : "#6060d0"}
+          fillOpacity={0.22}
+          stroke={zone.layer === "F.Cu" ? "#c04040" : "#6060d0"}
+          strokeWidth={0.12}
+          strokeDasharray="0.6 0.4"
+        />
+      ))}
+
       {/* Routed copper, under the footprints so pads stay legible. */}
       {doc.tracks.map((track) => (
         <path

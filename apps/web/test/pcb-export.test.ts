@@ -180,8 +180,11 @@ describe("fabricationFiles", () => {
     expect(files.map((f) => f.name)).toEqual([
       "demo-F_Cu.gbr",
       "demo-B_Cu.gbr",
-      "demo-Edge_Cuts.gbr",
+      "demo-F_Mask.gbr",
+      "demo-B_Mask.gbr",
+      "demo-F_Paste.gbr",
       "demo-F_SilkS.gbr",
+      "demo-Edge_Cuts.gbr",
       "demo.drl",
     ]);
     expect(files.every((f) => f.contents.length > 0)).toBe(true);

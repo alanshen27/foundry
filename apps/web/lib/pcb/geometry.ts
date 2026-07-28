@@ -212,6 +212,46 @@ export function segmentPadDistance(
   return best;
 }
 
+/**
+ * Ray-casting point-in-polygon. Counts crossings of a ray heading +X; an odd
+ * count means inside. Points exactly on an edge are not guaranteed either way,
+ * which is fine — callers pair this with a clearance margin.
+ */
+export function pointInPolygon(polygon: PcbPoint[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i]!;
+    const b = polygon[j]!;
+    const straddles = a.yMm > y !== b.yMm > y;
+    if (!straddles) continue;
+    // X of the edge where it crosses this row.
+    const crossX = ((b.xMm - a.xMm) * (y - a.yMm)) / (b.yMm - a.yMm) + a.xMm;
+    if (x < crossX) inside = !inside;
+  }
+  return inside;
+}
+
+/** Shortest distance from a point to a closed polygon's boundary. */
+export function pointPolygonEdgeDistance(polygon: PcbPoint[], x: number, y: number): number {
+  let best = Infinity;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i]!;
+    const b = polygon[j]!;
+    best = Math.min(best, pointSegmentDistance(x, y, a.xMm, a.yMm, b.xMm, b.yMm));
+  }
+  return best;
+}
+
+/**
+ * Signed distance into a polygon: positive inside (distance to the nearest
+ * edge), negative outside. Lets callers require a feature be not merely inside
+ * a pour but far enough in to actually be surrounded by copper.
+ */
+export function polygonDepth(polygon: PcbPoint[], x: number, y: number): number {
+  const edge = pointPolygonEdgeDistance(polygon, x, y);
+  return pointInPolygon(polygon, x, y) ? edge : -edge;
+}
+
 /** Segments of a polyline, as flat [ax, ay, bx, by] tuples. */
 export function polylineSegments(points: PcbPoint[]): [number, number, number, number][] {
   const out: [number, number, number, number][] = [];

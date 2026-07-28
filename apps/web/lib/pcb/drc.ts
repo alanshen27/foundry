@@ -15,6 +15,7 @@
 
 import { footprintDef, type PcbDoc, type PcbFootprint } from "@/lib/pcb/doc";
 import {
+  pointInPolygon,
   pointSegmentDistance,
   polylineSegments,
   segmentPadDistance,
@@ -37,7 +38,9 @@ export type DrcViolation = {
     | "track-width"
     | "annular-ring"
     | "dangling-track"
-    | "courtyard-overlap";
+    | "courtyard-overlap"
+    | "zone-no-net"
+    | "zone-off-board";
   severity: DrcSeverity;
   message: string;
   /** Where to point the camera, in board millimetres. */
@@ -331,11 +334,61 @@ function checkDangling(doc: PcbDoc, graph: CopperGraph): DrcViolation[] {
       });
       if (touchesTrack) continue;
 
+      // Ending inside a pour on the same net is a connection, not a loose end.
+      const touchesZone = doc.zones.some(
+        (zone) =>
+          zone.layer === track.layer &&
+          zone.net !== undefined &&
+          zone.net === track.net &&
+          pointInPolygon(zone.points, end.xMm, end.yMm),
+      );
+      if (touchesZone) continue;
+
       out.push({
         rule: "dangling-track",
         severity: "warning",
         message: `Track end on ${track.layer} connects to nothing.`,
         atMm: { xMm: end.xMm, yMm: end.yMm },
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Zone problems the pour itself cannot express. Copper-to-copper clearance is
+ * not checked for pours because the renderers subtract foreign copper by
+ * construction — a pour cannot violate the clearance it is drawn with.
+ */
+function checkZones(doc: PcbDoc): DrcViolation[] {
+  const out: DrcViolation[] = [];
+  const { widthMm, heightMm } = doc.board;
+
+  for (const zone of doc.zones) {
+    const centre = {
+      xMm: zone.points.reduce((s, p) => s + p.xMm, 0) / zone.points.length,
+      yMm: zone.points.reduce((s, p) => s + p.yMm, 0) / zone.points.length,
+    };
+
+    if (!zone.net) {
+      out.push({
+        rule: "zone-no-net",
+        severity: "warning",
+        message: `Pour on ${zone.layer} has no net, so it connects nothing.`,
+        atMm: centre,
+      });
+    }
+
+    const outside = zone.points.some(
+      (p) => p.xMm < 0 || p.yMm < 0 || p.xMm > widthMm || p.yMm > heightMm,
+    );
+    if (outside) {
+      out.push({
+        rule: "zone-off-board",
+        severity: "warning",
+        message: `Pour on ${zone.layer} extends past the board outline and will be cut off.`,
+        atMm: centre,
       });
     }
   }
@@ -402,6 +455,7 @@ export function runDrc(doc: PcbDoc, ratsnest: Ratsnest, copper?: CopperGraph): D
     ...checkFeatureSizes(doc),
     ...checkDangling(doc, graph),
     ...checkCourtyards(doc),
+    ...checkZones(doc),
   ];
 
   if (ratsnest.airwires.length > 0) {

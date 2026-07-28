@@ -176,6 +176,29 @@ const pcbSchema = z.object({
     .describe(
       "Plated through-holes joining F.Cu and B.Cu. A track changing layers needs a via at the changeover point, and both tracks must end exactly on it.",
     ),
+  zones: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(60).optional(),
+        net: z
+          .string()
+          .max(60)
+          .optional()
+          .describe("Net to pour, almost always GND. A pour with no net connects nothing."),
+        layer: z.enum(["F.Cu", "B.Cu"]).default("F.Cu"),
+        points: z
+          .array(z.object({ xMm: z.number(), yMm: z.number() }))
+          .min(3)
+          .max(200)
+          .describe("Outline polygon in board mm. Inset from the edge by at least the clearance."),
+        clearanceMm: z.number().min(0.02).max(5).optional(),
+      }),
+    )
+    .max(20)
+    .optional()
+    .describe(
+      "Copper pours. A pour connects every pad of its net that it fully surrounds and clears around everything else, so a GND pour removes most GND routing. Omit to leave existing pours untouched.",
+    ),
   rules: z
     .object({
       clearanceMm: z.number().min(0.02).max(5).default(0.2),
@@ -943,7 +966,9 @@ export function buildProjectTools(ctx: ToolContext) {
     save_pcb: {
       description: `Replace the PCB board layout (Engineer > PCB view): rectangular Edge.Cuts outline in millimetres, footprint placement, and optionally copper routing (tracks + vias). Origin (0,0) is the top-left of the board; +X right, +Y down. Keep footprints inside the outline with ~2mm margin; put mounting holes near corners; connectors (USB, headers) on edges. Map schematic parts to footprints: resistors→R_0603/R_0805, caps→C_0603, LEDs→LED_0805, MCUs/ICs→SOIC-8 or QFN-16-3x3, pin headers→PinHeader_1x04, USB→USB_C_Receptacle, holes→MountingHole_3.2mm. Set partId (and pinMap where pin names differ) on every footprint that comes from the schematic: that derives the netlist and draws the ratsnest, and the result tells you which parts are still unplaced or unmapped. Place connected parts near each other so airwires stay short and uncrossed. ONLY these libraryIds: ${FOOTPRINT_IDS.join(", ")}.
 
-Routing: place first, render, then route. Each track's endpoints must sit exactly on pad centres — get_project_state lists every pad's board position — because connection is decided geometrically, not by the net field. Front-side SMD pads exist only on F.Cu, so a B.Cu track cannot reach one without a via; through-hole pads (pin headers, USB-C tabs) reach both layers. Route on one layer where you can and use B.Cu with vias at both ends only to cross. The result reports routed/total connections and every DRC violation, so re-check it after each call.`,
+Routing: place first, render, then route. Each track's endpoints must sit exactly on pad centres — get_project_state lists every pad's board position — because connection is decided geometrically, not by the net field. Front-side SMD pads exist only on F.Cu, so a B.Cu track cannot reach one without a via; through-hole pads (pin headers, USB-C tabs) reach both layers. Route on one layer where you can and use B.Cu with vias at both ends only to cross. The result reports routed/total connections and every DRC violation, so re-check it after each call.
+
+Pours: a GND zone covering the board is usually the last step and removes most GND routing, since it connects every GND pad it surrounds. Draw it inset from the edge by at least the clearance, and route the signal nets first — a pour clears around whatever copper already exists.`,
       inputSchema: pcbSchema,
       execute: async (input: PcbInput) =>
         guard(ctx, "electronics.edit", async (workspaceId) => {
@@ -965,6 +990,7 @@ Routing: place first, render, then route. Each track's endpoints must sit exactl
             footprints: input.footprints,
             tracks: input.tracks ?? previous?.tracks ?? [],
             vias: input.vias ?? previous?.vias ?? [],
+            zones: input.zones ?? previous?.zones ?? [],
             rules: input.rules ?? previous?.rules,
           });
           await prisma.designDoc.upsert({
@@ -1015,6 +1041,7 @@ Routing: place first, render, then route. Each track's endpoints must sit exactl
             footprints: data.footprints.length,
             tracks: data.tracks.length,
             vias: data.vias.length,
+            zones: data.zones.length,
             nets: nets.length,
             routed: `${routedCount}/${totalConnections}`,
             airwires: airwires.length,

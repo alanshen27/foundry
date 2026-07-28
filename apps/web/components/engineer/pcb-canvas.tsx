@@ -26,6 +26,7 @@ import {
   Download,
   FlipHorizontal2,
   Layers,
+  LayoutGrid,
   MousePointer2,
   Redo2,
   RotateCw,
@@ -56,10 +57,11 @@ import {
   type PcbPoint,
   type PcbSide,
   type PcbTrack,
+  type PcbZone,
 } from "@/lib/pcb/doc";
 import { EMPTY_CIRCUIT, normalizeCircuitDoc } from "@/lib/circuit/catalog";
-import { buildRatsnest, netsByPad } from "@/lib/pcb/netlist";
-import { buildCopperGraph, padAt, trackAt, viaAt } from "@/lib/pcb/routing";
+import { buildRatsnest, netsByPad, padNetMap } from "@/lib/pcb/netlist";
+import { buildCopperGraph, padAt, trackAt, viaAt, zoneAt } from "@/lib/pcb/routing";
 import { runDrc } from "@/lib/pcb/drc";
 import { fabricationFiles } from "@/lib/pcb/export";
 import { trpc } from "@/lib/trpc";
@@ -82,7 +84,7 @@ const PICK_MM = 0.4;
 /** Undo depth. Deep enough for a routing session, bounded so state stays small. */
 const HISTORY_LIMIT = 60;
 
-type Tool = "select" | "route" | "via";
+type Tool = "select" | "route" | "via" | "zone";
 
 type LayerKey = "Edge.Cuts" | "F.Cu" | "B.Cu" | "F.SilkS" | "courtyard" | "ratsnest";
 
@@ -113,6 +115,94 @@ function quantize(p: PcbPoint): PcbPoint {
 
 function trackPath(points: PcbPoint[]): string {
   return points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.xMm} ${p.yMm}`).join(" ");
+}
+
+const polygonPoints = (points: PcbPoint[]) => points.map((p) => `${p.xMm},${p.yMm}`).join(" ");
+
+/**
+ * Pour rendering mirrors the Gerber writer: fill the outline, then knock out
+ * foreign-net copper through an SVG mask rather than computing a polygon
+ * difference. White in the mask keeps copper, black removes it.
+ */
+function ZoneFill({
+  zone,
+  doc,
+  padNetFor,
+  dimmed,
+}: {
+  zone: PcbZone;
+  doc: PcbDoc;
+  padNetFor: (footprintId: string, pin: string) => string | undefined;
+  dimmed: boolean;
+}) {
+  const clearance = zone.clearanceMm ?? doc.rules.clearanceMm;
+  const maskId = `zone-mask-${zone.id}`;
+
+  return (
+    <>
+      <mask id={maskId} maskUnits="userSpaceOnUse">
+        <polygon points={polygonPoints(zone.points)} fill="white" />
+        {doc.tracks
+          .filter((t) => t.layer === zone.layer && !(zone.net && t.net === zone.net))
+          .map((t) => (
+            <path
+              key={t.id}
+              d={trackPath(t.points)}
+              fill="none"
+              stroke="black"
+              strokeWidth={t.widthMm + clearance * 2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ))}
+        {doc.vias
+          .filter((v) => !(zone.net && v.net === zone.net))
+          .map((v) => (
+            <circle
+              key={v.id}
+              cx={v.xMm}
+              cy={v.yMm}
+              r={v.diameterMm / 2 + clearance}
+              fill="black"
+            />
+          ))}
+        {doc.footprints.flatMap((fp) => {
+          const def = footprintDef(fp.libraryId);
+          if (!def) return [];
+          const onLayer = (pad: { plated?: boolean }) =>
+            pad.plated || (fp.side === "front" ? "F.Cu" : "B.Cu") === zone.layer;
+          return def.pads
+            .filter((pad) => onLayer(pad) && !(zone.net && padNetFor(fp.id, pad.pin) === zone.net))
+            .map((pad, i) => (
+              <rect
+                key={`${fp.id}-${i}`}
+                x={pad.xMm - pad.wMm / 2 - clearance}
+                y={pad.yMm - pad.hMm / 2 - clearance}
+                width={pad.wMm + clearance * 2}
+                height={pad.hMm + clearance * 2}
+                rx={pad.shape === "oval" ? Math.min(pad.wMm, pad.hMm) / 2 + clearance : 0}
+                fill="black"
+                transform={`translate(${fp.xMm} ${fp.yMm}) rotate(${fp.rotationDeg})`}
+              />
+            ));
+        })}
+      </mask>
+      <polygon
+        points={polygonPoints(zone.points)}
+        fill={COPPER_COLOR[zone.layer]}
+        opacity={dimmed ? 0.18 : 0.32}
+        mask={`url(#${maskId})`}
+      />
+      <polygon
+        points={polygonPoints(zone.points)}
+        fill="none"
+        stroke={COPPER_COLOR[zone.layer]}
+        strokeWidth={0.1}
+        strokeDasharray="0.6 0.4"
+        opacity={0.7}
+      />
+    </>
+  );
 }
 
 /** Browser download of the generated fabrication set, one file at a time. */
@@ -297,6 +387,10 @@ export function PcbCanvas({
   const [cursorMm, setCursorMm] = useState<PcbPoint | null>(null);
   const [freeAngle, setFreeAngle] = useState(false);
   const [showDrc, setShowDrc] = useState(false);
+  /** Outline being drawn with the zone tool. */
+  const [zoneDraft, setZoneDraft] = useState<PcbPoint[] | null>(null);
+  /** Net to pour into new zones, and the net highlighted on the canvas. */
+  const [activeNet, setActiveNet] = useState<string | null>(null);
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
     "Edge.Cuts": true,
     "F.Cu": true,
@@ -327,6 +421,14 @@ export function PcbCanvas({
   } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const fittedRef = useRef(false);
+  // Mirrors of the in-progress drafts. Committing a track or pour is a side
+  // effect, and React re-invokes state updaters in development to surface
+  // impure ones — doing the commit inside `setDraft` duplicated every piece of
+  // copper. Updaters stay pure; the commit reads the draft from here instead.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const zoneDraftRef = useRef(zoneDraft);
+  zoneDraftRef.current = zoneDraft;
   // Undo stacks hold whole documents. A board is small enough that snapshotting
   // is cheaper to reason about than a command log, and it makes every mutation
   // (drag, route, delete, board resize) undoable through one code path.
@@ -435,16 +537,15 @@ export function PcbCanvas({
 
   const addFootprint = useCallback(
     (libraryId: string) => {
-      pushHistory();
-      setDoc((d) => {
-        const fp = createFootprint(libraryId, d.footprints, {
-          xMm: Math.round(d.board.widthMm / 2),
-          yMm: Math.round(d.board.heightMm / 2),
-        });
-        if (!fp) return d;
-        setSelectedId(fp.id);
-        return { ...d, footprints: [...d.footprints, fp] };
+      const current = docRef.current;
+      const fp = createFootprint(libraryId, current.footprints, {
+        xMm: Math.round(current.board.widthMm / 2),
+        yMm: Math.round(current.board.heightMm / 2),
       });
+      if (!fp) return;
+      pushHistory();
+      setDoc((d) => ({ ...d, footprints: [...d.footprints, fp] }));
+      setSelectedId(fp.id);
       scheduleSave();
     },
     [pushHistory, scheduleSave],
@@ -476,9 +577,12 @@ export function PcbCanvas({
     () => (circuitQuery.data ? normalizeCircuitDoc(circuitQuery.data.data) : EMPTY_CIRCUIT),
     [circuitQuery.data],
   );
+  // Zones pour around a named net, so the graph needs the schematic's pad->net
+  // mapping before it can decide what a pour connects.
+  const padNetKeys = useMemo(() => padNetMap(circuit, doc), [circuit, doc]);
   // One copper graph per document version, shared by the ratsnest and DRC so
   // the two always agree about what is connected.
-  const copper = useMemo(() => buildCopperGraph(doc), [doc]);
+  const copper = useMemo(() => buildCopperGraph(doc, padNetKeys), [doc, padNetKeys]);
   // Recomputed while dragging so airwires track the footprint under the cursor.
   const ratsnest = useMemo(() => buildRatsnest(circuit, doc, copper), [circuit, doc, copper]);
   const padNets = useMemo(() => netsByPad(ratsnest.nets, doc), [ratsnest.nets, doc]);
@@ -554,16 +658,44 @@ export function PcbCanvas({
     [pushHistory, scheduleSave],
   );
 
-  const cancelDraft = useCallback(() => setDraft(null), []);
+  const commitZone = useCallback(
+    (points: PcbPoint[], layer: PcbLayer, net: string | null) => {
+      if (points.length < 3) return;
+      pushHistory();
+      const zone: PcbZone = { id: pcbId("zone"), layer, net: net ?? undefined, points };
+      setDoc((d) => ({ ...d, zones: [...d.zones, zone] }));
+      scheduleSave();
+    },
+    [pushHistory, scheduleSave],
+  );
+
+  /** Close the zone outline being drawn. */
+  const finishZone = useCallback(() => {
+    const points = zoneDraftRef.current;
+    setZoneDraft(null);
+    if (points && points.length >= 3) commitZone(points, activeLayer, activeNet);
+  }, [commitZone, activeLayer, activeNet]);
+
+  const deleteSelectedZone = useCallback(() => {
+    if (!selectedTrackId) return;
+    pushHistory();
+    setDoc((d) => ({ ...d, zones: d.zones.filter((z) => z.id !== selectedTrackId) }));
+    setSelectedTrackId(null);
+    scheduleSave();
+  }, [selectedTrackId, pushHistory, scheduleSave]);
+
+  const cancelDraft = useCallback(() => {
+    setDraft(null);
+    setZoneDraft(null);
+  }, []);
 
   /** Finish the current track at its last committed vertex. */
   const finishDraft = useCallback(() => {
-    setDraft((current) => {
-      if (current && current.points.length >= 2) {
-        commitTrack(current.points, current.layer, current.net);
-      }
-      return null;
-    });
+    const current = draftRef.current;
+    setDraft(null);
+    if (current && current.points.length >= 2) {
+      commitTrack(current.points, current.layer, current.net);
+    }
   }, [commitTrack]);
 
   /**
@@ -572,16 +704,15 @@ export function PcbCanvas({
    * runs meet at the via.
    */
   const viaAndSwitchLayer = useCallback(() => {
-    setDraft((current) => {
-      if (!current) return current;
-      const head = current.points[current.points.length - 1];
-      if (!head) return current;
-      if (current.points.length >= 2) commitTrack(current.points, current.layer, current.net);
-      placeVia(head, current.net);
-      const next: PcbLayer = current.layer === "F.Cu" ? "B.Cu" : "F.Cu";
-      setActiveLayer(next);
-      return { layer: next, net: current.net, points: [head] };
-    });
+    const current = draftRef.current;
+    if (!current) return;
+    const head = current.points[current.points.length - 1];
+    if (!head) return;
+    const next: PcbLayer = current.layer === "F.Cu" ? "B.Cu" : "F.Cu";
+    setDraft({ layer: next, net: current.net, points: [head] });
+    setActiveLayer(next);
+    if (current.points.length >= 2) commitTrack(current.points, current.layer, current.net);
+    placeVia(head, current.net);
   }, [commitTrack, placeVia]);
 
   const onFootprintPointerDown = useCallback(
@@ -611,9 +742,10 @@ export function PcbCanvas({
   const onSvgPointerDown = useCallback(
     (e: ReactPointerEvent<SVGSVGElement>) => {
       // Right-click ends the current run, the way every PCB editor behaves.
-      if (e.button === 2 && draft) {
+      if (e.button === 2 && (draft || zoneDraft)) {
         e.preventDefault();
-        finishDraft();
+        if (draft) finishDraft();
+        else finishZone();
         return;
       }
       if (e.button === 1 || e.button === 2 || e.altKey) {
@@ -650,6 +782,18 @@ export function PcbCanvas({
         return;
       }
 
+      if (tool === "zone" && canEdit) {
+        const point = quantize(mm);
+        // Clicking near the first vertex closes the outline.
+        const first = zoneDraft?.[0];
+        if (first && zoneDraft!.length >= 3 && Math.hypot(first.xMm - point.xMm, first.yMm - point.yMm) < 1) {
+          finishZone();
+          return;
+        }
+        setZoneDraft((points) => [...(points ?? []), point]);
+        return;
+      }
+
       if (tool === "via" && canEdit) {
         const pad = padAt(pads, mm.xMm, mm.yMm, activeLayer, SNAP_MM);
         const at = pad ? { xMm: pad.xMm, yMm: pad.yMm } : quantize(mm);
@@ -657,11 +801,17 @@ export function PcbCanvas({
         return;
       }
 
-      // Select tool: prefer copper under the cursor, else clear the selection.
+      // Select tool: prefer the smallest thing under the cursor. A pad click
+      // also latches its net, which is what drives the highlight.
+      const pad = padAt(pads, mm.xMm, mm.yMm, activeLayer, SNAP_MM);
+      if (pad) {
+        setActiveNet(padNets.get(`${pad.footprintId}:${pad.pin}`) ?? null);
+      }
       const via = viaAt(doc.vias, mm.xMm, mm.yMm, PICK_MM);
       const track = via ? null : trackAt(doc.tracks, mm.xMm, mm.yMm, activeLayer, PICK_MM);
-      if (via || track) {
-        setSelectedTrackId(via?.id ?? track!.id);
+      const zone = via || track ? null : zoneAt(doc.zones, mm.xMm, mm.yMm, activeLayer);
+      if (via || track || zone) {
+        setSelectedTrackId(via?.id ?? track?.id ?? zone!.id);
         setSelectedId(null);
         return;
       }
@@ -672,6 +822,7 @@ export function PcbCanvas({
       pan.x,
       pan.y,
       draft,
+      zoneDraft,
       tool,
       canEdit,
       activeLayer,
@@ -679,11 +830,13 @@ export function PcbCanvas({
       routePoint,
       commitTrack,
       finishDraft,
+      finishZone,
       placeVia,
       padNets,
       pads,
       doc.tracks,
       doc.vias,
+      doc.zones,
     ],
   );
 
@@ -701,8 +854,9 @@ export function PcbCanvas({
       if (tool !== "select") {
         const mm = clientToMm(e.clientX, e.clientY);
         if (mm) {
-          const head = draft?.points[draft.points.length - 1] ?? null;
-          setCursorMm(routePoint(mm, head).point);
+          // A pour outline is not angle-constrained, so it only snaps to grid.
+          if (tool === "zone") setCursorMm(quantize(mm));
+          else setCursorMm(routePoint(mm, draft?.points[draft.points.length - 1] ?? null).point);
         }
       }
       const drag = dragRef.current;
@@ -769,14 +923,19 @@ export function PcbCanvas({
 
       switch (e.key.toLowerCase()) {
         case "escape":
-          if (draft) cancelDraft();
+          if (draft || zoneDraft) cancelDraft();
           else {
             setSelectedId(null);
             setSelectedTrackId(null);
+            setActiveNet(null);
           }
           break;
         case "enter":
           if (draft) finishDraft();
+          else if (zoneDraft) finishZone();
+          break;
+        case "z":
+          if (canEdit) setTool("zone");
           break;
         case "x":
           // Swap routing layer; mid-run this needs a via to stay connected.
@@ -793,11 +952,15 @@ export function PcbCanvas({
         case "s":
           setTool("select");
           setDraft(null);
+          setZoneDraft(null);
           break;
         case "delete":
         case "backspace":
-          if (selectedTrackId) deleteSelectedTrack();
-          else if (selectedId) deleteSelected();
+          if (selectedTrackId) {
+            // One selection id covers tracks, vias and zones.
+            if (docRef.current.zones.some((z) => z.id === selectedTrackId)) deleteSelectedZone();
+            else deleteSelectedTrack();
+          } else if (selectedId) deleteSelected();
           break;
         default:
           break;
@@ -814,6 +977,7 @@ export function PcbCanvas({
     };
   }, [
     draft,
+    zoneDraft,
     canEdit,
     selectedId,
     selectedTrackId,
@@ -821,9 +985,11 @@ export function PcbCanvas({
     redo,
     cancelDraft,
     finishDraft,
+    finishZone,
     viaAndSwitchLayer,
     deleteSelected,
     deleteSelectedTrack,
+    deleteSelectedZone,
   ]);
 
   // Fit board once when the document first loads.
@@ -888,7 +1054,7 @@ export function PcbCanvas({
           ))}
         </div>
         <p className="text-muted-foreground border-t px-2.5 py-2 text-[10px] leading-snug">
-          R route · V via · X swap layer · S select · shift free angle · Esc cancel
+          R route · V via · Z pour · X swap layer · S select · shift free angle · Esc cancel
         </p>
       </aside>
 
@@ -949,6 +1115,34 @@ export function PcbCanvas({
                 >
                   <CircleDot className="size-3" />
                 </Button>
+                <Button
+                  variant={tool === "zone" ? "secondary" : "ghost"}
+                  size="xs"
+                  disabled={!canEdit}
+                  onClick={() => setTool("zone")}
+                  aria-pressed={tool === "zone"}
+                  title="Copper pour (Z) — click to outline, click the first point to close"
+                >
+                  <LayoutGrid className="size-3" />
+                </Button>
+              </div>
+
+              {/* Net picker: sets the pour's net and highlights it on the board. */}
+              <div className="bg-card/90 flex items-center gap-1 rounded-lg border px-1.5 py-0.5 shadow-lg backdrop-blur-md">
+                <span className="text-muted-foreground text-[10px]">Net</span>
+                <select
+                  value={activeNet ?? ""}
+                  onChange={(e) => setActiveNet(e.target.value || null)}
+                  className="bg-transparent font-mono text-[11px] outline-none"
+                  aria-label="Active net"
+                >
+                  <option value="">none</option>
+                  {ratsnest.nets.map((n) => (
+                    <option key={n.name} value={n.name}>
+                      {n.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="bg-card/90 flex items-center gap-0.5 rounded-lg border p-0.5 shadow-lg backdrop-blur-md">
@@ -1012,7 +1206,7 @@ export function PcbCanvas({
                 <Button
                   variant="ghost"
                   size="xs"
-                  onClick={() => downloadFiles(fabricationFiles(doc, "foundry-board"))}
+                  onClick={() => downloadFiles(fabricationFiles(doc, "foundry-board", padNets))}
                   title="Download Gerber + drill files"
                 >
                   <Download className="size-3" />
@@ -1095,9 +1289,25 @@ export function PcbCanvas({
                     })
                   : null}
 
+                {/* Pours sit beneath the tracks they are cleared around. */}
+                {doc.zones.map((zone) =>
+                  layers[zone.layer] ? (
+                    <ZoneFill
+                      key={zone.id}
+                      zone={zone}
+                      doc={doc}
+                      padNetFor={(fpId, pin) => padNets.get(`${fpId}:${pin}`)}
+                      dimmed={zone.layer !== activeLayer}
+                    />
+                  ) : null,
+                )}
+
                 {/* Copper sits under the footprints so pads stay readable. */}
-                {doc.tracks.map((track) =>
-                  layers[track.layer] ? (
+                {doc.tracks.map((track) => {
+                  if (!layers[track.layer]) return null;
+                  const highlighted = activeNet !== null && track.net === activeNet;
+                  const faded = activeNet !== null && !highlighted;
+                  return (
                     <path
                       key={track.id}
                       d={trackPath(track.points)}
@@ -1105,13 +1315,13 @@ export function PcbCanvas({
                       stroke={
                         track.id === selectedTrackId ? "var(--color-primary)" : COPPER_COLOR[track.layer]
                       }
-                      strokeWidth={track.widthMm}
+                      strokeWidth={highlighted ? track.widthMm * 1.4 : track.widthMm}
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      opacity={track.layer === activeLayer ? 1 : 0.55}
+                      opacity={faded ? 0.25 : track.layer === activeLayer ? 1 : 0.55}
                     />
-                  ) : null,
-                )}
+                  );
+                })}
 
                 {doc.vias.map((via) => (
                   <g key={via.id}>
@@ -1162,6 +1372,18 @@ export function PcbCanvas({
                     onPointerDown={onFootprintPointerDown}
                   />
                 ))}
+
+                {/* Zone outline being drawn, closing back to the first vertex. */}
+                {zoneDraft && zoneDraft.length > 0 ? (
+                  <polygon
+                    points={polygonPoints(cursorMm ? [...zoneDraft, cursorMm] : zoneDraft)}
+                    fill={COPPER_COLOR[activeLayer]}
+                    fillOpacity={0.18}
+                    stroke={COPPER_COLOR[activeLayer]}
+                    strokeWidth={0.12}
+                    strokeDasharray="0.5 0.3"
+                  />
+                ) : null}
 
                 {/* Snap indicator, so it is obvious which pad a click will take. */}
                 {tool !== "select" && cursorMm ? (
@@ -1221,11 +1443,15 @@ export function PcbCanvas({
                   ? "Saving…"
                   : draft
                     ? `Routing on ${draft.layer} · click to add a corner · click a pad to finish · V for a via · Esc to cancel`
-                    : tool === "route"
-                      ? `Click a pad to start routing on ${activeLayer}`
-                      : tool === "via"
-                        ? "Click to place a via"
-                        : "Autosaves · drag to place · Alt-drag to pan · scroll to zoom"}
+                    : zoneDraft
+                      ? `Pour outline on ${activeLayer}${activeNet ? ` for ${activeNet}` : " (pick a net)"} · click the first point or press Enter to close`
+                      : tool === "route"
+                        ? `Click a pad to start routing on ${activeLayer}`
+                        : tool === "via"
+                          ? "Click to place a via"
+                          : tool === "zone"
+                            ? `Click to outline a pour on ${activeLayer}`
+                            : "Autosaves · drag to place · Alt-drag to pan · scroll to zoom"}
               </span>
             </div>
           </>
@@ -1371,24 +1597,52 @@ export function PcbCanvas({
           )}
         </div>
 
-        {selectedTrackId ? (
-          <div>
-            <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Copper</h2>
-            <p className="text-muted-foreground mb-1.5 text-[10px]">
-              {doc.tracks.find((t) => t.id === selectedTrackId)
-                ? `Track on ${doc.tracks.find((t) => t.id === selectedTrackId)!.layer}`
-                : "Via"}
-            </p>
-            <Button
-              variant="destructive"
-              size="xs"
-              disabled={!canEdit}
-              onClick={deleteSelectedTrack}
-            >
-              <Trash2 className="size-3" /> Delete
-            </Button>
-          </div>
-        ) : null}
+        {selectedTrackId
+          ? (() => {
+              const track = doc.tracks.find((t) => t.id === selectedTrackId);
+              const zone = doc.zones.find((z) => z.id === selectedTrackId);
+              return (
+                <div>
+                  <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Copper</h2>
+                  <p className="text-muted-foreground mb-1.5 text-[10px]">
+                    {track
+                      ? `Track on ${track.layer}${track.net ? ` · ${track.net}` : ""}`
+                      : zone
+                        ? `Pour on ${zone.layer} · ${zone.net ?? "no net"}`
+                        : "Via"}
+                  </p>
+                  {track ? (
+                    <BoardField
+                      label="Width"
+                      value={track.widthMm}
+                      unit="mm"
+                      step={0.05}
+                      disabled={!canEdit}
+                      onChange={(n) => {
+                        pushHistory(`track:${track.id}:width`);
+                        setDoc((d) => ({
+                          ...d,
+                          tracks: d.tracks.map((t) =>
+                            t.id === track.id ? { ...t, widthMm: Math.max(0.05, n) } : t,
+                          ),
+                        }));
+                        scheduleSave();
+                      }}
+                    />
+                  ) : null}
+                  <Button
+                    variant="destructive"
+                    size="xs"
+                    className="mt-1.5"
+                    disabled={!canEdit}
+                    onClick={zone ? deleteSelectedZone : deleteSelectedTrack}
+                  >
+                    <Trash2 className="size-3" /> Delete
+                  </Button>
+                </div>
+              );
+            })()
+          : null}
 
         {selected ? (
           <div>
@@ -1520,7 +1774,8 @@ export function PcbCanvas({
           {gridStep} mm · {ratsnest.nets.length} net
           {ratsnest.nets.length === 1 ? "" : "s"} · {doc.tracks.length} track
           {doc.tracks.length === 1 ? "" : "s"} · {doc.vias.length} via
-          {doc.vias.length === 1 ? "" : "s"}
+          {doc.vias.length === 1 ? "" : "s"} · {doc.zones.length} pour
+          {doc.zones.length === 1 ? "" : "s"}
           <br />
           {ratsnest.routedCount}/{ratsnest.totalConnections} routed ·{" "}
           {ratsnest.airwires.length} airwire

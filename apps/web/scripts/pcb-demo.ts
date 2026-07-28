@@ -10,7 +10,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CircuitDoc } from "@/lib/circuit/catalog";
 import { normalizePcbDoc } from "@/lib/pcb/doc";
-import { buildRatsnest } from "@/lib/pcb/netlist";
+import { buildRatsnest, padNetMap } from "@/lib/pcb/netlist";
 import { runDrc } from "@/lib/pcb/drc";
 import { fabricationFiles } from "@/lib/pcb/export";
 import { boardPads } from "@/lib/pcb/geometry";
@@ -97,9 +97,30 @@ const shorted = normalizePcbDoc({
 });
 show("3. With a deliberate short", shorted);
 
+// A GND pour: R1.1 and R3.1 are both on N$2, so flooding the board joins them
+// without a track and clears around the N$1 copper.
+const poured = normalizePcbDoc({
+  ...placed,
+  zones: [
+    {
+      id: "z1",
+      net: "N$2",
+      layer: "F.Cu",
+      points: [
+        { xMm: 1, yMm: 1 },
+        { xMm: 39, yMm: 1 },
+        { xMm: 39, yMm: 24 },
+        { xMm: 1, yMm: 24 },
+      ],
+    },
+  ],
+  tracks: [routed.tracks[0]!],
+});
+show("4. N$2 poured instead of routed", poured);
+
 const outDir = join(process.cwd(), ".pcb-demo");
 mkdirSync(outDir, { recursive: true });
-for (const file of fabricationFiles(routed, "demo")) {
+for (const file of fabricationFiles(poured, "demo", padNetMap(circuit, poured))) {
   writeFileSync(join(outDir, file.name), file.contents);
 }
 console.log(`\nFabrication files written to ${outDir}`);

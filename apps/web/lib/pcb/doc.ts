@@ -115,6 +115,30 @@ export type PcbVia = {
 };
 
 /**
+ * A copper pour: a filled polygon tied to one net, almost always GND.
+ *
+ * The filled shape is never computed as a polygon. A pour is the outline minus
+ * every foreign-net feature grown by the clearance, and doing that as a boolean
+ * operation needs a clipping library and a lot of edge cases. Both renderers
+ * subtract instead — SVG through a mask, Gerber through clear polarity — which
+ * is exactly how Gerber expects a pour to be expressed anyway.
+ *
+ * The consequence worth knowing: `points` is the *requested* outline, not the
+ * copper that results. Islands cut off by routing still count as part of the
+ * zone, so the pour cannot be trusted as a connection of last resort.
+ */
+export type PcbZone = {
+  id: string;
+  /** Net to pour. A zone with no net is inert — it connects nothing. */
+  net?: string;
+  layer: PcbLayer;
+  /** Outline in board millimetres; at least three points. */
+  points: PcbPoint[];
+  /** Gap to foreign copper. Falls back to the board clearance rule. */
+  clearanceMm?: number;
+};
+
+/**
  * Manufacturing constraints. Defaults are a conservative 2-layer spec that
  * every low-cost fab (JLCPCB, PCBWay, OSH Park) accepts without review.
  */
@@ -143,6 +167,7 @@ export type PcbDoc = {
   footprints: PcbFootprint[];
   tracks: PcbTrack[];
   vias: PcbVia[];
+  zones: PcbZone[];
   rules: PcbRules;
 };
 
@@ -157,6 +182,7 @@ export const EMPTY_PCB: PcbDoc = {
   footprints: [],
   tracks: [],
   vias: [],
+  zones: [],
   rules: DEFAULT_RULES,
 };
 
@@ -168,6 +194,7 @@ export function emptyPcbDoc(): PcbDoc {
     footprints: [],
     tracks: [],
     vias: [],
+    zones: [],
     rules: { ...DEFAULT_RULES },
   };
 }
@@ -513,6 +540,29 @@ function normalizeVias(raw: unknown, board: PcbBoard): PcbVia[] {
   return out;
 }
 
+function normalizeZones(raw: unknown, board: PcbBoard): PcbZone[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PcbZone[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const z = item as Record<string, unknown>;
+    const points = cleanPoints(z.points, board);
+    // Fewer than three points encloses no area, so there is nothing to pour.
+    if (points.length < 3) continue;
+    out.push({
+      id: typeof z.id === "string" && z.id ? z.id : pcbId("zone"),
+      net: typeof z.net === "string" && z.net.trim() ? z.net.trim().slice(0, 60) : undefined,
+      layer: z.layer === "B.Cu" ? "B.Cu" : "F.Cu",
+      points,
+      clearanceMm:
+        typeof z.clearanceMm === "number" && Number.isFinite(z.clearanceMm)
+          ? clamp(z.clearanceMm, 0.02, 5)
+          : undefined,
+    });
+  }
+  return out;
+}
+
 function normalizeRules(raw: unknown): PcbRules {
   const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   return {
@@ -572,6 +622,7 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
     footprints,
     tracks: normalizeTracks(obj.tracks, board),
     vias: normalizeVias(obj.vias, board),
+    zones: normalizeZones(obj.zones, board),
     rules: normalizeRules(obj.rules),
   };
 }

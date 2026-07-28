@@ -20,8 +20,9 @@ import {
   type PcbLayer,
   type PcbPadDef,
   type PcbFootprint,
+  type PcbPoint,
 } from "@/lib/pcb/doc";
-import { padWorldPosition } from "@/lib/pcb/geometry";
+import { padWorldPosition, polylineSegments } from "@/lib/pcb/geometry";
 
 /** Gerber 3.6 fixed-point: millimetres scaled by 1e6. */
 const SCALE = 1e6;
@@ -102,9 +103,103 @@ function region(doc: PcbDoc, polygon: { xMm: number; yMm: number }[]): string[] 
   return out;
 }
 
-/** One copper layer: tracks as stroked polylines, pads as filled regions. */
-export function gerberCopper(doc: PcbDoc, layer: PcbLayer): string {
+/** Grows a polygon outward from its centroid — a cheap offset for knockouts. */
+function grow(polygon: PcbPoint[], byMm: number): PcbPoint[] {
+  if (byMm <= 0) return polygon;
+  const cx = polygon.reduce((s, p) => s + p.xMm, 0) / polygon.length;
+  const cy = polygon.reduce((s, p) => s + p.yMm, 0) / polygon.length;
+  return polygon.map((p) => {
+    const dx = p.xMm - cx;
+    const dy = p.yMm - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    return { xMm: p.xMm + (dx / len) * byMm, yMm: p.yMm + (dy / len) * byMm };
+  });
+}
+
+/** A rectangle around a segment, used to knock a track out of a pour. */
+function segmentBox(
+  ax: number, ay: number, bx: number, by: number, halfWidth: number,
+): PcbPoint[] {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = Math.hypot(dx, dy) || 1;
+  // Unit normal, scaled to the half width.
+  const nx = (-dy / len) * halfWidth;
+  const ny = (dx / len) * halfWidth;
+  // Extend the ends by the same amount so corners and stubs are covered.
+  const ex = (dx / len) * halfWidth;
+  const ey = (dy / len) * halfWidth;
+  return [
+    { xMm: ax - ex + nx, yMm: ay - ey + ny },
+    { xMm: bx + ex + nx, yMm: by + ey + ny },
+    { xMm: bx + ex - nx, yMm: by + ey - ny },
+    { xMm: ax - ex - nx, yMm: ay - ey - ny },
+  ];
+}
+
+/**
+ * Copper pours for one layer, as a dark region followed by clear-polarity
+ * knockouts for every foreign-net feature.
+ *
+ * Gerber applies polarity in stream order, so `%LPC*%` regions after the pour
+ * cut holes in it — which is why the filled shape never has to be computed as a
+ * polygon difference. Emitted before tracks and pads so those stay dark.
+ */
+function zoneFills(doc: PcbDoc, layer: PcbLayer, padNets: Map<string, string>): string[] {
+  const lines: string[] = [];
+
+  for (const zone of doc.zones) {
+    if (zone.layer !== layer) continue;
+    const clearance = zone.clearanceMm ?? doc.rules.clearanceMm;
+
+    lines.push("%LPD*%", ...region(doc, zone.points));
+    lines.push("%LPC*%");
+
+    for (const track of doc.tracks) {
+      if (track.layer !== layer || (zone.net && track.net === zone.net)) continue;
+      for (const [ax, ay, bx, by] of polylineSegments(track.points)) {
+        lines.push(...region(doc, segmentBox(ax, ay, bx, by, track.widthMm / 2 + clearance)));
+      }
+    }
+
+    for (const via of doc.vias) {
+      if (zone.net && via.net === zone.net) continue;
+      lines.push(...region(doc, circlePolygon(via.xMm, via.yMm, via.diameterMm / 2 + clearance)));
+    }
+
+    for (const fp of doc.footprints) {
+      const def = footprintDef(fp.libraryId);
+      if (!def) continue;
+      for (const pad of def.pads) {
+        if (!padOnLayer(fp, pad, layer)) continue;
+        const net = padNets.get(`${fp.id}:${pad.pin}`);
+        if (zone.net && net === zone.net) continue;
+        lines.push(...region(doc, grow(padPolygon(fp, pad), clearance)));
+      }
+    }
+
+    lines.push("%LPD*%");
+  }
+
+  return lines;
+}
+
+function circlePolygon(cx: number, cy: number, r: number): PcbPoint[] {
+  return Array.from({ length: ARC_STEPS * 2 }, (_, i) => {
+    const a = (2 * Math.PI * i) / (ARC_STEPS * 2);
+    return { xMm: cx + r * Math.cos(a), yMm: cy + r * Math.sin(a) };
+  });
+}
+
+/** One copper layer: pours first, then tracks as strokes and pads as regions. */
+export function gerberCopper(
+  doc: PcbDoc,
+  layer: PcbLayer,
+  /** Pad net names keyed `${footprintId}:${pin}`; only pours need them. */
+  padNets: Map<string, string> = new Map(),
+): string {
   const lines = header(`${layer} copper`);
+  lines.push(...zoneFills(doc, layer, padNets));
 
   // One circular aperture per distinct track width.
   const widths = [...new Set(doc.tracks.filter((t) => t.layer === layer).map((t) => t.widthMm))];
@@ -221,6 +316,51 @@ export function gerberSilk(doc: PcbDoc): string {
 }
 
 /**
+ * Solder mask: an opening over every pad, grown by `expansionMm` so a small
+ * registration error still leaves the whole pad exposed. Mask layers are drawn
+ * as the openings themselves — the fab inverts them.
+ */
+export function gerberMask(doc: PcbDoc, layer: PcbLayer, expansionMm = 0.05): string {
+  const lines = header(`${layer === "F.Cu" ? "F.Mask" : "B.Mask"} solder mask`);
+
+  for (const fp of doc.footprints) {
+    const def = footprintDef(fp.libraryId);
+    if (!def) continue;
+    for (const pad of def.pads) {
+      if (!padOnLayer(fp, pad, layer)) continue;
+      // Mechanical pads carry no net and need no opening.
+      if (!pad.pin) continue;
+      lines.push(...region(doc, grow(padPolygon(fp, pad), expansionMm)));
+    }
+  }
+
+  // Vias are normally tented, so they get no mask opening.
+  lines.push("M02*");
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Solder paste: stencil apertures for SMD pads only. Through-hole pads are
+ * soldered, not paste-printed, so including them would ruin the stencil.
+ */
+export function gerberPaste(doc: PcbDoc, layer: PcbLayer): string {
+  const lines = header(`${layer === "F.Cu" ? "F.Paste" : "B.Paste"} solder paste`);
+
+  for (const fp of doc.footprints) {
+    const def = footprintDef(fp.libraryId);
+    if (!def) continue;
+    for (const pad of def.pads) {
+      if (pad.plated || !pad.pin) continue;
+      if ((fp.side === "front" ? "F.Cu" : "B.Cu") !== layer) continue;
+      lines.push(...region(doc, padPolygon(fp, pad)));
+    }
+  }
+
+  lines.push("M02*");
+  return lines.join("\n") + "\n";
+}
+
+/**
  * Excellon drill file. Plated holes only — vias plus any footprint pad marked
  * `plated`, which is how through-hole pads are flagged in the library.
  */
@@ -260,13 +400,24 @@ export function excellonDrill(doc: PcbDoc): string {
   return lines.join("\n") + "\n";
 }
 
-/** The full fabrication set, ready to zip and send to a board house. */
-export function fabricationFiles(doc: PcbDoc, baseName = "board"): GeneratedFile[] {
+/**
+ * The full fabrication set, ready to zip and send to a board house: both copper
+ * layers, both mask layers, paste, silkscreen, outline and drill. Anything less
+ * than mask + outline + drill gets a quote rejected.
+ */
+export function fabricationFiles(
+  doc: PcbDoc,
+  baseName = "board",
+  padNets: Map<string, string> = new Map(),
+): GeneratedFile[] {
   return [
-    { name: `${baseName}-F_Cu.gbr`, contents: gerberCopper(doc, "F.Cu") },
-    { name: `${baseName}-B_Cu.gbr`, contents: gerberCopper(doc, "B.Cu") },
-    { name: `${baseName}-Edge_Cuts.gbr`, contents: gerberOutline(doc) },
+    { name: `${baseName}-F_Cu.gbr`, contents: gerberCopper(doc, "F.Cu", padNets) },
+    { name: `${baseName}-B_Cu.gbr`, contents: gerberCopper(doc, "B.Cu", padNets) },
+    { name: `${baseName}-F_Mask.gbr`, contents: gerberMask(doc, "F.Cu") },
+    { name: `${baseName}-B_Mask.gbr`, contents: gerberMask(doc, "B.Cu") },
+    { name: `${baseName}-F_Paste.gbr`, contents: gerberPaste(doc, "F.Cu") },
     { name: `${baseName}-F_SilkS.gbr`, contents: gerberSilk(doc) },
+    { name: `${baseName}-Edge_Cuts.gbr`, contents: gerberOutline(doc) },
     { name: `${baseName}.drl`, contents: excellonDrill(doc) },
   ];
 }

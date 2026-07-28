@@ -12,11 +12,13 @@
  * would keep claiming a connection that the copper no longer makes.
  */
 
-import type { PcbDoc, PcbTrack, PcbVia } from "@/lib/pcb/doc";
+import type { PcbDoc, PcbTrack, PcbVia, PcbZone } from "@/lib/pcb/doc";
 import {
   boardPads,
+  pointInPolygon,
   pointPadDistance,
   pointSegmentDistance,
+  polygonDepth,
   polylineSegments,
   segmentPadDistance,
   segmentSegmentDistance,
@@ -55,6 +57,7 @@ export class DisjointSet {
 export const padKey = (footprintId: string, pin: string) => `p:${footprintId}:${pin}`;
 const trackKey = (id: string) => `t:${id}`;
 const viaKey = (id: string) => `v:${id}`;
+const zoneKey = (id: string) => `z:${id}`;
 
 /** Distance from a via's copper annulus to a track's copper. */
 function viaTrackDistance(via: PcbVia, track: PcbTrack): number {
@@ -94,10 +97,24 @@ export type CopperGraph = {
 };
 
 /**
+ * Does this zone actually surround the feature at (x, y)? Being inside the
+ * outline is not enough — a pad sitting in the outline's margin is cleared away
+ * rather than poured around, so require it be inside by at least the clearance.
+ */
+function zoneCovers(zone: PcbZone, x: number, y: number, fallbackClearance: number): boolean {
+  const clearance = zone.clearanceMm ?? fallbackClearance;
+  return polygonDepth(zone.points, x, y) >= clearance;
+}
+
+/**
  * Union-find over every piece of copper on the board. O(n²) in tracks, which is
  * fine for hand-routed boards (hundreds of tracks, not tens of thousands).
+ *
+ * `padNets` maps pad keys to schematic net names and is only needed for zones:
+ * a pour connects the pads on its own net and clears everything else, so
+ * without it the zones contribute no connectivity.
  */
-export function buildCopperGraph(doc: PcbDoc): CopperGraph {
+export function buildCopperGraph(doc: PcbDoc, padNets?: Map<string, string>): CopperGraph {
   const set = new DisjointSet();
   const pads = boardPads(doc.footprints);
 
@@ -145,12 +162,42 @@ export function buildCopperGraph(doc: PcbDoc): CopperGraph {
     }
   }
 
+  // Zones pour around their own net and clear every other, so a same-net
+  // feature sitting inside the outline is joined and a foreign one is not.
+  for (const zone of doc.zones) {
+    if (!zone.net) continue;
+    for (const pad of pads) {
+      if (!pad.layers.includes(zone.layer)) continue;
+      const key = padKey(pad.footprintId, pad.pin);
+      if (padNets?.get(key) !== zone.net) continue;
+      if (zoneCovers(zone, pad.xMm, pad.yMm, doc.rules.clearanceMm)) {
+        set.union(zoneKey(zone.id), key);
+      }
+    }
+    // Stitching vias tie the pour together across layers.
+    for (const via of doc.vias) {
+      if (via.net !== zone.net) continue;
+      if (zoneCovers(zone, via.xMm, via.yMm, doc.rules.clearanceMm)) {
+        set.union(zoneKey(zone.id), viaKey(via.id));
+      }
+    }
+  }
+
   return {
     set,
     pads,
     padsConnected: (a, b) =>
       set.connected(padKey(a.footprintId, a.pin), padKey(b.footprintId, b.pin)),
   };
+}
+
+/** The zone whose outline contains (x, y) on `layer`, for select/delete. */
+export function zoneAt(zones: PcbZone[], x: number, y: number, layer: string): PcbZone | null {
+  for (const zone of zones) {
+    if (zone.layer !== layer) continue;
+    if (pointInPolygon(zone.points, x, y)) return zone;
+  }
+  return null;
 }
 
 /**
