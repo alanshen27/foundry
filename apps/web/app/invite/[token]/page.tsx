@@ -15,7 +15,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   });
 
   return (
-    <AuthShell code="Invite" title="Workspace invite" glyphSeed={`invite-${token.slice(0, 8)}`}>
+    <AuthShell title="Workspace invite" glyphSeed={`invite-${token.slice(0, 8)}`}>
       <div className="mt-6 text-left">
         {!invitation || invitation.status !== "PENDING" ? (
           <p className="text-muted-foreground text-sm">

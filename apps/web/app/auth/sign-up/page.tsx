@@ -50,7 +50,6 @@ function SignUpForm() {
 
   return (
     <AuthShell
-      code="Auth / 02"
       title={confirmSent ? "Check your inbox" : "Create account"}
       subtitle={
         confirmSent
@@ -66,9 +65,8 @@ function SignUpForm() {
               Pending verification
             </p>
             <p className="mt-2 text-sm leading-relaxed">
-              We sent a confirmation link to{" "}
-              <span className="font-mono font-medium">{email}</span>. Open it to
-              activate your account, then sign in.
+              We sent a confirmation link to <span className="font-mono font-medium">{email}</span>.
+              Open it to activate your account, then sign in.
             </p>
           </div>
           <Button
