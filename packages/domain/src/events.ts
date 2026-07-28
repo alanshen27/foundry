@@ -44,6 +44,9 @@ export const DOMAIN_EVENT_TYPES = [
   "VerificationApproved",
   // Launch
   "ReleaseCreated",
+  "SiteCreated",
+  "SiteRevised",
+  "SitePublished",
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
 

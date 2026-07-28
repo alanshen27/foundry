@@ -12,6 +12,7 @@ import { designRouter } from "./design";
 import { codeRouter } from "./code";
 import { chatRouter } from "./chat";
 import { cadRouter } from "./cad";
+import { siteRouter } from "./site";
 
 export const appRouter = router({
   workspace: workspaceRouter,
@@ -27,6 +28,7 @@ export const appRouter = router({
   code: codeRouter,
   chat: chatRouter,
   cad: cadRouter,
+  site: siteRouter,
 });
 
 export type AppRouter = typeof appRouter;

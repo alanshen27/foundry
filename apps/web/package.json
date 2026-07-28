@@ -25,6 +25,7 @@
     "@foundry/domain": "workspace:*",
     "@foundry/observability": "workspace:*",
     "@foundry/realtime": "workspace:*",
+    "@foundry/sites": "workspace:*",
     "@foundry/storage": "workspace:*",
     "@kittycad/kcl-wasm-lib": "^0.1.168",
     "@kittycad/lib": "^4.3.12",
