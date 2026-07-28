@@ -48,7 +48,7 @@ function ComponentPreview({
   const showFavicon = !showImage && Boolean(sourceUrl) && !faviconFailed;
 
   return (
-    <div className="bg-muted/40 flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-md border">
+    <div className="bg-muted/40 flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-none border">
       {showImage ? (
         // eslint-disable-next-line @next/next/no-img-element -- remote distributor URLs; no next/image allowlist
         <img
@@ -90,7 +90,7 @@ export function BomTableSkeleton({ rows = 3 }: { rows?: number }) {
       <div className="flex flex-col gap-2">
         {Array.from({ length: rows }, (_, i) => (
           <div key={i} className="flex items-center gap-3 py-1">
-            <Skeleton className="size-11 shrink-0 rounded-md" />
+            <Skeleton className="size-11 shrink-0 rounded-none" />
             <div className="flex min-w-0 flex-1 flex-col gap-1.5">
               <Skeleton className="h-3.5 w-2/5" />
               <Skeleton className="h-3 w-1/4" />

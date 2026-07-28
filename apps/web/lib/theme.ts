@@ -1,11 +1,11 @@
-/** Bumped to move existing installs onto the lilac-on-navy default. */
-export const THEME_STORAGE_KEY = "foundry-theme-v3";
+/** Bumped for Nothing-inspired orange / industrial default. */
+export const THEME_STORAGE_KEY = "foundry-theme-v4";
 
 export const THEME_MODES = ["dark", "light"] as const;
 export type ThemeMode = (typeof THEME_MODES)[number];
 
 /** Accent ids. Legacy "forge"/"copper" map to signal/ember on read. */
-export const THEME_ACCENTS = ["lilac", "signal", "cobalt", "graphite", "jade", "ember"] as const;
+export const THEME_ACCENTS = ["signal", "ember", "cobalt", "graphite", "jade", "lilac"] as const;
 export type ThemeAccent = (typeof THEME_ACCENTS)[number];
 
 export type ThemePreference = {
@@ -13,29 +13,29 @@ export type ThemePreference = {
   accent: ThemeAccent;
 };
 
-/** Brand default: navy + the lavender from the mark. */
+/** Brand default: off-white / black with signal orange. */
 export const DEFAULT_THEME: ThemePreference = {
-  mode: "dark",
-  accent: "lilac",
+  mode: "light",
+  accent: "signal",
 };
 
 export const ACCENT_LABELS: Record<ThemeAccent, string> = {
-  lilac: "Lilac",
   signal: "Signal",
+  ember: "Rose",
   cobalt: "Cobalt",
   graphite: "Graphite",
   jade: "Jade",
-  ember: "Ember",
+  lilac: "Lilac",
 };
 
 /** Swatch colors for the picker (not the live CSS tokens). */
 export const ACCENT_SWATCHES: Record<ThemeAccent, string> = {
-  lilac: "#CAB7F7",
-  signal: "#0D99FF",
+  signal: "#FF5A00",
+  ember: "#E11D48",
   cobalt: "#5B6CFF",
-  graphite: "#5C6370",
-  jade: "#14B8A6",
-  ember: "#C97840",
+  graphite: "#1A1A1A",
+  jade: "#0D9488",
+  lilac: "#CAB7F7",
 };
 
 const LEGACY_ACCENT: Record<string, ThemeAccent> = {
@@ -81,14 +81,14 @@ export function monacoThemeFor(mode: ThemeMode): "vs-dark" | "light" {
 export function cadSurfaceColors(mode: ThemeMode) {
   if (mode === "dark") {
     return {
-      background: "#1c222e",
-      cell: "#333c4e",
-      section: "#4b566d",
+      background: "#0c0c0c",
+      cell: "#2a2a2a",
+      section: "#3d3d3d",
     };
   }
   return {
-    background: "#f6f5fb",
-    cell: "#d8d4e6",
-    section: "#b5aecc",
+    background: "#f4f2ec",
+    cell: "#d9d6ce",
+    section: "#b8b4aa",
   };
 }

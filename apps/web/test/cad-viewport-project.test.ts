@@ -3,6 +3,7 @@ import {
   cadDoc,
   importMeshAsPart,
   insertPartIntoAssembly,
+  toZooKclPath,
   type CadDoc,
 } from "@/lib/cad/engine";
 import { cadViewportInput } from "@/lib/cad/viewport-project";
@@ -36,11 +37,13 @@ describe("cadViewportInput", () => {
 
     const input = cadViewportInput(doc, assembly.id)!;
 
-    expect(input.entryPath).toBe(assembly.path);
+    expect(input.entryPath).toBe(toZooKclPath(assembly.path));
     expect(input.projectFiles).toBeDefined();
     // The imported part must travel with the entry, or the engine renders nothing.
-    expect(input.projectFiles![part.path]).toContain("width = 10");
-    expect(input.projectFiles![assembly.path]).toContain(`import "${part.path}"`);
+    expect(input.projectFiles![toZooKclPath(part.path)]).toContain("width = 10");
+    expect(input.projectFiles![input.entryPath!]).toContain(
+      `import "${toZooKclPath(part.path)}"`,
+    );
   });
 
   it("keeps every workspace part in the submitted file map", () => {
@@ -49,11 +52,11 @@ describe("cadViewportInput", () => {
     doc = insertPartIntoAssembly(doc, assembly.id, partOf(doc).id);
 
     const input = cadViewportInput(doc, assembly.id)!;
-    const kclPaths = doc.components
+    const zooPaths = doc.components
       .filter((c) => c.kind !== "instructions")
-      .map((c) => c.path);
+      .map((c) => toZooKclPath(c.path));
 
-    expect(Object.keys(input.projectFiles!).sort()).toEqual(kclPaths.sort());
+    expect(Object.keys(input.projectFiles!).sort()).toEqual(zooPaths.sort());
   });
 
   it("exposes mesh assets for a foreign-import part and skips the KCL submit", () => {

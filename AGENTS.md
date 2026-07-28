@@ -6,10 +6,12 @@ rules for coding agents.
 
 ## Current status
 
-Phase 0 (repository and foundations) is implemented. Later phases
-(Product Graph, research hub, Yjs collaboration, ideate pipeline, parts,
-electronics/mechanical editors, GitHub App, agents, verify, launch/commerce)
-are NOT implemented. Do not fake them.
+Phase 0 (repository and foundations) is implemented. Engineer > Code has a
+first Yjs/Hocuspocus multiplayer Monaco slice (`apps/realtime`,
+`packages/collaboration`). Later phases (Product Graph, research hub, full
+Yjs surfaces, ideate pipeline, parts, electronics/mechanical collab editors,
+GitHub App, agents, verify, launch/commerce) are NOT implemented. Do not
+fake them.
 
 ## Hard rules
 
@@ -37,6 +39,9 @@ are NOT implemented. Do not fake them.
   `NEXT_PUBLIC_REALTIME_MODE=off` disables presence.
 - Mechanical CAD: Zoo / KittyCAD behind `CadPort` (`packages/cad`);
   requires `ZOO_API_TOKEN`. Models are KCL; viewport is Zoo WebRTC.
+  Assembly placement uses Zoo multi-file Text-to-CAD iteration (attach
+  existing part KCL + prompt) then Zoo MCP `execute_kcl` / multiview
+  validation via `uvx zoo-mcp` — not Foundry-heuristic or chat-LLM poses.
 - Storefront sites: v0 Platform API behind `SiteBuilderPort`
   (`packages/sites`); requires `V0_API_KEY`. v0 owns generation, preview
   hosting, and deployment — FOUNDRY runs no build containers and stores only

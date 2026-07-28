@@ -26,6 +26,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import {
   ZOOM_BUTTON_STEP,
   attachViewportInput,
@@ -135,6 +136,43 @@ async function sendCmd(rtc: zoo.WebRTC, cmd: zoo.ModelingCmd): Promise<void> {
   await rtc.send(zoo.modeling.modeling_commands_ws.toBSON(req));
 }
 
+/** Pull a human-readable message out of Zoo's various failure shapes. */
+function kclSubmitErrorMessage(result: unknown): string | null {
+  if (!result || typeof result !== "object") return "KCL execution failed";
+  const r = result as Record<string, unknown>;
+
+  if (r.success === false) {
+    if (Array.isArray(r.errors)) {
+      const msgs = (r.errors as { message?: string }[])
+        .map((e) => e.message)
+        .filter(Boolean);
+      if (msgs.length) return msgs.join("; ");
+    }
+    return "KCL execution failed";
+  }
+
+  if (r.error && typeof r.error === "object") {
+    const err = r.error as Record<string, unknown>;
+    const details = err.details;
+    if (typeof details === "string" && details.trim()) return details;
+    if (details && typeof details === "object") {
+      const d = details as Record<string, unknown>;
+      if (typeof d.msg === "string") return d.msg;
+      if (typeof d.message === "string") return d.message;
+      try {
+        return JSON.stringify(details);
+      } catch {
+        // fall through
+      }
+    }
+    if (typeof err.message === "string") return err.message;
+    if (typeof err.kind === "string") return `KCL error (${err.kind})`;
+    return "KCL execution failed";
+  }
+
+  return null;
+}
+
 /** Interaction commands are fire-and-forget, so they reuse the nil id like the SDK. */
 const HOT_PATH_CMD_ID = "00000000-0000-0000-0000-000000000000";
 
@@ -241,7 +279,7 @@ function ToolbarBtn({
       aria-pressed={active}
       disabled={disabled}
       onClick={onClick}
-      className={cn(active && "bg-primary/15 text-primary", className)}
+      className={cn(active && "bg-primary/15 text-primary", "text-primary", className)}
     >
       {children}
     </Button>
@@ -269,7 +307,7 @@ function ViewCube({
       title={label}
       onClick={() => onSelect(id)}
       className={cn(
-        "flex items-center justify-center rounded-md border text-[10px] font-semibold transition-colors",
+        "flex items-center justify-center rounded-none border text-[10px] font-semibold transition-colors",
         "border-border/80 bg-background/90 hover:bg-primary/15 hover:text-primary disabled:opacity-40",
         active === id && "border-primary bg-primary/20 text-primary",
         extra,
@@ -280,7 +318,7 @@ function ViewCube({
   );
 
   return (
-    <div className="bg-card/95 pointer-events-auto absolute right-3 bottom-12 z-20 w-[132px] rounded-xl border p-2.5 shadow-lg backdrop-blur-md">
+    <div className="bg-card/95 pointer-events-auto absolute right-3 bottom-12 z-20 w-[132px] rounded-none border p-2.5 shadow-lg backdrop-blur-md">
       <div className="text-muted-foreground mb-1.5 text-center text-[10px] font-medium tracking-wider uppercase">
         View cube
       </div>
@@ -313,6 +351,7 @@ export function CadViewport({
   engine,
   view = "orbit",
   chrome = true,
+  headless = false,
   meshAssets = [],
   foreignImportOnly = false,
   projectFiles,
@@ -325,8 +364,14 @@ export function CadViewport({
   script: string;
   engine: EngineSession;
   view?: CadView;
-  /** Editor chrome (toolbar / view cube). Off for headless screenshots. */
+  /** Editor chrome (toolbar / view cube). */
   chrome?: boolean;
+  /**
+   * Thumbnail / capture mode: lock a fixed camera after first paint.
+   * Independent of `chrome` so interactive scenes can hide the toolbar
+   * without getting the screenshot camera path.
+   */
+  headless?: boolean;
   /** Margin around the model when framing. Tighten for thumbnails. */
   fitPadding?: number;
   /** Ground grid and axes gizmo. Off for a clean product shot. */
@@ -504,7 +549,7 @@ export function CadViewport({
 
     // Headless capture downscales anyway, so only the interactive viewport pays
     // for the extra pixels a 2x display needs.
-    const maxEdge = chrome ? 2200 : 1440;
+    const maxEdge = headless ? 1440 : 2200;
     const size = streamSize(host, maxEdge);
     const wrap = document.createElement("div");
     wrap.style.cssText = "position:relative;width:100%;height:100%;background:#1c222e";
@@ -623,7 +668,7 @@ export function CadViewport({
       rtc?.deconstructor();
       host.replaceChildren();
     };
-  }, [engine.token, engine.baseUrl, chrome, scenery]);
+  }, [engine.token, engine.baseUrl, headless, scenery]);
 
   // Re-execute KCL on the live session (params / autosave must not reconnect).
   useEffect(() => {
@@ -669,6 +714,17 @@ export function CadViewport({
         const useProject = Boolean(files && entry && Object.keys(files).length > 0);
         let submitResult: unknown;
         if (useProject) {
+          const entrySrc = files![entry!] ?? "";
+          console.groupCollapsed(`[CadViewport] submit project · main=${entry}`);
+          console.log(entrySrc);
+          console.log(
+            "files",
+            Object.keys(files!).sort(),
+            Object.fromEntries(
+              Object.entries(files!).map(([p, s]) => [p, `${s.length} chars`]),
+            ),
+          );
+          console.groupEnd();
           const project = new Map(Object.entries(files!));
           // Runtime accepts Map<path, source>; typings only list string.
           submitResult = await (
@@ -678,29 +734,21 @@ export function CadViewport({
             ) => Promise<unknown>
           )(project, { mainKclPathName: entry! });
         } else {
+          console.groupCollapsed("[CadViewport] submit single script");
+          console.log(kcl);
+          console.groupEnd();
           submitResult = await rtc.executor().submit(kcl);
         }
         if (cancelled || gen !== execGenRef.current) return;
 
-        if (
-          !submitResult ||
-          (typeof submitResult === "object" &&
-            submitResult !== null &&
-            "success" in submitResult &&
-            (submitResult as { success: boolean }).success === false)
-        ) {
-          const message =
-            submitResult &&
-            typeof submitResult === "object" &&
-            "errors" in submitResult &&
-            Array.isArray((submitResult as { errors: { message: string }[] }).errors)
-              ? (submitResult as { errors: { message: string }[] }).errors
-                  .map((e) => e.message)
-                  .join("; ")
-              : "KCL execution failed";
+        console.log("[CadViewport] submit result", submitResult);
+
+        const failMessage = kclSubmitErrorMessage(submitResult);
+        if (failMessage) {
+          console.error("[CadViewport] KCL failed:", failMessage, submitResult);
           setStatus("error");
-          setError(message);
-          onErrorRef.current?.(message);
+          setError(failMessage);
+          onErrorRef.current?.(failMessage);
           onReadyRef.current?.();
           return;
         }
@@ -768,11 +816,11 @@ export function CadViewport({
     projectFiles ? Object.keys(projectFiles).sort().join("|") + Object.values(projectFiles).join("\0").length : "",
   ]);
 
-  // Headless screenshot pages: apply a fixed camera when chrome is off.
+  // Thumbnail / capture pages: lock a fixed camera after first successful paint.
   useEffect(() => {
-    if (chrome || !ready) return;
+    if (!headless || !ready) return;
     void applyView(view);
-  }, [chrome, ready, view, applyView]);
+  }, [headless, ready, view, applyView]);
 
   return (
     <div className="bg-muted/30 absolute inset-0">
@@ -784,7 +832,7 @@ export function CadViewport({
       {chrome && status !== "error" ? (
         <>
           <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center px-3 pt-3">
-            <div className="bg-card/95 pointer-events-auto flex max-w-[min(100%,920px)] items-center gap-0.5 overflow-x-auto rounded-xl border px-1.5 py-1 shadow-lg backdrop-blur-md">
+            <div className="bg-card/95 pointer-events-auto flex max-w-[min(100%,920px)] items-center gap-0.5 overflow-x-auto rounded-none border px-1.5 py-1 shadow-lg backdrop-blur-md">
               <ToolbarBtn
                 title="Orbit"
                 active={navTool === "orbit"}
@@ -881,7 +929,7 @@ export function CadViewport({
 
           <ViewCube active={activeView} disabled={!ready} onSelect={(v) => void applyView(v)} />
 
-          <div className="bg-card/90 text-muted-foreground pointer-events-none absolute bottom-3 left-3 z-20 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-2.5 py-1.5 text-[11px] shadow backdrop-blur-md">
+          <div className="bg-card/90 text-muted-foreground pointer-events-none absolute bottom-3 left-3 z-20 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-none border px-2.5 py-1.5 text-[11px] shadow backdrop-blur-md">
             <span className="text-foreground/85 font-medium">Zoo · mm · Z-up</span>
             <span className="bg-border hidden h-3 w-px sm:block" />
             <span className="hidden sm:inline">Orbit: drag</span>
@@ -895,23 +943,23 @@ export function CadViewport({
       ) : null}
 
       {status !== "running" ? (
-        <div
-          className={cn(
-            "pointer-events-none absolute inset-0 flex items-center justify-center p-6 text-center text-sm",
-            // Keep the live stream visible while re-executing so orbit isn't blanked out.
-            status === "executing" ? "bg-background/35" : "bg-background/55",
-          )}
-        >
-          {error ? (
-            <span className="text-destructive font-mono text-xs leading-relaxed">{error}</span>
-          ) : (
-            <span className="text-muted-foreground">
-              {status === "executing"
-                ? "Building model in Zoo engine…"
-                : "Connecting to Zoo CAD engine…"}
-            </span>
-          )}
-        </div>
+        error ? (
+          <DotMatrixLoader
+            className="pointer-events-none absolute inset-0"
+            tone="signal"
+            label="Zoo engine error"
+          >
+            {error}
+          </DotMatrixLoader>
+        ) : (
+          <DotMatrixLoader
+            className="pointer-events-none absolute inset-0"
+            tone="signal"
+            label={
+              status === "executing" ? "Building model in Zoo engine" : "Connecting to Zoo CAD engine"
+            }
+          />
+        )
       ) : null}
     </div>
   );

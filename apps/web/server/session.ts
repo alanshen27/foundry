@@ -8,6 +8,7 @@ import {
   verifySessionToken,
   type AuthenticatedIdentity,
 } from "@foundry/auth";
+import { createWorkspaceForOwner, defaultWorkspaceName } from "./create-workspace";
 
 /**
  * Resolves the current request's identity through the configured AuthPort
@@ -59,7 +60,7 @@ export async function upsertSupabaseUser(identity: AuthenticatedIdentity): Promi
     });
   }
 
-  return prisma.user.create({
+  const user = await prisma.user.create({
     data: {
       supabaseId: identity.subject,
       email: identity.email,
@@ -67,4 +68,9 @@ export async function upsertSupabaseUser(identity: AuthenticatedIdentity): Promi
       avatarUrl: identity.avatarUrl,
     },
   });
+  await createWorkspaceForOwner({
+    userId: user.id,
+    name: defaultWorkspaceName(user.name),
+  });
+  return user;
 }

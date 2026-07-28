@@ -1,5 +1,9 @@
 import { ApiError, Client, ml, api_calls, type TextToCadResponse } from "@kittycad/lib";
-import type { CadPort, CadResult } from "./port";
+import type { CadPort, CadProjectIterateOptions, CadResult } from "./port";
+import { ZooMcpClient } from "./mcp";
+import { isPlausibleZooOpId } from "./op-id";
+
+export { isPlausibleZooOpId } from "./op-id";
 
 const POLL_MS = 2000;
 /** Zoo text-to-CAD regularly exceeds 5 minutes on cold/queue; allow ~10 minutes. */
@@ -33,22 +37,6 @@ function asError(err: unknown): string {
     return String((err as { message: unknown }).message);
   }
   return err instanceof Error ? err.message : String(err);
-}
-
-/** Models invent nil/repeating UUIDs; those must never hit the Zoo resume path. */
-export function isPlausibleZooOpId(id: string | undefined | null): boolean {
-  if (!id || typeof id !== "string") return false;
-  const uuid =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (!uuid.test(id.trim())) return false;
-  const hex = id.replace(/-/g, "").toLowerCase();
-  // Placeholders like 4444…8444… still validate as UUID v4 — reject low entropy.
-  const counts = new Map<string, number>();
-  for (const ch of hex) counts.set(ch, (counts.get(ch) ?? 0) + 1);
-  const max = Math.max(...counts.values());
-  if (max >= 24) return false;
-  if (hex === "0123456789abcdef0123456789abcdef") return false;
-  return true;
 }
 
 function isNotFoundError(message: string): boolean {
@@ -150,6 +138,22 @@ async function pollTextToCad(
   };
 }
 
+function extractOutputs(op: unknown): Record<string, string> | null {
+  if (!op || typeof op !== "object") return null;
+  const outputs = "outputs" in op ? (op as { outputs?: unknown }).outputs : undefined;
+  if (!outputs || typeof outputs !== "object") return null;
+  const out: Record<string, string> = {};
+  for (const [path, content] of Object.entries(outputs as Record<string, unknown>)) {
+    if (typeof content === "string" && content.trim()) out[path] = content;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function lineCount(text: string): number {
+  if (!text) return 1;
+  return text.split("\n").length;
+}
+
 /** Iteration jobs are async ops; poll the generic async endpoint for those. */
 async function pollAsyncOp(
   client: Client,
@@ -175,11 +179,46 @@ async function pollAsyncOp(
     if (i > 0 && i % 8 === 0) {
       console.log(`[zoo] still waiting op=${id} status=${op.status} ~${(i * POLL_MS) / 1000}s`);
     }
-    await sleep(POLL_MS);
+    await sleep(POLL_MS, signal);
   }
   return {
     ok: false,
-    error: "Zoo CAD operation timed out after ~5 minutes. Retry or simplify the prompt.",
+    error: "Zoo CAD operation timed out after ~10 minutes. Retry or simplify the prompt.",
+  };
+}
+
+async function pollMultiFileOp(
+  client: Client,
+  id: string,
+  signal?: AbortSignal,
+): Promise<CadResult<{ files: Record<string, string>; id: string }>> {
+  console.log(`[zoo] polling multi-file iteration op=${id}`);
+  for (let i = 0; i < MAX_POLLS; i++) {
+    if (signal?.aborted) {
+      return { ok: false, error: "CAD generation cancelled" };
+    }
+    const op = await api_calls.get_async_operation({ client, id });
+    if (op.status === "failed") {
+      return { ok: false, error: op.error ?? "Zoo multi-file iteration failed" };
+    }
+    if (op.status === "completed") {
+      const files = extractOutputs(op);
+      if (!files) {
+        return { ok: false, error: "Zoo multi-file iteration completed without KCL outputs" };
+      }
+      console.log(
+        `[zoo] multi-file op=${id} completed files=${Object.keys(files).length} after ~${(i + 1) * POLL_MS}ms`,
+      );
+      return { ok: true, data: { files, id } };
+    }
+    if (i > 0 && i % 8 === 0) {
+      console.log(`[zoo] still waiting multi-file op=${id} status=${op.status} ~${(i * POLL_MS) / 1000}s`);
+    }
+    await sleep(POLL_MS, signal);
+  }
+  return {
+    ok: false,
+    error: `Zoo multi-file iteration timed out after ~10 minutes (zooOpId=${id}).`,
   };
 }
 
@@ -188,7 +227,7 @@ export type ZooCadAdapterOptions = {
   baseUrl?: string;
 };
 
-/** Zoo / KittyCAD adapter — ML text-to-CAD and KCL iteration. */
+/** Zoo / KittyCAD adapter — ML text-to-CAD, KCL iteration, and Zoo MCP tools. */
 export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
   const token = opts.token.trim();
   if (!token) {
@@ -198,8 +237,13 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
     token,
     ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
   });
+  const mcp = new ZooMcpClient({ token });
 
   return {
+    executeKcl: (input) => mcp.executeKcl(input),
+    boundingBoxKcl: (input) => mcp.boundingBoxKcl(input),
+    multiviewSnapshotKcl: (input) => mcp.multiviewSnapshotKcl(input),
+
     async textToCad(prompt, options) {
       const create = async (): Promise<CadResult<{ kcl: string; id: string }>> => {
         if (options?.signal?.aborted) {
@@ -281,6 +325,68 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
           return { ok: true, data: { kcl: res.code, id: res.id } };
         }
         return pollAsyncOp(client, res.id, options?.signal);
+      } catch (err) {
+        return { ok: false, error: asError(err) };
+      }
+    },
+
+    async iterateCadProject(files, prompt, options?: CadProjectIterateOptions) {
+      try {
+        if (options?.signal?.aborted) {
+          return { ok: false, error: "CAD generation cancelled" };
+        }
+        const entries = Object.entries(files).filter(([, content]) => content.trim().length > 0);
+        if (entries.length === 0) {
+          return { ok: false, error: "iterateCadProject needs at least one non-empty KCL file" };
+        }
+        if (!prompt.trim()) {
+          return { ok: false, error: "iterateCadProject needs a prompt" };
+        }
+
+        const focusPath = options?.focusPath?.trim();
+        const focusContent = focusPath ? (files[focusPath] ?? "") : "";
+        const source_ranges =
+          focusPath && focusContent
+            ? [
+                {
+                  file: focusPath,
+                  prompt,
+                  range: {
+                    start: { line: 0, column: 0 },
+                    end: { line: Math.max(lineCount(focusContent) - 1, 0), column: 0 },
+                  },
+                },
+              ]
+            : [];
+
+        const attached = entries.map(([name, content]) => ({
+          name,
+          data: new Blob([content], { type: "text/plain" }),
+        }));
+
+        console.log(
+          `[zoo] multi-file iteration files=${attached.length} focus=${focusPath ?? "(all)"}`,
+        );
+        const res = await ml.create_text_to_cad_multi_file_iteration({
+          client,
+          files: attached,
+          body: {
+            prompt,
+            source_ranges,
+            ...(options?.projectName ? { project_name: options.projectName } : {}),
+          },
+        });
+        if (res.status === "failed") {
+          return { ok: false, error: res.error ?? "Zoo multi-file iteration failed" };
+        }
+        if (res.status === "completed") {
+          const out = extractOutputs(res);
+          if (!out) {
+            return { ok: false, error: "Zoo multi-file iteration completed without KCL outputs" };
+          }
+          return { ok: true, data: { files: out, id: res.id } };
+        }
+        return pollMultiFileOp(client, res.id, options?.signal);
       } catch (err) {
         return { ok: false, error: asError(err) };
       }

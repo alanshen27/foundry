@@ -23,7 +23,6 @@ import { boardPads } from "@/lib/pcb/geometry";
 import { isPlausibleZooOpId } from "@foundry/cad";
 import {
   addCadComponents,
-  insertPartIntoAssembly,
   normalizeCadDoc,
   upsertCadContent,
   upsertPartScripts,
@@ -37,6 +36,8 @@ import { ensureStageStarted, markDownstreamStale, setStageStatus } from "../stag
 import { getObjectStorage } from "../storage";
 import { getCad } from "../cad";
 import { mintRenderToken } from "../render-token";
+import { assembleProductWithZooMcp, syncPcbCadPart } from "../assemble-product";
+import { withKclProjectDir } from "../kcl-project-dir";
 import { extractProductImages, screenshotRenderPage } from "./render";
 
 /**
@@ -1064,6 +1065,10 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             },
             update: { data: nextSet as unknown as Prisma.InputJsonValue, updatedById: ctx.userId },
           });
+          // Keep parts/pcb/main.kcl in sync so Assembly can import the board as a CAD part.
+          await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
+            syncPcbCadPart(base, data),
+          );
           await recordAudit({
             type: "DesignDocUpdated",
             workspaceId,
@@ -1075,6 +1080,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
               kind: "PCB",
               footprints: data.footprints.length,
               board: data.board,
+              cadPart: "parts/pcb/main.kcl",
             },
           });
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
@@ -1105,6 +1111,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             boards: boards.length,
             board: data.board,
             footprints: data.footprints.length,
+            cadPart: "parts/pcb/main.kcl",
             tracks: data.tracks.length,
             vias: data.vias.length,
             zones: data.zones.length,
@@ -1395,7 +1402,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
     add_part_to_assembly: {
       description:
-        "Compose an assembly from parts that ALREADY exist in the CAD workspace: adds the KCL `import` for each part and places it in the assembly. Use this whenever the user asks to combine, assemble, or bring existing parts together — do NOT regenerate their geometry with text_to_cad or save_cad_script, which throws away the original models and their parameters. Call get_project_state first to see the available part paths.",
+        "Compose assembly/product.kcl from existing parts via Zoo multi-file Text-to-CAD iteration (attaches prior part KCL files so Zoo reuses them), then validates with Zoo MCP execute_kcl. Includes parts/pcb when a PCB exists. Engineer > Assembly renders product.kcl. Use whenever the user asks to combine/assemble existing parts. Do NOT smash parts into one script or invent poses with save_cad_script.",
       inputSchema: z.object({
         parts: z
           .array(z.string().min(1).max(128))
@@ -1407,38 +1414,50 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           .min(1)
           .max(128)
           .optional()
-          .describe("Assembly name or path. Defaults to the workspace's first assembly."),
+          .describe("Assembly name or path. Defaults to assembly/product.kcl (first assembly)."),
+        includePcb: z
+          .boolean()
+          .optional()
+          .default(true)
+          .describe("Include the PCB board (parts/pcb.kcl) in the assembly when a PCB doc exists."),
+        prompt: z
+          .string()
+          .min(8)
+          .max(4000)
+          .optional()
+          .describe(
+            "Optional product-assembly intent for Zoo (how parts mate / orient). Omit for the default assemble prompt.",
+          ),
       }),
-      execute: async ({ parts, assembly }: { parts: string[]; assembly?: string }) =>
+      execute: async ({
+        parts,
+        assembly,
+        includePcb,
+        prompt,
+      }: {
+        parts: string[];
+        assembly?: string;
+        includePcb?: boolean;
+        prompt?: string;
+      }) =>
         guard(ctx, "mechanical.edit", async (workspaceId) => {
-          let assemblyPath: string | null = null;
-          let added: string[] = [];
-          let missing: string[] = [];
+          let cad;
+          try {
+            cad = getCad();
+          } catch (err) {
+            return { error: err instanceof Error ? err.message : String(err) };
+          }
 
-          await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) => {
-            // Reset per attempt — the mutator runs under a lock and may re-run.
-            added = [];
-            missing = [];
-            const target = assembly
-              ? findCadComponent(base, assembly, "assembly")
-              : base.components.find((c) => c.kind === "assembly");
-            if (!target) return base;
-
-            assemblyPath = target.path;
-            let next = base;
-            for (const key of parts) {
-              const part = findCadComponent(next, key, "part");
-              if (!part) {
-                missing.push(key);
-                continue;
-              }
-              next = insertPartIntoAssembly(next, target.id, part.id);
-              added.push(part.path);
-            }
-            return next;
+          const modelRow = await prisma.designDoc.findUnique({
+            where: { projectId_branchId_kind: { projectId, branchId, kind: "MODEL3D" } },
           });
-
-          if (!assemblyPath) {
+          const base = normalizeCadDoc(modelRow?.data ?? null);
+          const target = assembly
+            ? findCadComponent(base, assembly, "assembly")
+            : (base.components.find(
+                (c) => c.kind === "assembly" && c.path === "assembly/product.kcl",
+              ) ?? base.components.find((c) => c.kind === "assembly"));
+          if (!target) {
             return {
               error: assembly
                 ? `No assembly named "${assembly}" in the CAD workspace.`
@@ -1446,17 +1465,56 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             };
           }
 
+          const resolvedParts = [];
+          const missing: string[] = [];
+          for (const key of parts) {
+            const part = findCadComponent(base, key, "part");
+            if (!part) missing.push(key);
+            else resolvedParts.push(part);
+          }
+          if (resolvedParts.length === 0) {
+            return {
+              error: `No matching parts. Missing: ${missing.join(", ") || "(none)"}. Call get_project_state for paths.`,
+            };
+          }
+
+          let pcb = null;
+          if (includePcb !== false) {
+            const pcbRow = await prisma.designDoc.findUnique({
+              where: { projectId_branchId_kind: { projectId, branchId, kind: "PCB" } },
+            });
+            if (pcbRow?.data) pcb = normalizePcbDoc(pcbRow.data);
+          }
+
+          let assembled;
+          try {
+            assembled = await assembleProductWithZooMcp({
+              cad,
+              doc: base,
+              assembly: target,
+              parts: resolvedParts,
+              pcb,
+              prompt,
+            });
+          } catch (err) {
+            return {
+              error: err instanceof Error ? err.message : String(err),
+              hint: "Fix part KCL (or PCB), then retry add_part_to_assembly. Do not invent assembly poses with save_cad_script.",
+            };
+          }
+
+          await mutateModel3dDoc(projectId, branchId, ctx.userId, () => assembled.doc);
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
           return {
             ok: true,
-            assembly: assemblyPath,
-            added,
-            ...(missing.length > 0 ? { missing } : {}),
+            assembly: assembled.assemblyPath,
+            placed: assembled.placed,
+            zooOpId: assembled.zooOpId,
+            zooExecute: assembled.executeMessage,
+            ...(assembled.warnings.length ? { warnings: assembled.warnings } : {}),
+            ...(missing.length ? { missing } : {}),
             staleStages: staled,
-            hint:
-              missing.length > 0
-                ? `Not found in the workspace: ${missing.join(", ")}. Call get_project_state for the available part paths, then render_model_views.`
-                : "Call render_model_views to check the assembly. Adjust placement with save_cad_script on the assembly file.",
+            hint: "Call render_model_views to inspect the Zoo-validated assembly.",
           };
         }),
     },
@@ -1534,7 +1592,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
     render_model_views: {
       description:
-        "Screenshot the current 3D model from multiple camera angles (iso, front, top, right) and look at the results. Use after text_to_cad or save_cad_script to check proportions, orientation, overlaps, and missing features — then fix the KCL and re-render. If the script has an error, the screenshot shows it.",
+        "Screenshot the current 3D model / product assembly from multiple camera angles and look at the results. Prefers Zoo MCP multiview for the product assembly (real engine execute); falls back to the headless viewport which WAITS until the model has painted. Use after text_to_cad, add_part_to_assembly, or save_cad_script.",
       inputSchema: z.object({
         views: z
           .array(z.enum(["iso", "front", "top", "right"]))
@@ -1544,26 +1602,75 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
       }),
       execute: async ({ views }: { views: ("iso" | "front" | "top" | "right")[] }) =>
         guard(ctx, "project.read", async () => {
-          const token = mintRenderToken({ projectId, branchId, kind: "model3d" });
           const storage = getObjectStorage();
-          let images: { view: string; key: string; imageUrl: string }[];
+
+          // Prefer Zoo MCP multiview — executes KCL on Zoo and returns a real collage.
           try {
-            // All views render in parallel (each gets its own headless page).
-            images = await Promise.all(
-              views.map(async (view) => {
-                const url = `${ctx.origin}/render/model3d?token=${encodeURIComponent(token)}&view=${view}`;
-                const png = await screenshotRenderPage(url, { width: 640, height: 480 });
-                const key = `projects/${projectId}/ai/model-${view}-${Date.now()}.png`;
-                await storage.put(key, new Uint8Array(png), "image/png");
-                return { view, key, imageUrl: `/api/files/${key}` };
-              }),
+            const cad = getCad();
+            const modelRow = await prisma.designDoc.findUnique({
+              where: { projectId_branchId_kind: { projectId, branchId, kind: "MODEL3D" } },
+            });
+            const doc = normalizeCadDoc(modelRow?.data ?? null);
+            const assembly =
+              doc.components.find(
+                (c) => c.kind === "assembly" && c.path === "assembly/product.kcl",
+              ) ?? doc.components.find((c) => c.kind === "assembly");
+            const entry =
+              assembly ??
+              doc.components.find((c) => c.kind === "part" && c.content.trim()) ??
+              null;
+
+            if (entry) {
+              const snap = await withKclProjectDir(doc, entry.path, (projectDir) =>
+                cad.multiviewSnapshotKcl({ projectDir }),
+              );
+              if (snap.ok) {
+                const key = `projects/${projectId}/ai/model-multiview-${Date.now()}.jpg`;
+                await storage.put(key, new Uint8Array(snap.data.jpeg), "image/jpeg");
+                return {
+                  ok: true,
+                  source: "zoo-mcp",
+                  images: [
+                    {
+                      view: "multiview",
+                      key,
+                      imageUrl: `/api/files/${key}`,
+                      layout: "front | right / top | iso",
+                    },
+                  ],
+                };
+              }
+              console.warn("[render_model_views] Zoo MCP snapshot failed:", snap.error);
+            }
+          } catch (err) {
+            console.warn(
+              "[render_model_views] Zoo MCP unavailable, falling back to viewport:",
+              err instanceof Error ? err.message : err,
             );
+          }
+
+          const token = mintRenderToken({ projectId, branchId, kind: "model3d" });
+          try {
+            // Serial views — parallel Zoo WebRTC cold-starts routinely time out as "Connecting…".
+            const images: { view: string; key: string; imageUrl: string }[] = [];
+            for (const view of views) {
+              const url = `${ctx.origin}/render/model3d?token=${encodeURIComponent(token)}&view=${view}`;
+              const png = await screenshotRenderPage(url, {
+                width: 640,
+                height: 480,
+                readyTimeout: 90_000,
+                requireReady: true,
+              });
+              const key = `projects/${projectId}/ai/model-${view}-${Date.now()}.png`;
+              await storage.put(key, new Uint8Array(png), "image/png");
+              images.push({ view, key, imageUrl: `/api/files/${key}` });
+            }
+            return { ok: true, source: "viewport", images };
           } catch (err) {
             return {
               error: `Rendering failed: ${err instanceof Error ? err.message : String(err)}. If the browser is missing, run: pnpm exec playwright install chromium`,
             };
           }
-          return { ok: true, images };
         }),
       toModelOutput: async ({ output }: { output: unknown }) => {
         const out = output as { images?: { view: string; key: string }[]; error?: string };
@@ -1590,7 +1697,12 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           const token = mintRenderToken({ projectId, branchId, kind: "circuit" });
           try {
             const url = `${ctx.origin}/render/circuit?token=${encodeURIComponent(token)}`;
-            const png = await screenshotRenderPage(url, { width: 1024, height: 720 });
+            const png = await screenshotRenderPage(url, {
+              width: 1024,
+              height: 720,
+              readyTimeout: 60_000,
+              requireReady: true,
+            });
             const key = `projects/${projectId}/ai/circuit-${Date.now()}.png`;
             await getObjectStorage().put(key, new Uint8Array(png), "image/png");
             return { ok: true, key, imageUrl: `/api/files/${key}` };
@@ -1625,7 +1737,12 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           const token = mintRenderToken({ projectId, branchId, kind: "pcb" });
           try {
             const url = `${ctx.origin}/render/pcb?token=${encodeURIComponent(token)}`;
-            const png = await screenshotRenderPage(url, { width: 1024, height: 720 });
+            const png = await screenshotRenderPage(url, {
+              width: 1024,
+              height: 720,
+              readyTimeout: 60_000,
+              requireReady: true,
+            });
             const key = `projects/${projectId}/ai/pcb-${Date.now()}.png`;
             await getObjectStorage().put(key, new Uint8Array(png), "image/png");
             return { ok: true, key, imageUrl: `/api/files/${key}` };

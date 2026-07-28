@@ -60,9 +60,47 @@ export type CadGenOptions = {
   existingOpId?: string;
 };
 
+/** Options for Zoo multi-file Text-to-CAD iteration (reuse existing project files). */
+export type CadProjectIterateOptions = CadGenOptions & {
+  /**
+   * Relative Zoo path to focus edits on (e.g. `assembly/product.kcl`).
+   * Sent as a whole-file source_range so parts stay stable.
+   */
+  focusPath?: string;
+};
+
+/** Axis-aligned bbox from Zoo MCP `calculate_bounding_box_kcl` (mm by default). */
+export type CadBoundingBox = {
+  center: { x: number; y: number; z: number };
+  dimensions: { x: number; y: number; z: number };
+};
+
+export type CadKclInput = {
+  /** Inline KCL source (single file). */
+  code?: string;
+  /** Absolute path to a .kcl file or project directory with main.kcl. */
+  projectDir?: string;
+};
+
 export interface CadPort {
   /** Generate parametric KCL from a natural-language prompt (Zoo ML). */
   textToCad(prompt: string, opts?: CadGenOptions): Promise<CadResult<{ kcl: string; id: string }>>;
   /** Edit existing KCL with a natural-language prompt (Zoo ML). */
   iterateCad(kcl: string, prompt: string, opts?: CadGenOptions): Promise<CadResult<{ kcl: string; id: string }>>;
+  /**
+   * Iterate a multi-file KCL project with Zoo ML, keeping prior components as
+   * file attachments (`POST /ml/text-to-cad/multi-file/iteration`).
+   * Returns the full project outputs map (path → KCL).
+   */
+  iterateCadProject(
+    files: Record<string, string>,
+    prompt: string,
+    opts?: CadProjectIterateOptions,
+  ): Promise<CadResult<{ files: Record<string, string>; id: string }>>;
+  /** Zoo MCP: execute KCL and return compile/runtime issues. */
+  executeKcl(input: CadKclInput): Promise<CadResult<{ message: string }>>;
+  /** Zoo MCP: axis-aligned bounding box of executed KCL. */
+  boundingBoxKcl(input: CadKclInput & { unit?: string }): Promise<CadResult<CadBoundingBox>>;
+  /** Zoo MCP: front/right/top/iso collage JPEG of executed KCL. */
+  multiviewSnapshotKcl(input: CadKclInput): Promise<CadResult<{ jpeg: Buffer }>>;
 }

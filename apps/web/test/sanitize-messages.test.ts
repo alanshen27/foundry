@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ModelMessage, UIMessage } from "ai";
 import {
+  markFailedAssistantMessages,
   pruneEmptyAssistantMessages,
   sanitizeUiMessagesForModel,
   stripOrphanToolCalls,
@@ -89,6 +90,47 @@ describe("sanitizeUiMessagesForModel", () => {
     expect(sanitized[0]!.parts.map((p) => p.type)).toEqual(["text"]);
   });
 
+  it("strips OpenAI itemIds so history cannot emit duplicate item_references", () => {
+    const messages = [
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "text",
+            text: "Found a part.",
+            providerMetadata: {
+              openai: { itemId: "msg_0ec98f8d77f3f58e006a63b8682b28819197bd3cded84e6686" },
+            },
+          },
+          {
+            type: "text",
+            text: "Here's the pick.",
+            providerMetadata: {
+              openai: { itemId: "msg_0ec98f8d77f3f58e006a63b8682b28819197bd3cded84e6686" },
+            },
+          },
+        ],
+      },
+    ] as unknown as UIMessage[];
+
+    const sanitized = sanitizeUiMessagesForModel(messages);
+    expect(sanitized[0]!.parts).toHaveLength(2);
+    for (const part of sanitized[0]!.parts) {
+      expect(part).not.toHaveProperty("providerMetadata");
+    }
+  });
+
+  it("dedupes messages that share an id", () => {
+    const messages = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "first" }] },
+      { id: "u1", role: "user", parts: [{ type: "text", text: "duplicate" }] },
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "ok" }] },
+    ] as unknown as UIMessage[];
+
+    expect(sanitizeUiMessagesForModel(messages).map((m) => m.id)).toEqual(["u1", "a1"]);
+  });
+
   it("drops assistant messages left with nothing but reasoning", () => {
     const messages = [
       {
@@ -160,6 +202,33 @@ describe("pruneEmptyAssistantMessages", () => {
       { id: "a2", role: "assistant", parts: [{ type: "text", text: "done" }] },
     ] as unknown as UIMessage[];
     expect(pruneEmptyAssistantMessages(messages).map((m) => m.id)).toEqual(["u1", "a2"]);
+  });
+});
+
+describe("markFailedAssistantMessages", () => {
+  it("stamps empty assistant turns instead of dropping them", () => {
+    const messages = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "@AI hi" }] },
+      { id: "a1", role: "assistant", parts: [] },
+    ] as unknown as UIMessage[];
+    const next = markFailedAssistantMessages(messages, "Zoo MCP blew up");
+    expect(next.map((m) => m.id)).toEqual(["u1", "a1"]);
+    expect(next[1]!.parts).toEqual([
+      { type: "text", text: "Failed: Zoo MCP blew up" },
+    ]);
+  });
+
+  it("appends a failure note when the turn already has content", () => {
+    const messages = [
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [{ type: "text", text: "Working on it" }],
+      },
+    ] as unknown as UIMessage[];
+    const next = markFailedAssistantMessages(messages, "timeout");
+    expect(next[0]!.parts).toHaveLength(2);
+    expect(next[0]!.parts[1]).toEqual({ type: "text", text: "Failed: timeout" });
   });
 });
 

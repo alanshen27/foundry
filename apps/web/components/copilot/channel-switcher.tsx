@@ -129,7 +129,7 @@ export function ChannelSwitcher() {
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className="hover:bg-muted/60 flex max-w-48 items-center gap-1 rounded-md px-1.5 py-0.5 text-sm font-semibold transition-colors"
+          className="hover:bg-muted/60 flex h-7 max-w-48 items-center gap-1 rounded-none px-1.5 text-[13px] font-medium transition-colors"
           aria-haspopup="listbox"
           aria-expanded={open}
         >
@@ -141,7 +141,7 @@ export function ChannelSwitcher() {
         {open ? (
           <div
             role="listbox"
-            className="bg-popover absolute top-full left-0 z-50 mt-1.5 w-64 overflow-hidden rounded-lg border shadow-lg"
+            className="bg-popover absolute top-full left-0 z-50 mt-1.5 w-64 overflow-hidden rounded-none border shadow-lg"
           >
             <div className="max-h-72 overflow-y-auto p-1">
               {categories.map((cat) => {
@@ -174,7 +174,7 @@ export function ChannelSwitcher() {
                       <div
                         key={channel.id}
                         className={cn(
-                          "group/ch hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
+                          "group/ch hover:bg-muted flex items-center gap-2 rounded-none px-2 py-1.5 text-sm",
                           channel.id === activeChannelId && "bg-muted/60",
                         )}
                       >
@@ -222,7 +222,7 @@ export function ChannelSwitcher() {
                       key={channel.id}
                       type="button"
                       className={cn(
-                        "hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                        "hover:bg-muted flex w-full items-center gap-2 rounded-none px-2 py-1.5 text-left text-sm",
                         channel.id === activeChannelId && "bg-muted/60",
                       )}
                       onClick={() => {
@@ -244,14 +244,14 @@ export function ChannelSwitcher() {
                 onClick={() =>
                   openModal({ kind: "create-channel", categoryId: defaultCategoryId })
                 }
-                className="text-muted-foreground hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm"
+                className="text-muted-foreground hover:bg-muted flex w-full items-center gap-2 rounded-none px-2 py-1.5 text-sm"
               >
                 <Plus className="size-3.5" /> New channel
               </button>
               <button
                 type="button"
                 onClick={() => openModal({ kind: "create-category" })}
-                className="text-muted-foreground hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm"
+                className="text-muted-foreground hover:bg-muted flex w-full items-center gap-2 rounded-none px-2 py-1.5 text-sm"
               >
                 <FolderPlus className="size-3.5" /> New category
               </button>

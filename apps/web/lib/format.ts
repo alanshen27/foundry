@@ -13,4 +13,4 @@ export function dollarsToCents(value: string): number | null {
 
 /** Shared Tailwind classes for the plain <select> elements used in forms. */
 export const selectClass =
-  "border-input bg-transparent dark:bg-input/30 h-8 rounded-md border px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
+  "border-input bg-transparent dark:bg-input/30 h-8 rounded-none border px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";

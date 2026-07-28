@@ -2,10 +2,11 @@ import { randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { prisma } from "@foundry/db";
-import { assignableRoles, slugify, WORKSPACE_ROLES } from "@foundry/domain";
+import { assignableRoles, WORKSPACE_ROLES } from "@foundry/domain";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireWorkspaceCapability } from "../access";
+import { createWorkspaceForOwner } from "../create-workspace";
 
 const INVITE_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 
@@ -20,28 +21,9 @@ export const workspaceRouter = router({
 
   create: protectedProcedure
     .input(z.object({ name: z.string().min(1).max(80) }))
-    .mutation(async ({ ctx, input }) => {
-      const base = slugify(input.name);
-      let slug = base;
-      for (let i = 2; await prisma.workspace.findUnique({ where: { slug } }); i++) {
-        slug = `${base}-${i}`;
-      }
-      const workspace = await prisma.workspace.create({
-        data: {
-          name: input.name,
-          slug,
-          createdById: ctx.user.id,
-          memberships: { create: { userId: ctx.user.id, role: "OWNER" } },
-        },
-      });
-      await recordAudit({
-        type: "WorkspaceCreated",
-        workspaceId: workspace.id,
-        actorId: ctx.user.id,
-        payload: { name: workspace.name, slug: workspace.slug },
-      });
-      return workspace;
-    }),
+    .mutation(({ ctx, input }) =>
+      createWorkspaceForOwner({ userId: ctx.user.id, name: input.name }),
+    ),
 
   inviteMember: protectedProcedure
     .input(

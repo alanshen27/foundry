@@ -7,6 +7,10 @@ function markReady() {
   document.body.dataset.renderReady = "1";
 }
 
+function markNotReady() {
+  delete document.body.dataset.renderReady;
+}
+
 /** Fixed-camera model view for headless screenshots (copilot vision loop). */
 export function ModelRenderInner({
   script,
@@ -29,14 +33,17 @@ export function ModelRenderInner({
   const onReady = useCallback(() => markReady(), []);
   const onError = useCallback((message: string | null) => {
     setError(message);
+    // Errors still count as "ready" so the screenshot captures the error overlay
+    // instead of timing out — but only after the viewport reported the failure.
     if (message) markReady();
   }, []);
 
   useEffect(() => {
-    // Safety: never block the screenshot worker forever.
-    const t = setTimeout(markReady, 60_000);
+    markNotReady();
+    // Safety: never block the screenshot worker forever (Zoo cold start + KCL).
+    const t = setTimeout(markReady, 120_000);
     return () => clearTimeout(t);
-  }, []);
+  }, [script, entryPath, view]);
 
   if (!engineToken) {
     markReady();
@@ -54,6 +61,7 @@ export function ModelRenderInner({
         engine={{ token: engineToken, baseUrl: engineBaseUrl }}
         view={view}
         chrome={false}
+        headless
         projectFiles={projectFiles}
         entryPath={entryPath}
         fitPadding={tight ? 0.01 : undefined}

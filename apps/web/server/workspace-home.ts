@@ -1,10 +1,11 @@
 import { prisma } from "@foundry/db";
 import { getServerEnv } from "@foundry/config";
+import { createWorkspaceForOwner, defaultWorkspaceName } from "./create-workspace";
 
 /**
  * Resolve the signed-in home URL: prefer configured slug (if the user is a
- * member), else their earliest workspace. Falls back to the manage list only
- * when they have no memberships yet.
+ * member), else their earliest workspace. Always ensures at least one
+ * workspace exists (accounts get one on signup/login).
  */
 export async function resolveWorkspaceHomePath(userId: string): Promise<string> {
   const memberships = await prisma.workspaceMembership.findMany({
@@ -12,7 +13,15 @@ export async function resolveWorkspaceHomePath(userId: string): Promise<string> 
     include: { workspace: { select: { slug: true, createdAt: true } } },
     orderBy: { createdAt: "asc" },
   });
-  if (memberships.length === 0) return "/workspaces?manage=1";
+
+  if (memberships.length === 0) {
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const workspace = await createWorkspaceForOwner({
+      userId,
+      name: defaultWorkspaceName(user.name),
+    });
+    return `/w/${workspace.slug}`;
+  }
 
   const preferred = getServerEnv().FOUNDRY_DEFAULT_WORKSPACE_SLUG?.trim();
   if (preferred) {

@@ -51,7 +51,7 @@ const components: Components = {
     );
   },
   pre: ({ children }) => (
-    <pre className="bg-background/70 my-1.5 overflow-x-auto rounded-lg border p-2.5 first:mt-0 last:mb-0">
+    <pre className="bg-background/70 my-1.5 overflow-x-auto rounded-none border p-2.5 first:mt-0 last:mb-0">
       {children}
     </pre>
   ),

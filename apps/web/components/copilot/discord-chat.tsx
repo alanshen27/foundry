@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import type { UIMessage } from "ai";
-import { AtSign, Hash, Loader2, Send, Sparkles, Square } from "lucide-react";
+import { AtSign, Hash, Loader2, Send, Sparkles, Square, XCircle } from "lucide-react";
 import { FoundyrMarkIcon } from "@/components/foundry-mark";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -21,6 +21,7 @@ import {
   splitMentions,
   type MentionTarget,
 } from "@/lib/copilot/mentions";
+import { isAssistantFailureText } from "@/lib/copilot/messages";
 import { ChannelRail } from "./channel-rail";
 import { ToolCard, type ToolPart } from "./chat-sidebar";
 import { Markdown } from "./markdown";
@@ -71,11 +72,13 @@ function ChatMessage({
   message,
   viewer,
   grouped,
+  failed,
 }: {
   message: UIMessage;
   viewer: Viewer;
   /** Continuation of the previous author's block — hide avatar and name. */
   grouped: boolean;
+  failed?: boolean;
 }) {
   const isUser = message.role === "user";
   const hasContent = message.parts.some(
@@ -84,6 +87,10 @@ function ChatMessage({
       p.type.startsWith("tool-") ||
       p.type === "dynamic-tool",
   );
+  const stampedFailed = message.parts.some(
+    (p) => p.type === "text" && isAssistantFailureText(p.text),
+  );
+  const showFailed = Boolean(failed) || stampedFailed;
 
   return (
     <div
@@ -103,7 +110,7 @@ function ChatMessage({
               {isUser ? viewer.name : COPILOT_NAME}
             </span>
             {isUser ? null : (
-              <span className="bg-primary/15 text-primary rounded px-1.5 py-px text-[10px] font-semibold uppercase">
+              <span className="bg-primary/15 text-primary rounded-none px-1.5 py-px text-[10px] font-semibold uppercase">
                 AI
               </span>
             )}
@@ -116,6 +123,17 @@ function ChatMessage({
               ? part.toolCallId
               : `${part.type}-${i}`;
           if (part.type === "text" && part.text.trim()) {
+            if (!isUser && isAssistantFailureText(part.text)) {
+              return (
+                <p
+                  key={partKey}
+                  className="text-destructive flex items-start gap-2 text-sm leading-relaxed whitespace-pre-wrap"
+                >
+                  <XCircle className="mt-0.5 size-3.5 shrink-0" />
+                  <span>{part.text}</span>
+                </p>
+              );
+            }
             return isUser ? (
               <p
                 key={partKey}
@@ -125,7 +143,7 @@ function ChatMessage({
                   seg.kind === "mention" ? (
                     <span
                       key={j}
-                      className="bg-primary/15 text-primary rounded px-1 font-medium"
+                      className="bg-primary/15 text-primary rounded-none px-1 font-medium"
                     >
                       {seg.text}
                     </span>
@@ -150,7 +168,19 @@ function ChatMessage({
           return null;
         })}
 
-        {hasContent ? null : (
+        {hasContent ? (
+          showFailed && !stampedFailed ? (
+            <p className="text-destructive flex items-center gap-1.5 text-sm">
+              <XCircle className="size-3.5" />
+              Failed
+            </p>
+          ) : null
+        ) : showFailed ? (
+          <p className="text-destructive flex items-center gap-2 text-sm">
+            <XCircle className="size-3.5" />
+            Failed
+          </p>
+        ) : (
           <p className="text-muted-foreground flex items-center gap-2 text-sm">
             <Loader2 className="size-3.5 animate-spin" />
             Working…
@@ -311,6 +341,11 @@ export function DiscordChat({
                 message={m}
                 viewer={user}
                 grouped={messages[i - 1]?.role === m.role}
+                failed={
+                  status === "error" &&
+                  m.role === "assistant" &&
+                  i === messages.length - 1
+                }
               />
             ))
           )}
@@ -329,7 +364,7 @@ export function DiscordChat({
               <div
                 role="listbox"
                 aria-label="Mentions"
-                className="bg-popover absolute bottom-full left-0 z-20 mb-2 w-full overflow-hidden rounded-lg border shadow-lg"
+                className="bg-popover absolute bottom-full left-0 z-20 mb-2 w-full overflow-hidden rounded-none border shadow-lg"
               >
                 {mentionOptions.map((option, i) => (
                   <button
@@ -361,7 +396,7 @@ export function DiscordChat({
               </div>
             ) : null}
 
-            <div className="bg-muted/70 focus-within:ring-ring/40 flex items-end gap-2 rounded-lg px-4 py-2.5 focus-within:ring-2">
+            <div className="bg-muted/70 focus-within:ring-ring/40 flex items-end gap-2 rounded-none px-4 py-2.5 focus-within:ring-2">
               <textarea
                 ref={textareaRef}
                 value={input}

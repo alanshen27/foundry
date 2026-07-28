@@ -59,6 +59,13 @@ function isMissingProviderItemError(err: unknown): boolean {
   return /Item with id '[^']+' not found/i.test(message);
 }
 
+/** OpenAI 400 when the same `msg_` / `fc_` / `ws_` id appears twice in input. */
+function isDuplicateProviderItemError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const message = err instanceof Error ? err.message : String(err);
+  return /Duplicate item found with id/i.test(message);
+}
+
 async function toModelMessages(
   uiMessages: UIMessage[],
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -261,20 +268,28 @@ export async function executeChatRun(runId: string): Promise<void> {
     } catch (err) {
       // convertToLanguageModelPrompt throws here once the stream starts.
       const missingItem = isMissingProviderItemError(err);
+      const duplicateItem = isDuplicateProviderItemError(err);
       const recoverable =
-        missingItem || isMissingToolResultsError(err) || isInvalidPromptError(err);
+        missingItem ||
+        duplicateItem ||
+        isMissingToolResultsError(err) ||
+        isInvalidPromptError(err);
       if (!recoverable || abort.signal.aborted) throw err;
       console.warn(
-        missingItem
-          ? "[chat-run] stale provider item reference; retrying without provider-executed tool parts"
-          : "[chat-run] prompt/tool history error during stream; retrying without tool parts",
+        duplicateItem
+          ? "[chat-run] duplicate provider item id; retrying without provider-executed tool parts"
+          : missingItem
+            ? "[chat-run] stale provider item reference; retrying without provider-executed tool parts"
+            : "[chat-run] prompt/tool history error during stream; retrying without tool parts",
         err instanceof Error ? err.message : err,
       );
-      // Reasoning is already stripped in sanitize, so a missing item can only
-      // come from a provider-executed tool result.
-      const stripped = missingItem
-        ? stripProviderExecutedToolParts(prepared.ui)
-        : stripAllToolParts(prepared.ui);
+      // Reasoning / itemIds are already stripped in sanitize. A missing or
+      // duplicate item id after that is almost always a provider-executed tool
+      // (web_search) still leaking references.
+      const stripped =
+        missingItem || duplicateItem
+          ? stripProviderExecutedToolParts(prepared.ui)
+          : stripAllToolParts(prepared.ui);
       prepared = {
         ui: stripped,
         model: stripOrphanToolCalls(

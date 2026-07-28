@@ -44,6 +44,7 @@ import {
   splitMentions,
   type MentionTarget,
 } from "@/lib/copilot/mentions";
+import { isAssistantFailureText } from "@/lib/copilot/messages";
 import { Markdown } from "./markdown";
 import { ChannelSwitcher } from "./channel-switcher";
 import { useCopilot } from "./copilot-provider";
@@ -146,6 +147,12 @@ const TOOL_META: Record<
     doing: "Writing KCL",
     done: "Saved the 3D model",
     failed: "Failed to save KCL",
+    icon: Boxes,
+  },
+  add_part_to_assembly: {
+    doing: "Assembling with Zoo MCP",
+    done: "Assembled parts (Zoo MCP)",
+    failed: "Assembly failed",
     icon: Boxes,
   },
   generate_concept_image: {
@@ -292,32 +299,32 @@ export function ToolCard({ part }: { part: ToolPart }) {
   return (
     <div
       className={cn(
-        "flex flex-col gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs",
-        failed
-          ? "border-destructive/40 bg-destructive/5"
-          : running
-            ? "border-primary/25 bg-primary/5"
-            : "border-border/70 bg-muted/30",
+        "flex flex-col gap-1.5 py-0.5 text-xs",
+        failed ? "text-destructive" : "text-muted-foreground",
       )}
     >
       <div className="flex items-center gap-2">
-        <Icon
-          className={cn("size-3.5 shrink-0", failed ? "text-destructive" : "text-muted-foreground")}
-        />
+        <Icon className="size-3.5 shrink-0 opacity-70" />
         <div className="min-w-0 flex-1">
-          <span className={cn("font-medium", failed && "text-destructive")}>{title}</span>
+          <span className={cn("font-medium", !failed && "text-foreground/70")}>{title}</span>
           {detail ? (
-            <span className="text-muted-foreground block truncate" title={detail}>
+            <span
+              className={cn(
+                "block truncate",
+                failed ? "text-destructive/80" : "text-muted-foreground",
+              )}
+              title={detail}
+            >
               {detail}
             </span>
           ) : null}
         </div>
         {running ? (
-          <Loader2 className="text-primary size-3.5 shrink-0 animate-spin" />
+          <Loader2 className="size-3.5 shrink-0 animate-spin opacity-60" />
         ) : failed ? (
-          <XCircle className="text-destructive size-3.5 shrink-0" />
+          <XCircle className="size-3.5 shrink-0" />
         ) : (
-          <CheckCircle2 className="size-3.5 shrink-0 text-emerald-400" />
+          <CheckCircle2 className="size-3.5 shrink-0 opacity-50" />
         )}
       </div>
       {images.length > 0 ? (
@@ -327,7 +334,7 @@ export function ToolCard({ part }: { part: ToolPart }) {
               key={src}
               src={src}
               alt="Copilot render"
-              className="w-full rounded-md border object-cover"
+              className="w-full rounded-none object-cover"
             />
           ))}
         </div>
@@ -336,13 +343,20 @@ export function ToolCard({ part }: { part: ToolPart }) {
   );
 }
 
-export function Message({ message }: { message: UIMessage }) {
+export function Message({
+  message,
+  failed,
+}: {
+  message: UIMessage;
+  /** Live stream just errored on this (usually last) assistant turn. */
+  failed?: boolean;
+}) {
   const isUser = message.role === "user";
 
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="bg-primary text-primary-foreground max-w-[92%] rounded-2xl rounded-br-sm px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
+        <div className="bg-primary text-primary-foreground max-w-[92%] rounded-none px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
           {message.parts.map((part, i) =>
             part.type === "text" ? (
               <span key={i}>
@@ -350,7 +364,7 @@ export function Message({ message }: { message: UIMessage }) {
                   seg.kind === "mention" ? (
                     <span
                       key={j}
-                      className="bg-primary-foreground/20 inline-flex items-center rounded px-1 font-medium"
+                      className="bg-primary-foreground/20 inline-flex items-center rounded-none px-1 font-medium"
                     >
                       {seg.text}
                     </span>
@@ -373,6 +387,11 @@ export function Message({ message }: { message: UIMessage }) {
       p.type.startsWith("tool-") ||
       p.type === "dynamic-tool",
   );
+  const stampedFailed = message.parts.some(
+    (p) => p.type === "text" && isAssistantFailureText(p.text),
+  );
+  const showFailed = Boolean(failed) || stampedFailed;
+
   return (
     <div className="flex max-w-[95%] flex-col gap-1.5">
       {message.parts.map((part, i) => {
@@ -381,10 +400,21 @@ export function Message({ message }: { message: UIMessage }) {
             ? part.toolCallId
             : `${part.type}-${i}`;
         if (part.type === "text" && part.text.trim()) {
+          if (isAssistantFailureText(part.text)) {
+            return (
+              <div
+                key={partKey}
+                className="border-destructive/40 bg-destructive/10 text-destructive flex items-start gap-2 rounded-none border px-3.5 py-2.5 text-xs leading-relaxed"
+              >
+                <XCircle className="mt-0.5 size-3.5 shrink-0" />
+                <span className="min-w-0 whitespace-pre-wrap">{part.text}</span>
+              </div>
+            );
+          }
           return (
             <div
               key={partKey}
-              className="bg-muted/60 text-foreground rounded-2xl rounded-bl-sm px-3.5 py-2.5 text-sm leading-relaxed"
+              className="bg-muted/60 text-foreground rounded-none px-3.5 py-2.5 text-sm leading-relaxed"
             >
               <Markdown text={part.text} />
             </div>
@@ -396,8 +426,20 @@ export function Message({ message }: { message: UIMessage }) {
         return null;
       })}
       {!hasContent ? (
-        <div className="bg-muted/60 text-muted-foreground rounded-2xl rounded-bl-sm px-3.5 py-2.5 text-xs">
-          Working…
+        showFailed ? (
+          <div className="border-destructive/40 bg-destructive/10 text-destructive flex items-center gap-2 rounded-none border px-3.5 py-2.5 text-xs">
+            <XCircle className="size-3.5 shrink-0" />
+            Failed
+          </div>
+        ) : (
+          <div className="bg-muted/60 text-muted-foreground rounded-none px-3.5 py-2.5 text-xs">
+            Working…
+          </div>
+        )
+      ) : showFailed && !stampedFailed ? (
+        <div className="border-destructive/40 bg-destructive/10 text-destructive flex items-center gap-2 rounded-none border px-3 py-1.5 text-[11px]">
+          <XCircle className="size-3 shrink-0" />
+          Failed
         </div>
       ) : null}
     </div>
@@ -559,20 +601,20 @@ export function ChatSidebar() {
         className="absolute top-0 bottom-0 left-0 z-50 w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-primary/50"
         onMouseDown={() => setIsResizing(true)}
       />
-      <div className="relative z-10 flex h-10 shrink-0 items-center gap-2 border-b px-3">
+      <div className="relative z-10 flex h-9 shrink-0 items-center gap-2 border-b px-2.5">
         <ChannelSwitcher />
         <Button
           type="button"
           variant="ghost"
           size="icon-sm"
-          className="ml-auto"
+          className="ml-auto size-7"
           onClick={() => openChatPopout(pathname)}
           aria-label="Open chat in a new window"
           title="Open in a new window"
         >
           <ExternalLink className="size-3.5" />
         </Button>
-        <span className="text-muted-foreground shrink-0 text-xs">
+        <span className="text-muted-foreground shrink-0 font-mono text-[11px] tracking-[0.04em]">
           {busy ? "working…" : "ready"}
         </span>
       </div>
@@ -581,7 +623,7 @@ export function ChatSidebar() {
         <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
           {messages.length === 0 ? (
             <div className="mt-6 flex flex-col items-center gap-4 text-center">
-              <div className="bg-primary/10 flex size-12 items-center justify-center rounded-2xl">
+              <div className="bg-primary/10 flex size-12 items-center justify-center rounded-none">
                 <Sparkles className="text-primary size-5" />
               </div>
               <div>
@@ -599,7 +641,7 @@ export function ChatSidebar() {
                     type="button"
                     disabled={busy}
                     onClick={() => send(s)}
-                    className="border-border/70 hover:bg-muted/50 rounded-lg border px-3 py-2 text-left text-xs transition-colors disabled:pointer-events-none disabled:opacity-50"
+                    className="border-border/70 hover:bg-muted/50 rounded-none border px-3 py-2 text-left text-xs transition-colors disabled:pointer-events-none disabled:opacity-50"
                   >
                     {s}
                   </button>
@@ -607,7 +649,17 @@ export function ChatSidebar() {
               </div>
             </div>
           ) : (
-            messages.map((m) => <Message key={m.id} message={m} />)
+            messages.map((m, i) => (
+              <Message
+                key={m.id}
+                message={m}
+                failed={
+                  status === "error" &&
+                  m.role === "assistant" &&
+                  i === messages.length - 1
+                }
+              />
+            ))
           )}
           {error ? (
             <p className="text-destructive text-xs leading-relaxed">
@@ -627,7 +679,7 @@ export function ChatSidebar() {
               <div
                 role="listbox"
                 aria-label="Mentions"
-                className="bg-popover absolute bottom-full left-0 z-20 mb-2 w-full overflow-hidden rounded-lg border shadow-lg"
+                className="bg-popover absolute bottom-full left-0 z-20 mb-2 w-full overflow-hidden rounded-none border shadow-lg"
               >
                 {mentionOptions.map((option, i) => (
                   <button
@@ -659,7 +711,7 @@ export function ChatSidebar() {
               </div>
             ) : null}
 
-            <div className="bg-background focus-within:border-ring focus-within:ring-ring/50 flex items-end gap-2 rounded-xl border p-2 focus-within:ring-3">
+            <div className="bg-background focus-within:border-ring focus-within:ring-ring/50 flex items-end gap-2 rounded-none border p-2 focus-within:ring-3">
               <textarea
                 ref={textareaRef}
                 value={input}

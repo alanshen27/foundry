@@ -35,7 +35,7 @@ export function StatusBadge({ status, className }: { status: string; className?:
     <Badge
       variant="outline"
       className={cn(
-        "rounded-md px-1.5 py-0 text-[11px] font-medium tracking-wide",
+        "rounded-none px-1.5 py-0 text-[11px] font-medium tracking-wide",
         STATUS_STYLES[status],
         className,
       )}

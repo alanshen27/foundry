@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTheme } from "@/components/theme-provider";
@@ -25,12 +26,17 @@ import { cn } from "@/lib/utils";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
   ssr: false,
-  loading: () => (
-    <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
-      Loading editor…
-    </div>
-  ),
+  loading: () => <DotMatrixLoader className="h-full" label="Loading editor" />,
 });
+
+const CollaborativeMonaco = dynamic(
+  () =>
+    import("@/components/engineer/collaborative-monaco").then((m) => m.CollaborativeMonaco),
+  {
+    ssr: false,
+    loading: () => <DotMatrixLoader className="h-full" label="Connecting" />,
+  },
+);
 
 const LANGUAGES: Record<string, string> = {
   ts: "typescript",
@@ -149,9 +155,9 @@ function DirNode({
           <ChevronRight className="text-muted-foreground size-3 shrink-0" />
         )}
         {open ? (
-          <FolderOpen className="size-3.5 shrink-0 text-sky-400/80" />
+          <FolderOpen className="size-3.5 shrink-0 text-primary" />
         ) : (
-          <Folder className="size-3.5 shrink-0 text-sky-400/80" />
+          <Folder className="size-3.5 shrink-0 text-primary" />
         )}
         <span className="truncate font-medium">{node.name}</span>
       </button>
@@ -202,6 +208,17 @@ export function CodeWorkspace({
     { enabled: Boolean(activeFileId) },
   );
 
+  const collabQuery = trpc.collaboration.codeFileSession.useQuery(
+    { fileId: activeFileId ?? "" },
+    {
+      enabled: Boolean(activeFileId),
+      staleTime: 30 * 60 * 1000,
+      refetchOnWindowFocus: false,
+    },
+  );
+  const collabSession = collabQuery.data ?? null;
+  const collabEnabled = collabSession !== null;
+
   const saveFile = trpc.code.saveFile.useMutation();
   const createFile = trpc.code.createFile.useMutation({
     onSuccess: (file) => {
@@ -226,11 +243,13 @@ export function CodeWorkspace({
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load file content when the active tab changes / server data arrives.
+  // Skipped under Yjs collab — the provider seeds Monaco from the shared doc.
   useEffect(() => {
+    if (collabEnabled) return;
     if (fileQuery.data && fileQuery.data.id === activeFileId && !dirtyRef.current) {
       setContent(fileQuery.data.content);
     }
-  }, [fileQuery.data, activeFileId]);
+  }, [fileQuery.data, activeFileId, collabEnabled]);
 
   function openFile(fileId: string, path: string) {
     dirtyRef.current = false;
@@ -250,7 +269,7 @@ export function CodeWorkspace({
   }
 
   function onChange(value: string | undefined) {
-    if (!canEdit || activeFileId == null) return;
+    if (collabEnabled || !canEdit || activeFileId == null) return;
     const v = value ?? "";
     setContent(v);
     dirtyRef.current = true;
@@ -277,7 +296,7 @@ export function CodeWorkspace({
     return (
       <div className="flex h-full min-h-0 flex-col overflow-hidden" aria-busy="true" aria-label="Loading code workspace">
         <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
-          <Skeleton className="size-3.5 rounded-sm" />
+          <Skeleton className="size-3.5 rounded-none" />
           <Skeleton className="h-4 w-40" />
           <Skeleton className="ml-auto h-7 w-24" />
         </div>
@@ -296,7 +315,7 @@ export function CodeWorkspace({
   if (repos.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
-        <div className="bg-muted flex size-12 items-center justify-center rounded-2xl">
+        <div className="bg-muted flex size-12 items-center justify-center rounded-none">
           <GitBranch className="text-muted-foreground size-5" />
         </div>
         <div>
@@ -374,13 +393,20 @@ export function CodeWorkspace({
         </select>
         <div className="ml-auto flex items-center gap-1.5">
           <span className="text-muted-foreground mr-1 text-xs">
-            {saveFile.isPending ? "Saving…" : dirtyRef.current ? "Unsaved" : "Synced"}
+            {collabEnabled
+              ? "Multiplayer"
+              : saveFile.isPending
+                ? "Saving…"
+                : dirtyRef.current
+                  ? "Unsaved"
+                  : "Synced"}
           </span>
           {activeRepo ? (
             <>
               <Button
                 variant="outline"
                 size="xs"
+                nativeButton={false}
                 render={
                   <a
                     href={`vscode://vscode.git/clone?url=${encodeURIComponent(activeRepo.url)}`}
@@ -392,6 +418,7 @@ export function CodeWorkspace({
               <Button
                 variant="ghost"
                 size="icon-xs"
+                nativeButton={false}
                 aria-label="Open repository on GitHub"
                 render={<a href={activeRepo.url} target="_blank" rel="noreferrer" />}
               >
@@ -454,7 +481,7 @@ export function CodeWorkspace({
                 <div
                   key={tab.fileId}
                   className={cn(
-                    "group flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-xs",
+                    "group flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-none px-2.5 text-xs",
                     tab.fileId === activeFileId
                       ? "bg-muted text-foreground"
                       : "text-muted-foreground hover:bg-muted/50",
@@ -494,7 +521,14 @@ export function CodeWorkspace({
           ) : null}
 
           <div className="min-h-0 flex-1">
-            {activeFileId && fileQuery.data ? (
+            {activeFileId && fileQuery.data && collabSession ? (
+              <CollaborativeMonaco
+                key={`${activeFileId}-${monacoTheme}`}
+                session={collabSession}
+                language={languageFor(fileQuery.data.path)}
+                theme={monacoTheme}
+              />
+            ) : activeFileId && fileQuery.data && collabQuery.isFetched && !collabEnabled ? (
               <MonacoEditor
                 key={`${activeFileId}-${monacoTheme}`}
                 height="100%"
@@ -511,6 +545,8 @@ export function CodeWorkspace({
                   automaticLayout: true,
                 }}
               />
+            ) : activeFileId && (fileQuery.isLoading || collabQuery.isLoading) ? (
+              <DotMatrixLoader className="h-full" label="Loading editor" />
             ) : (
               <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
                 {files.length === 0

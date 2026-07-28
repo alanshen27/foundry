@@ -1,60 +1,124 @@
 "use client";
 
 /**
- * Engineer > Assembly — the one place the whole product is visible at once.
- * Renders the mechanical assembly/parts and a SIMULATED PCB in a single Zoo
- * scene, with a summary rail linking back into each discipline's editor.
+ * Engineer home — renders the stored product assembly (`assembly/product.kcl`).
+ *
+ * That file is the source of truth for how parts are oriented and mated.
+ * We do NOT invent an exploded / fanned-out KCL — Foundry asks Zoo MCP for
+ * bounding boxes and writes those poses into product.kcl via
+ * add_part_to_assembly (PCB is parts/pcb.kcl with board dim params).
  */
-import Link from "next/link";
-import { useMemo, useState } from "react";
-import { usePathname } from "next/navigation";
-import { Boxes, CircuitBoard, Package, Waypoints } from "lucide-react";
-import { Skeleton } from "@/components/ui/skeleton";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ArrowUpRight,
+  Boxes,
+  CircuitBoard,
+  Package,
+  RefreshCw,
+  Waypoints,
+} from "lucide-react";
+import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import { CadViewport } from "@/components/engineer/cad-viewport";
-import { normalizeCadDoc } from "@/lib/cad/engine";
-import { buildFinalAssembly } from "@/lib/cad/final-assembly";
+import { normalizeCadDoc, type CadComponent } from "@/lib/cad/engine";
+import { cadViewportInput } from "@/lib/cad/viewport-project";
 import { normalizePcbDoc } from "@/lib/pcb/doc";
 import { formatCents } from "@/lib/format";
 import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
 
-type Props = { projectId: string; branchId: string };
+export type AssemblyOpenTarget =
+  | "pcb"
+  | "schematic"
+  | { editor: "model"; componentId?: string; label?: string };
 
-function SummaryRow({
-  href,
-  icon: Icon,
-  label,
-  detail,
-}: {
-  href: string;
-  icon: typeof Boxes;
-  label: string;
+type Props = {
+  projectId: string;
+  branchId: string;
+  onOpenEditor?: (target: AssemblyOpenTarget) => void;
+};
+
+type SceneTarget = {
+  id: string;
+  name: string;
+  kind: "mechanical" | "pcb";
   detail: string;
-}) {
+  open: AssemblyOpenTarget;
+};
+
+/** Prefer `assembly/product.kcl`, else the first assembly component. */
+function pickProductAssembly(doc: ReturnType<typeof normalizeCadDoc>): CadComponent | null {
+  const assemblies = doc.components.filter((c) => c.kind === "assembly" && c.content.trim());
   return (
-    <Link
-      href={href}
-      className="hover:bg-muted/60 flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors"
-    >
-      <span className="bg-primary/10 text-primary flex size-7 shrink-0 items-center justify-center rounded-md">
-        <Icon className="size-3.5" strokeWidth={1.75} />
-      </span>
-      <span className="min-w-0">
-        <span className="block truncate text-xs font-medium">{label}</span>
-        <span className="text-muted-foreground block truncate text-[11px]">{detail}</span>
-      </span>
-    </Link>
+    assemblies.find(
+      (c) =>
+        c.path === "assembly/product.kcl" ||
+        c.path === "assembly/product/main.kcl" ||
+        c.name === "product",
+    ) ??
+    assemblies[0] ??
+    null
   );
 }
 
-export function AssemblyView({ projectId, branchId }: Props) {
-  const pathname = usePathname();
+function sceneTargetsFromDoc(
+  cadDoc: ReturnType<typeof normalizeCadDoc>,
+  pcbDoc: ReturnType<typeof normalizePcbDoc> | null,
+): SceneTarget[] {
+  const parts = cadDoc.components.filter((c) => c.kind === "part" && c.content.trim());
+  const out: SceneTarget[] = parts.map((c) => ({
+    id: c.id,
+    name: c.name,
+    kind: "mechanical" as const,
+    detail: c.path,
+    open: { editor: "model" as const, componentId: c.id, label: c.name },
+  }));
+  if (pcbDoc) {
+    out.push({
+      id: "pcb",
+      name: "PCB",
+      kind: "pcb",
+      detail: `${pcbDoc.board.widthMm} × ${pcbDoc.board.heightMm} mm · ${pcbDoc.footprints.length} placements`,
+      open: "pcb",
+    });
+  }
+  return out;
+}
+
+export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
+  const utils = trpc.useUtils();
   const model = trpc.design.get.useQuery({ projectId, branchId, kind: "MODEL3D" });
   const pcb = trpc.design.get.useQuery({ projectId, branchId, kind: "PCB" });
   const engine = trpc.cad.engineSession.useQuery({ projectId });
   const components = trpc.engineer.listComponents.useQuery({ projectId, branchId });
   const [error, setError] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [viewportEpoch, setViewportEpoch] = useState(0);
+  const [syncing, setSyncing] = useState(false);
 
-  const loading = model.isLoading || pcb.isLoading || engine.isLoading;
+  const loading = (model.isLoading || pcb.isLoading || engine.isLoading) && !syncing;
+
+  const syncFromServer = useCallback(async () => {
+    setSyncing(true);
+    setError(null);
+    try {
+      await Promise.all([
+        utils.design.get.invalidate({ projectId, branchId, kind: "MODEL3D" }),
+        utils.design.get.invalidate({ projectId, branchId, kind: "PCB" }),
+        utils.cad.engineSession.invalidate({ projectId }),
+        utils.engineer.listComponents.invalidate({ projectId, branchId }),
+      ]);
+      await Promise.all([
+        utils.design.get.refetch({ projectId, branchId, kind: "MODEL3D" }),
+        utils.design.get.refetch({ projectId, branchId, kind: "PCB" }),
+        utils.cad.engineSession.refetch({ projectId }),
+        utils.engineer.listComponents.refetch({ projectId, branchId }),
+      ]);
+      setViewportEpoch((n) => n + 1);
+    } finally {
+      setSyncing(false);
+    }
+  }, [utils, projectId, branchId]);
 
   const cadDoc = useMemo(
     () => (model.data?.data ? normalizeCadDoc(model.data.data) : null),
@@ -64,7 +128,34 @@ export function AssemblyView({ projectId, branchId }: Props) {
     () => (pcb.data?.data ? normalizePcbDoc(pcb.data.data) : null),
     [pcb.data],
   );
-  const assembly = useMemo(() => buildFinalAssembly(cadDoc, pcbDoc), [cadDoc, pcbDoc]);
+
+  const product = useMemo(() => (cadDoc ? pickProductAssembly(cadDoc) : null), [cadDoc]);
+
+  const viewport = useMemo(
+    () => (cadDoc && product ? cadViewportInput(cadDoc, product.id) : null),
+    [cadDoc, product],
+  );
+
+  useEffect(() => {
+    if (!product || !viewport) {
+      console.warn("[Assembly] no assembly/product.kcl to render");
+      return;
+    }
+    console.groupCollapsed(`[Assembly] product assembly · ${product.path}`);
+    console.log(viewport.script);
+    if (viewport.projectFiles) {
+      console.log("project files", Object.keys(viewport.projectFiles).sort());
+    }
+    console.groupEnd();
+  }, [product, viewport]);
+
+  const sceneTargets = useMemo(
+    () => (cadDoc ? sceneTargetsFromDoc(cadDoc, pcbDoc) : []),
+    [cadDoc, pcbDoc],
+  );
+
+  const activeTarget =
+    sceneTargets.find((t) => t.id === (hoveredId ?? selectedId)) ?? null;
 
   const bomCents = (components.data ?? []).reduce(
     (sum, c) => sum + (c.unitCostCents ?? 0) * c.quantity,
@@ -72,12 +163,7 @@ export function AssemblyView({ projectId, branchId }: Props) {
   );
 
   if (loading) {
-    return (
-      <div className="absolute inset-0 flex" aria-busy="true">
-        <Skeleton className="min-w-0 flex-1 rounded-none" />
-        <Skeleton className="hidden w-64 rounded-none border-l md:block" />
-      </div>
-    );
+    return <DotMatrixLoader className="absolute inset-0" label="Loading assembly" />;
   }
 
   if (!engine.data?.token) {
@@ -88,23 +174,24 @@ export function AssemblyView({ projectId, branchId }: Props) {
     );
   }
 
-  if (!assembly) {
+  if (!viewport || !product) {
     return (
       <div className="flex h-full items-center justify-center p-8">
         <div className="max-w-md text-center">
           <Boxes className="text-muted-foreground mx-auto size-8" strokeWidth={1.5} />
-          <h2 className="mt-3 text-lg font-semibold">Nothing to assemble yet</h2>
+          <h2 className="mt-3 text-lg font-semibold">No product assembly</h2>
           <p className="text-muted-foreground mt-1.5 text-sm">
-            The final assembly combines your mechanical parts and PCB into one scene. Start a{" "}
-            <Link href={`${pathname}?view=model`} className="text-primary underline">
-              model
-            </Link>{" "}
-            or lay out a{" "}
-            <Link href={`${pathname}?view=pcb`} className="text-primary underline">
-              PCB
-            </Link>{" "}
-            and it will show up here.
+            Assembly shows <span className="font-mono text-[12px]">assembly/product.kcl</span> —
+            the file where parts are imported and positioned. Ask the copilot to add parts to the
+            assembly, or open CAD and edit that file.
           </p>
+          <button
+            type="button"
+            className="bg-primary text-primary-foreground mt-4 rounded-none px-3 py-1.5 text-xs font-medium"
+            onClick={() => onOpenEditor?.({ editor: "model", label: "CAD" })}
+          >
+            Open CAD
+          </button>
         </div>
       </div>
     );
@@ -113,11 +200,15 @@ export function AssemblyView({ projectId, branchId }: Props) {
   return (
     <div className="absolute inset-0">
       <CadViewport
-        script={assembly.script}
+        key={viewportEpoch}
+        script={viewport.script}
         engine={{ token: engine.data.token, baseUrl: engine.data.baseUrl }}
-        projectFiles={assembly.projectFiles}
-        entryPath={assembly.entryPath}
-        meshAssets={assembly.meshAssets}
+        projectFiles={viewport.projectFiles}
+        entryPath={viewport.entryPath}
+        meshAssets={viewport.meshAssets}
+        foreignImportOnly={viewport.foreignImportOnly}
+        chrome
+        headless={false}
         onError={setError}
       />
       {error ? (
@@ -126,53 +217,109 @@ export function AssemblyView({ projectId, branchId }: Props) {
         </div>
       ) : null}
 
-      <div className="bg-card/85 absolute top-3 right-3 z-10 w-64 rounded-xl border shadow-lg backdrop-blur-md">
-        <div className="border-b px-3 py-2.5">
-          <p className="text-xs font-semibold">Final assembly</p>
-          <p className="text-muted-foreground mt-0.5 text-[11px]">
-            Everything in one scene — jump into any surface to change it.
-          </p>
-        </div>
-        <div className="flex flex-col gap-0.5 p-1.5">
-          <SummaryRow
-            href={`${pathname}?view=model`}
-            icon={Boxes}
-            label="Mechanical"
-            detail={
-              assembly.mechanicalRoots.length > 0
-                ? assembly.mechanicalRoots.join(", ")
-                : "No parts yet — open the model editor"
-            }
-          />
-          <SummaryRow
-            href={`${pathname}?view=pcb`}
-            icon={CircuitBoard}
-            label="PCB"
-            detail={
-              assembly.hasPcb && pcbDoc
-                ? `${pcbDoc.board.widthMm} × ${pcbDoc.board.heightMm} mm · ${pcbDoc.footprints.length} placement${pcbDoc.footprints.length === 1 ? "" : "s"}`
-                : "No board yet — open the PCB editor"
-            }
-          />
-          <SummaryRow
-            href={`${pathname}?view=schematic`}
-            icon={Waypoints}
-            label="Schematic"
-            detail="Circuit behind the board"
-          />
-          <SummaryRow
-            href={`${pathname}?view=sourcing`}
-            icon={Package}
-            label="Sourcing"
-            detail={`Est. unit cost ${formatCents(bomCents)}`}
-          />
-        </div>
-      </div>
+      <div className="absolute top-3 right-3 z-10 flex w-72 flex-col gap-2">
+        <button
+          type="button"
+          onClick={() => void syncFromServer()}
+          disabled={syncing}
+          className="bg-card/95 hover:bg-card flex items-center justify-center gap-2 rounded-none border px-3 py-2 text-xs font-medium shadow-lg backdrop-blur-md disabled:opacity-60"
+        >
+          <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
+          {syncing ? "Syncing…" : "Reload · sync from server"}
+        </button>
 
-      <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2">
-        <span className="bg-card/85 text-muted-foreground rounded-lg border px-2.5 py-1 text-[11px] shadow backdrop-blur-md">
-          SIMULATED placement — PCB position is approximate, edit parts in their editors
-        </span>
+        <div className="bg-card/90 overflow-hidden rounded-none border shadow-lg backdrop-blur-md">
+          <div className="border-b px-3 py-2">
+            <p className="text-xs font-semibold">Product assembly</p>
+            <p className="text-muted-foreground mt-0.5 font-mono text-[11px]">{product.path}</p>
+            <p className="text-muted-foreground mt-0.5 text-[11px]">
+              Poses live in this file — open a part to edit geometry
+            </p>
+          </div>
+          <ul className="flex max-h-[min(60vh,420px)] flex-col gap-0.5 overflow-y-auto p-1.5">
+            {sceneTargets.map((t) => {
+              const hot = t.id === hoveredId || t.id === selectedId;
+              return (
+                <li key={t.id}>
+                  <button
+                    type="button"
+                    onMouseEnter={() => setHoveredId(t.id)}
+                    onMouseLeave={() => setHoveredId(null)}
+                    onClick={() => setSelectedId(t.id)}
+                    className={cn(
+                      "flex w-full items-center gap-2.5 rounded-none px-2.5 py-2 text-left transition-all duration-150",
+                      hot
+                        ? "bg-primary/15 -translate-y-0.5 shadow-sm ring-1 ring-primary/30"
+                        : "hover:bg-muted/60",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "flex size-7 shrink-0 items-center justify-center rounded-none",
+                        t.kind === "pcb"
+                          ? "bg-phase-engineer/15 text-phase-engineer"
+                          : "bg-primary/10 text-primary",
+                      )}
+                    >
+                      {t.kind === "pcb" ? (
+                        <CircuitBoard className="size-3.5" strokeWidth={1.75} />
+                      ) : (
+                        <Boxes className="size-3.5" strokeWidth={1.75} />
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-medium">{t.name}</span>
+                      <span className="text-muted-foreground block truncate text-[11px]">
+                        {t.detail}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        {activeTarget ? (
+          <div className="bg-card/95 animate-in fade-in slide-in-from-top-1 rounded-none border px-3 py-2.5 shadow-lg backdrop-blur-md duration-150">
+            <div className="flex items-start gap-2">
+              <span className="bg-primary/15 text-primary mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-none">
+                <ArrowUpRight className="size-3.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold">{activeTarget.name}</p>
+                <p className="text-muted-foreground text-[11px]">
+                  {activeTarget.kind === "pcb" ? "Open in PCB editor" : "Open in CAD editor"}
+                </p>
+              </div>
+            </div>
+            <div className="mt-2 flex gap-1.5">
+              <button
+                type="button"
+                className="bg-primary text-primary-foreground flex flex-1 items-center justify-center gap-1 rounded-none px-2 py-1.5 text-[11px] font-medium"
+                onClick={() => onOpenEditor?.(activeTarget.open)}
+              >
+                Open
+                <ArrowUpRight className="size-3" />
+              </button>
+              {activeTarget.kind === "pcb" ? (
+                <button
+                  type="button"
+                  className="bg-muted flex items-center gap-1 rounded-none px-2 py-1.5 text-[11px] font-medium"
+                  onClick={() => onOpenEditor?.("schematic")}
+                >
+                  <Waypoints className="size-3" />
+                  Schematic
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="bg-card/80 text-muted-foreground flex items-center gap-2 rounded-none border px-2.5 py-1.5 text-[11px] shadow backdrop-blur-md">
+          <Package className="size-3" />
+          BOM · est. {formatCents(bomCents)}
+        </div>
       </div>
     </div>
   );

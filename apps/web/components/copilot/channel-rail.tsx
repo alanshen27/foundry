@@ -210,7 +210,7 @@ export function ChannelRail({ className, compact, title, subtitle }: Props) {
                         <div
                           key={channel.id}
                           className={cn(
-                            "group/ch flex items-center gap-1 rounded-md px-2 py-1.5 text-sm",
+                            "group/ch flex items-center gap-1 rounded-none px-2 py-1.5 text-sm",
                             active
                               ? "bg-muted text-foreground"
                               : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -261,7 +261,7 @@ export function ChannelRail({ className, compact, title, subtitle }: Props) {
                   type="button"
                   onClick={() => switchChannel(channel.id)}
                   className={cn(
-                    "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm",
+                    "flex w-full items-center gap-1.5 rounded-none px-2 py-1.5 text-left text-sm",
                     channel.id === activeChannelId
                       ? "bg-muted text-foreground"
                       : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",

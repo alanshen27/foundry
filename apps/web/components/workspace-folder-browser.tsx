@@ -4,18 +4,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
-  ArrowRight,
   Boxes,
   ChevronRight,
-  Folder,
-  FolderKanban,
   FolderPlus,
   Loader2,
   MoreHorizontal,
   Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -31,6 +27,7 @@ import { ShareButton } from "@/components/share-button";
 import { avatarColor } from "@/lib/avatar-color";
 import { folderColorStyle, type FolderColor } from "@/lib/folder-color";
 import { childFolders, folderBreadcrumbs, type FolderRef } from "@/lib/workspace-folders";
+import { FolderGlyph } from "@/components/signal-icons";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +43,10 @@ const STAGE_DOT: Record<string, string> = {
   STALE: "bg-orange-400",
 };
 
+/** Shared face + caption rhythm so folder and project tiles align. */
+const TILE_FACE = "relative aspect-square overflow-hidden";
+const TILE_CAPTION = "border-border flex h-[4.5rem] flex-col justify-between border-t px-2.5 py-2";
+
 export type BrowserProject = {
   id: string;
   name: string;
@@ -59,7 +60,7 @@ export type BrowserProject = {
   stale?: boolean;
 };
 
-/** One cell of a preview tile: the 3D render, or the project's tinted initial. */
+/** One cell of a preview tile: the 3D render, or a muted initial. */
 function PreviewFace({ project, className }: { project: BrowserProject; className?: string }) {
   if (project.thumbnailUrl) {
     return (
@@ -68,8 +69,6 @@ function PreviewFace({ project, className }: { project: BrowserProject; classNam
       <img
         src={project.thumbnailUrl}
         alt=""
-        // Slight zoom crops the empty margin Zoo leaves around the model so the
-        // tile reads as filled rather than a tiny part floating in navy.
         className={cn("size-full scale-125 object-cover", className)}
         loading="lazy"
       />
@@ -77,64 +76,49 @@ function PreviewFace({ project, className }: { project: BrowserProject; classNam
   }
   const color = avatarColor(project.id);
   return (
-    <div className={cn("flex size-full items-center justify-center", color.tile, className)}>
-      <span className="text-[1.6em] font-bold">{project.name.slice(0, 1).toUpperCase()}</span>
-    </div>
-  );
-}
-
-/**
- * Folders borrow the previews of the projects inside them, so a folder tile
- * shows what it holds rather than a lone icon on a wall of colour.
- */
-function FolderPreview({
-  folder,
-  contents,
-}: {
-  folder: FolderRef;
-  contents: BrowserProject[];
-}) {
-  const style = folderColorStyle(folder.color, folder.id);
-  if (contents.length === 0) {
-    return (
-      <div className={cn("flex aspect-4/3 items-center justify-center", style.tile)}>
-        <Folder
-          className="size-10 transition-transform duration-150 group-hover:scale-110"
-          strokeWidth={1.5}
-        />
-      </div>
-    );
-  }
-  return (
-    <div className={cn("relative aspect-4/3 text-2xl", style.tile)}>
-      <div className="grid size-full grid-cols-2 grid-rows-2 gap-px transition-transform duration-150 group-hover:scale-105">
-        {Array.from({ length: 4 }, (_, i) => {
-          const project = contents[i];
-          return (
-            <div key={i} className="overflow-hidden text-[0.55em]">
-              {project ? <PreviewFace project={project} /> : <div className="size-full" />}
-            </div>
-          );
-        })}
-      </div>
-      {/* Folders and projects are both square tiles now, so mark which is which. */}
-      <span
-        className={cn(
-          "bg-background absolute top-2 left-2 flex size-6 items-center justify-center rounded-md shadow-sm",
-          style.icon,
-        )}
-      >
-        <Folder className="size-3.5" strokeWidth={2} />
+    <div className={cn("relative flex size-full items-center justify-center overflow-hidden", className)}>
+      <div className={cn("absolute inset-0 opacity-40", color.tile)} />
+      <span className="relative font-mono text-[2rem] font-medium tracking-[-0.06em] opacity-80">
+        {project.name.slice(0, 1).toUpperCase()}
       </span>
     </div>
   );
 }
 
-/**
- * The 3D render if one has been cached, otherwise a tinted placeholder so the
- * grid stays even while previews trickle in.
- */
-function ProjectPreview({
+function FolderTileFace({ folder }: { folder: FolderRef }) {
+  const style = folderColorStyle(folder.color, folder.id);
+  const signal = !folder.color || folder.color === "orange";
+  const voidColor = signal ? "#ff5a00" : "var(--background)";
+  return (
+    <div
+      className={cn(
+        TILE_FACE,
+        "rounded-none",
+        signal ? "bg-primary text-[#faf9f5]" : cn(style.tile, "text-current"),
+      )}
+      style={{ ["--glyph-void" as string]: voidColor }}
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 opacity-[0.22]"
+        style={{
+          backgroundImage: signal
+            ? "radial-gradient(circle, #faf9f5 0.55px, transparent 0.65px)"
+            : "radial-gradient(circle, currentColor 0.55px, transparent 0.65px)",
+          backgroundSize: "3.5px 3.5px",
+        }}
+      />
+      <span className="absolute top-2 left-2 font-mono text-[10px] tracking-[0.14em] uppercase opacity-70">
+        DIR
+      </span>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <FolderGlyph className="size-[48%] max-w-[5rem]" />
+      </div>
+    </div>
+  );
+}
+
+function ProjectTileFace({
   project,
   rendering,
 }: {
@@ -142,26 +126,42 @@ function ProjectPreview({
   rendering: boolean;
 }) {
   return (
-    <div className="bg-muted relative aspect-4/3 overflow-hidden text-2xl">
-      {/* Decorative: the card already spells out the project name below. */}
-      <PreviewFace
-        project={project}
-        className="transition-transform duration-200 group-hover:scale-[1.35]"
-      />
+    <div className={cn(TILE_FACE, "bg-muted")}>
+      <PreviewFace project={project} />
       {rendering ? (
         <div
-          className="bg-background/70 absolute inset-0 flex items-center justify-center backdrop-blur-sm"
+          className="bg-background/70 absolute inset-0 z-[2] flex items-center justify-center backdrop-blur-sm"
           title="Rendering 3D preview"
         >
           <Loader2 className="text-muted-foreground size-4 animate-spin" />
         </div>
       ) : null}
       {!project.hasModel && !project.thumbnailUrl ? (
-        <span className="bg-background/70 text-muted-foreground absolute bottom-2 left-2 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium backdrop-blur-sm">
+        <span className="border-border bg-card text-muted-foreground absolute bottom-2 left-2 z-[2] inline-flex items-center gap-1 border px-1.5 py-0.5 font-mono text-[9px] tracking-[0.08em] uppercase">
           <Boxes className="size-2.5" />
-          No model yet
+          No model
         </span>
       ) : null}
+    </div>
+  );
+}
+
+function StageDots({ project }: { project: BrowserProject }) {
+  return (
+    <div className="flex h-2.5 items-center gap-1" aria-label="Stage progress">
+      {STAGES.map((stage, i) => {
+        const state = project.stageStates.find((s) => s.stage === stage);
+        const status = state?.status ?? "NOT_STARTED";
+        return (
+          <div key={stage} className="flex items-center gap-1">
+            {i > 0 ? <span className="bg-border mx-0.5 h-px w-2" aria-hidden /> : null}
+            <span
+              title={`${stage}: ${status.replaceAll("_", " ").toLowerCase()}`}
+              className={cn("size-1.5 rounded-[1px]", STAGE_DOT[status] ?? STAGE_DOT.NOT_STARTED)}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -330,7 +330,10 @@ export function WorkspaceFolderBrowser({
     <div>
       <div className="mb-6 flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <nav aria-label="Breadcrumb" className="text-muted-foreground mb-2 flex flex-wrap items-center gap-1 text-[12px]">
+          <nav
+            aria-label="Breadcrumb"
+            className="text-muted-foreground mb-2 flex flex-wrap items-center gap-1 font-mono text-[11px] tracking-[0.04em]"
+          >
             <Link href={`/w/${workspaceSlug}`} className="hover:text-foreground transition-colors">
               {workspaceName}
             </Link>
@@ -349,8 +352,8 @@ export function WorkspaceFolderBrowser({
               </span>
             ))}
           </nav>
-          <h1 className="text-[28px] font-semibold tracking-[-0.03em]">{currentName}</h1>
-          <p className="text-muted-foreground mt-1 text-[13px]">
+          <h1 className="font-mono text-[28px] font-medium tracking-[-0.04em]">{currentName}</h1>
+          <p className="text-muted-foreground mt-1 font-mono text-[12px]">
             {foldersHere.length} folder{foldersHere.length === 1 ? "" : "s"}
             {" · "}
             {projectsHere.length} project{projectsHere.length === 1 ? "" : "s"}
@@ -383,11 +386,16 @@ export function WorkspaceFolderBrowser({
       </div>
 
       {empty ? (
-        <div className="bg-card flex flex-col items-center justify-center rounded-2xl border border-dashed px-6 py-16 text-center">
-          <span className="bg-primary/10 text-primary mb-3 flex size-12 items-center justify-center rounded-2xl">
-            <FolderKanban className="size-5" strokeWidth={2} />
-          </span>
-          <p className="text-[13px] font-medium">This folder is empty</p>
+        <div className="border-border bg-card flex flex-col items-center justify-center border px-6 py-16 text-center">
+          <div
+            className="bg-primary text-[#faf9f5] mb-4 flex size-16 items-center justify-center"
+            style={{ ["--glyph-void" as string]: "#ff5a00" }}
+          >
+            <FolderGlyph className="size-9" />
+          </div>
+          <p className="font-mono text-[13px] font-medium tracking-[-0.02em]">
+            This folder is empty
+          </p>
           <p className="text-muted-foreground mt-1 max-w-sm text-[13px]">
             Create a folder or project to organize work here.
           </p>
@@ -403,25 +411,24 @@ export function WorkspaceFolderBrowser({
       ) : (
         // Auto-fill off the container, not the viewport: with a sidebar in the
         // way, breakpoint columns guess the available width badly.
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-3">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(10.5rem,1fr))] gap-2">
           {foldersHere.map((folder) => (
             <div key={folder.id} className="group relative">
               <Link href={`/w/${workspaceSlug}/folders/${folder.id}`} className="block">
-                <Card className="hover:ring-foreground/15 gap-0 overflow-hidden rounded-2xl p-0 transition-all duration-150 group-hover:-translate-y-1 hover:shadow-[var(--shadow-panel)]">
-                  <FolderPreview
-                    folder={folder}
-                    contents={projects.filter((p) => p.folderId === folder.id)}
-                  />
-                  <div className="px-3 py-2">
-                    <div className="flex items-center gap-1.5">
-                      <p className="truncate text-[13px] font-semibold">{folder.name}</p>
-                      <ArrowRight className="text-muted-foreground size-3 shrink-0 -translate-x-1 opacity-0 transition-all group-hover:translate-x-0 group-hover:opacity-100" />
+                <div className="border-border bg-card hover:border-foreground/30 overflow-hidden border transition-colors">
+                  <FolderTileFace folder={folder} />
+                  <div className={TILE_CAPTION}>
+                    <div className="min-w-0">
+                      <p className="truncate font-mono text-[12px] font-medium tracking-[-0.02em]">
+                        {folder.name}
+                      </p>
+                      <p className="text-muted-foreground mt-0.5 truncate font-mono text-[10px] tracking-[0.04em] uppercase">
+                        {folderSummary(folder.id)}
+                      </p>
                     </div>
-                    <p className="text-muted-foreground truncate text-[11px]">
-                      {folderSummary(folder.id)}
-                    </p>
+                    <div className="h-2.5" aria-hidden />
                   </div>
-                </Card>
+                </div>
               </Link>
               <ItemMenu
                 open={menuFor === `f:${folder.id}`}
@@ -457,41 +464,23 @@ export function WorkspaceFolderBrowser({
                 href={`/w/${workspaceSlug}/projects/${project.slug}/overview`}
                 className="block"
               >
-                <Card className="hover:ring-foreground/15 gap-0 overflow-hidden rounded-2xl p-0 transition-all duration-150 group-hover:-translate-y-1 hover:shadow-[var(--shadow-panel)]">
-                  <ProjectPreview
+                <div className="border-border bg-card hover:border-foreground/30 overflow-hidden border transition-colors">
+                  <ProjectTileFace
                     project={project}
                     rendering={renderingIds.has(project.id)}
                   />
-                  <div className="px-3 py-2">
-                    <div className="flex items-center gap-1.5">
-                      <p className="truncate text-[13px] font-semibold">{project.name}</p>
-                      <ArrowRight className="text-muted-foreground size-3 shrink-0 -translate-x-1 opacity-0 transition-all group-hover:translate-x-0 group-hover:opacity-100" />
+                  <div className={TILE_CAPTION}>
+                    <div className="min-w-0">
+                      <p className="truncate font-mono text-[12px] font-medium tracking-[-0.02em]">
+                        {project.name}
+                      </p>
+                      <p className="text-muted-foreground mt-0.5 truncate font-mono text-[10px] tracking-[0.04em] uppercase">
+                        {project.description || "Project"}
+                      </p>
                     </div>
-                    <p className="text-muted-foreground truncate text-[11px]">
-                      {project.description || "Project"}
-                    </p>
-                    <div className="mt-1.5 flex items-center gap-1" aria-label="Stage progress">
-                      {STAGES.map((stage, i) => {
-                        const state = project.stageStates.find((s) => s.stage === stage);
-                        const status = state?.status ?? "NOT_STARTED";
-                        return (
-                          <div key={stage} className="flex items-center gap-1">
-                            {i > 0 ? (
-                              <span className="bg-border mx-0.5 h-px w-2.5" aria-hidden />
-                            ) : null}
-                            <span
-                              title={`${stage}: ${status.replaceAll("_", " ").toLowerCase()}`}
-                              className={cn(
-                                "size-1.5 rounded-full",
-                                STAGE_DOT[status] ?? STAGE_DOT.NOT_STARTED,
-                              )}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <StageDots project={project} />
                   </div>
-                </Card>
+                </div>
               </Link>
               <ItemMenu
                 open={menuFor === `p:${project.id}`}
@@ -698,7 +687,7 @@ function ItemMenu({
               aria-label="Close menu"
               onClick={() => onOpenChange(false)}
             />
-            <div className="bg-popover text-popover-foreground absolute top-full right-0 z-50 mt-1 min-w-[140px] rounded-lg border py-1 text-[13px] shadow-md">
+            <div className="bg-popover text-popover-foreground absolute top-full right-0 z-50 mt-1 min-w-[140px] rounded-none border py-1 text-[13px] shadow-md">
               {onRename ? (
                 <button
                   type="button"

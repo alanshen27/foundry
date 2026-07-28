@@ -1,14 +1,34 @@
+/**
+ * Client-safe @foundry/cad entry. Do NOT export Zoo MCP / Node child_process
+ * adapters here — those live in `@foundry/cad/server`.
+ */
 export type {
   CadAsset,
   CadAssetFormat,
+  CadBoundingBox,
   CadComponent,
   CadComponentKind,
   CadDoc,
+  CadKclInput,
   CadPort,
   CadResult,
   CadGenOptions,
+  CadProjectIterateOptions,
 } from "./port";
-export { createZooCadAdapter, isPlausibleZooOpId, type ZooCadAdapterOptions } from "./zoo";
+export { isPlausibleZooOpId } from "./op-id";
+export {
+  planAssemblyPlacements,
+  renderAssemblyKcl,
+  chooseZooOrientation,
+  kclWithOrientation,
+  scoreOrientedBbox,
+  seedAssemblyKcl,
+  defaultAssemblyIteratePrompt,
+  ORIENTATION_CANDIDATES,
+  ASSEMBLY_LAYOUT_GAP_MM,
+  type AssemblyPlacement,
+  type AssemblyRotationDeg,
+} from "./assembly-layout";
 export {
   DEFAULT_KCL,
   DEFAULT_ASSEMBLY_KCL,
@@ -32,6 +52,10 @@ export {
   isForeignImportOnlyScript,
   parseKclModuleImports,
   partModuleAlias,
+  displayNameFromCadPath,
+  toZooKclPath,
+  fromZooKclPath,
+  rewriteKclModuleImportPaths,
   insertPartIntoAssembly,
   buildKclProject,
   meshPartProxyKcl,

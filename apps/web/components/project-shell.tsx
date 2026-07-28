@@ -4,24 +4,18 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Boxes,
-  Building2,
   Check,
   ChevronsUpDown,
-  CircuitBoard,
-  Code2,
   Combine,
+  FolderGit2,
   LayoutDashboard,
   Lightbulb,
-  Package,
-  Palette,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   Rocket,
   Settings,
   ShieldCheck,
-  Waypoints,
 } from "lucide-react";
 import type { UIMessage } from "ai";
 import type { Stage } from "@foundry/domain";
@@ -29,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { FoundryMark } from "@/components/foundry-mark";
 import { PresenceBar } from "@/components/presence-bar";
 import { ShareButton } from "@/components/share-button";
+import { SignalIconTile } from "@/components/signal-icons";
 import {
   CopilotProvider,
   useCopilot,
@@ -90,16 +85,16 @@ export function WorkspaceSwitcher({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="hover:bg-muted flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors"
+        className="hover:bg-muted flex w-full items-center gap-2.5 rounded-none px-2 py-1.5 text-left transition-colors"
         aria-haspopup="listbox"
         aria-expanded={open}
       >
-        <span className="bg-primary/15 text-primary flex size-6 shrink-0 items-center justify-center rounded-[5px]">
-          <Building2 className="size-3.5" strokeWidth={1.75} />
-        </span>
+        <SignalIconTile kind="workspace" seed={current.id} letter={current.name} className="size-6" />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-medium">{current.name}</span>
-          <span className="text-muted-foreground block text-[11px]">Workspace</span>
+          <span className="text-muted-foreground block font-mono text-[10px] tracking-[0.08em] uppercase">
+            Workspace
+          </span>
         </span>
         <ChevronsUpDown className="text-muted-foreground size-3.5 shrink-0" />
       </button>
@@ -107,19 +102,17 @@ export function WorkspaceSwitcher({
       {open ? (
         <div
           role="listbox"
-          className="bg-popover absolute inset-x-0 top-full z-50 mt-1 overflow-hidden rounded-lg border shadow-[var(--shadow-panel)]"
+          className="bg-popover absolute inset-x-0 top-full z-50 mt-1 overflow-hidden rounded-none border shadow-[var(--shadow-panel)]"
         >
           <div className="max-h-64 overflow-y-auto p-1">
             {workspaces.map((w) => (
               <Link
                 key={w.id}
                 href={`/w/${w.slug}`}
-                className="hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px]"
+                className="hover:bg-muted flex items-center gap-2 rounded-none px-2 py-1.5 text-[13px]"
                 onClick={() => setOpen(false)}
               >
-                <span className="bg-primary/15 text-primary flex size-5 items-center justify-center rounded">
-                  <Building2 className="size-3" strokeWidth={1.75} />
-                </span>
+                <SignalIconTile kind="workspace" seed={w.id} letter={w.name} className="size-5" />
                 <span className="min-w-0 flex-1 truncate">{w.name}</span>
                 {w.id === current.id ? <Check className="text-primary size-3.5" /> : null}
               </Link>
@@ -128,7 +121,7 @@ export function WorkspaceSwitcher({
           <div className="border-t p-1">
             <Link
               href="/workspaces?manage=1"
-              className="text-muted-foreground hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px]"
+              className="text-muted-foreground hover:bg-muted flex items-center gap-2 rounded-none px-2 py-1.5 text-[13px]"
               onClick={() => setOpen(false)}
             >
               <Plus className="size-3.5" /> Manage workspaces
@@ -141,9 +134,7 @@ export function WorkspaceSwitcher({
 }
 
 /**
- * The design process, flattened into one footer strip. Engineer sub-views
- * (sourcing, schematic, PCB, model, code, design) are peers of the coarse
- * stages so the whole ideation -> launch flow reads left to right.
+ * Process stages + Repository. CAD / Schematic / PCB open as Engineer top tabs.
  */
 type ProcessStep = {
   key: string;
@@ -151,7 +142,6 @@ type ProcessStep = {
   icon: typeof Lightbulb;
   href: string;
   stage: Stage | null;
-  view?: string;
 };
 
 function processSteps(base: string): ProcessStep[] {
@@ -165,60 +155,18 @@ function processSteps(base: string): ProcessStep[] {
     },
     { key: "ideate", label: "Ideation", icon: Lightbulb, href: `${base}/ideate`, stage: "IDEATE" },
     {
-      key: "sourcing",
-      label: "Sourcing",
-      icon: Package,
-      href: `${base}/engineer?view=sourcing`,
+      key: "engineer",
+      label: "Engineer",
+      icon: Combine,
+      href: `${base}/engineer`,
       stage: "ENGINEER",
-      view: "sourcing",
     },
     {
-      key: "schematic",
-      label: "Schematic",
-      icon: Waypoints,
-      href: `${base}/engineer?view=schematic`,
-      stage: "ENGINEER",
-      view: "schematic",
-    },
-    {
-      key: "pcb",
-      label: "PCB",
-      icon: CircuitBoard,
-      href: `${base}/engineer?view=pcb`,
-      stage: "ENGINEER",
-      view: "pcb",
-    },
-    {
-      key: "model",
-      label: "Model",
-      icon: Boxes,
-      href: `${base}/engineer?view=model`,
-      stage: "ENGINEER",
-      view: "model",
-    },
-    {
-      key: "code",
-      label: "Code",
-      icon: Code2,
+      key: "repository",
+      label: "Repository",
+      icon: FolderGit2,
       href: `${base}/engineer?view=code`,
       stage: "ENGINEER",
-      view: "code",
-    },
-    {
-      key: "design",
-      label: "Design",
-      icon: Palette,
-      href: `${base}/engineer?view=design`,
-      stage: "ENGINEER",
-      view: "design",
-    },
-    {
-      key: "assembly",
-      label: "Assembly",
-      icon: Combine,
-      href: `${base}/engineer?view=assembly`,
-      stage: "ENGINEER",
-      view: "assembly",
     },
     { key: "verify", label: "Verify", icon: ShieldCheck, href: `${base}/verify`, stage: "VERIFY" },
     { key: "launch", label: "Launch", icon: Rocket, href: `${base}/launch`, stage: "LAUNCH" },
@@ -236,16 +184,21 @@ function ProcessFooter({
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const viewParam = searchParams.get("view");
   const steps = processSteps(base);
-  // Matches the default the Engineer page falls back to for a bare /engineer.
-  const view = searchParams.get("view") ?? "schematic";
 
   return (
     <footer className="bg-card flex h-10 shrink-0 items-center border-t px-1">
       <nav aria-label="Design process" className="flex h-full min-w-0 flex-1 items-stretch gap-0.5">
         {steps.map((step) => {
-          const onPath = pathname?.startsWith(step.href.split("?")[0] ?? step.href);
-          const active = step.view ? onPath && view === step.view : onPath;
+          const stepPath = step.href.split("?")[0] ?? step.href;
+          const onPath = Boolean(pathname?.startsWith(stepPath));
+          const active =
+            step.key === "repository"
+              ? onPath && viewParam === "code"
+              : step.key === "engineer"
+                ? onPath && viewParam !== "code"
+                : onPath;
           const status = step.stage ? (stageStatuses[step.stage] ?? "NOT_STARTED") : null;
           const Icon = step.icon;
           const phase = step.stage ? STAGE_THEME[step.stage] : null;
@@ -254,7 +207,7 @@ function ProcessFooter({
               key={step.key}
               href={step.href}
               className={cn(
-                "group relative flex items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors sm:px-3",
+                "group relative flex items-center gap-1.5 rounded-none px-2.5 text-[12px] font-medium transition-colors sm:px-3",
                 active
                   ? (phase?.active ?? "bg-muted text-foreground")
                   : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -271,7 +224,7 @@ function ProcessFooter({
                 strokeWidth={1.75}
               />
               <span className="hidden md:inline">{step.label}</span>
-              {status ? (
+              {status && step.key !== "repository" ? (
                 <span
                   title={status.replaceAll("_", " ").toLowerCase()}
                   className={cn("size-1.5 rounded-full", STATUS_DOT[status])}
@@ -284,7 +237,7 @@ function ProcessFooter({
       <Link
         href={`/w/${workspaceSlug}/settings`}
         title="Workspace settings"
-        className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-8 items-center justify-center rounded-md"
+        className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-8 items-center justify-center rounded-none"
       >
         <Settings className="size-3.5" strokeWidth={1.75} />
       </Link>
@@ -332,7 +285,7 @@ function ShellInner({
           <span className="text-foreground flex h-5 max-w-52 items-center truncate text-[13px] leading-none font-medium">
             {project.name}
           </span>
-          <span className="bg-muted text-muted-foreground ml-0.5 flex h-5 items-center rounded px-1.5 font-mono text-[11px] leading-none">
+          <span className="bg-muted text-muted-foreground ml-0.5 flex h-5 items-center rounded-none px-1.5 font-mono text-[11px] leading-none">
             {branchName}
           </span>
         </nav>
@@ -404,19 +357,17 @@ function HeaderWorkspaceMenu({
       {open ? (
         <div
           role="listbox"
-          className="bg-popover absolute top-full left-0 z-50 mt-1.5 w-56 overflow-hidden rounded-lg border shadow-lg"
+          className="bg-popover absolute top-full left-0 z-50 mt-1.5 w-56 overflow-hidden rounded-none border shadow-lg"
         >
           <div className="max-h-64 overflow-y-auto p-1">
             {workspaces.map((w) => (
               <Link
                 key={w.id}
                 href={`/w/${w.slug}`}
-                className="hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1.5 text-sm"
+                className="hover:bg-muted flex items-center gap-2 rounded-none px-2 py-1.5 text-sm"
                 onClick={() => setOpen(false)}
               >
-                <span className="bg-primary/15 text-primary flex size-5 items-center justify-center rounded">
-                  <Building2 className="size-3" strokeWidth={1.75} />
-                </span>
+                <SignalIconTile kind="workspace" seed={w.id} letter={w.name} className="size-5" />
                 <span className="min-w-0 flex-1 truncate">{w.name}</span>
                 {w.id === current.id ? <Check className="text-primary size-3.5" /> : null}
               </Link>
@@ -425,7 +376,7 @@ function HeaderWorkspaceMenu({
           <div className="border-t p-1">
             <Link
               href="/workspaces?manage=1"
-              className="text-muted-foreground hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1.5 text-sm"
+              className="text-muted-foreground hover:bg-muted flex items-center gap-2 rounded-none px-2 py-1.5 text-sm"
               onClick={() => setOpen(false)}
             >
               <Plus className="size-3.5" /> Manage workspaces

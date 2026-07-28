@@ -61,26 +61,29 @@ export default async function WorkspaceSettingsPage({
       user={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
     >
       <div className="mb-8">
-        <h1 className="text-[28px] font-semibold tracking-[-0.03em]">Settings</h1>
+        <p className="text-muted-foreground font-mono text-[11px] tracking-[0.14em] uppercase">
+          Workspace
+        </p>
+        <h1 className="mt-1 font-mono text-[28px] font-medium tracking-[-0.04em]">Settings</h1>
         <p className="text-muted-foreground mt-1 text-[13px]">
           Appearance and workspace members for {workspace.name}
         </p>
       </div>
 
       <section className="mb-10">
-        <h2 className="text-muted-foreground mb-3 text-[11px] font-medium tracking-[0.04em] uppercase">
+        <h2 className="text-muted-foreground mb-3 font-mono text-[11px] font-medium tracking-[0.1em] uppercase">
           Theme
         </h2>
-        <Card className="gap-0 rounded-xl p-4">
+        <Card className="gap-0 rounded-none p-4">
           <ThemeSettingsPanel />
         </Card>
       </section>
 
       <section className="mb-6">
-        <h2 className="text-muted-foreground mb-3 text-[11px] font-medium tracking-[0.04em] uppercase">
+        <h2 className="text-muted-foreground mb-3 font-mono text-[11px] font-medium tracking-[0.1em] uppercase">
           Members
         </h2>
-        <Card className="mb-6 gap-0 rounded-xl p-0">
+        <Card className="mb-6 gap-0 rounded-none p-0">
           <ul className="divide-border divide-y">
             {workspace.memberships.map((membership) => (
               <li
@@ -101,7 +104,7 @@ export default async function WorkspaceSettingsPage({
                     </p>
                   </div>
                 </div>
-                <span className="text-muted-foreground shrink-0 text-[11px] font-medium tracking-wide uppercase">
+                <span className="text-muted-foreground shrink-0 font-mono text-[11px] font-medium tracking-wide uppercase">
                   {membership.role}
                 </span>
               </li>
@@ -110,9 +113,9 @@ export default async function WorkspaceSettingsPage({
         </Card>
 
         {workspace.invitations.length > 0 ? (
-          <Card className="mb-6 gap-0 rounded-xl p-0">
+          <Card className="mb-6 gap-0 rounded-none p-0">
             <div className="border-b px-3.5 py-2.5">
-              <h2 className="text-muted-foreground text-[11px] font-medium tracking-[0.04em] uppercase">
+              <h2 className="text-muted-foreground font-mono text-[11px] font-medium tracking-[0.1em] uppercase">
                 Pending invitations
               </h2>
             </div>
