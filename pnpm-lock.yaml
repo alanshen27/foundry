@@ -41,6 +41,9 @@ importers:
       '@foundry/cad':
         specifier: workspace:*
         version: link:../../packages/cad
+      '@foundry/commerce':
+        specifier: workspace:*
+        version: link:../../packages/commerce
       '@foundry/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -211,6 +214,22 @@ importers:
       '@kittycad/lib':
         specifier: ^4.3.12
         version: 4.3.12(@types/node@22.20.1)(rollup@4.62.2)(typescript@5.9.3)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
+
+  packages/commerce:
+    dependencies:
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^22.10.5

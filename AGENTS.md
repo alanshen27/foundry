@@ -42,6 +42,12 @@ are NOT implemented. Do not fake them.
   hosting, and deployment — FOUNDRY runs no build containers and stores only
   the ids needed to resume editing. Unset falls back to a SIMULATED adapter
   that generates nothing and refuses to publish.
+- Commerce: Shopify Storefront API behind `CommercePort`
+  (`packages/commerce`). Credentials are per-site on
+  `CheckoutConfiguration`, not env, since each workspace sells from its own
+  store. Shopify owns catalog, payment, tax, and the hosted checkout; a
+  listing cannot go ACTIVE without a release and a seller identity
+  (`canActivateListing`, PRD 14.5 / 24.4).
 - Env is validated in `packages/config` (zod). Add new vars there and to
   `.env.example` and `turbo.json` `globalEnv`.
 
@@ -58,7 +64,7 @@ are NOT implemented. Do not fake them.
 - `packages/domain` — entities, capabilities, stage/status enums, event types
 - `packages/db` — Prisma schema, client, seed
 - `packages/auth`, `packages/storage`, `packages/realtime`, `packages/cad`,
-  `packages/sites` — ports + adapters
+  `packages/sites`, `packages/commerce` — ports + adapters
 - `packages/config` — env validation
 - `packages/observability` — logger + audit helpers
 - `docs/` — architecture notes and runbooks

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { CommercePanel } from "@/components/sites/commerce-panel";
 import { trpc } from "@/lib/trpc";
 
 type WorkspaceProject = { id: string; name: string; slug: string };
@@ -21,11 +22,13 @@ export function SitesPanel({
   projects,
   canEdit,
   canPublish,
+  canManageCommerce,
 }: {
   workspaceId: string;
   projects: WorkspaceProject[];
   canEdit: boolean;
   canPublish: boolean;
+  canManageCommerce: boolean;
 }) {
   const utils = trpc.useUtils();
   const builderStatus = trpc.site.builderStatus.useQuery();
@@ -256,6 +259,8 @@ export function SitesPanel({
                   </Button>
                 </form>
               ) : null}
+
+              <CommercePanel siteId={selected.id} canManage={canManageCommerce} />
             </div>
           ) : (
             <div className="text-muted-foreground bg-card flex items-center justify-center rounded-xl border border-dashed text-[13px]">

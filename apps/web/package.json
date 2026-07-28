@@ -20,6 +20,7 @@
     "@base-ui/react": "^1.6.0",
     "@foundry/auth": "workspace:*",
     "@foundry/cad": "workspace:*",
+    "@foundry/commerce": "workspace:*",
     "@foundry/config": "workspace:*",
     "@foundry/db": "workspace:*",
     "@foundry/domain": "workspace:*",

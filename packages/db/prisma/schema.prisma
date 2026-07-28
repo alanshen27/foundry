@@ -625,7 +625,8 @@ model Release {
   createdByName String
   createdAt   DateTime @default(now())
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  listings Listing[]
 
   @@unique([projectId, version])
   @@index([projectId, branchId])
@@ -665,8 +666,10 @@ model Site {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  workspace Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  checkout  CheckoutConfiguration?
+  listings  Listing[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, projectId])
@@ -675,4 +678,80 @@ model Site {
 enum SiteStatus {
   DRAFT
   PUBLISHED
+}
+
+/// Shopify connection for a Site. Shopify owns catalog, inventory, payment,
+/// tax, and the hosted checkout; FOUNDRY stores only what is needed to
+/// resolve a product and mint a cart. `sellerName` is the seller identity
+/// PRD 24.4 requires before checkout may be activated.
+model CheckoutConfiguration {
+  id          String            @id @default(cuid())
+  siteId      String            @unique
+  provider    CommerceProvider  @default(SHOPIFY)
+  /// e.g. `my-store.myshopify.com`.
+  shopDomain  String
+  /// Storefront access token (public-scope by design). Never returned to
+  /// the browser by the API — see the commerce router's select lists.
+  storefrontToken String
+  /// Legal seller shown at checkout. Required to activate a listing.
+  sellerName  String
+  currency    String            @default("USD")
+  createdById String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+}
+
+/// A product offered on a Site (PRD 21 `Listing`).
+///
+/// PRD 14.5: a public listing MUST reference an immutable release and MUST
+/// NOT read mutable branch data. A listing MAY be drafted before a release
+/// exists, but `canActivateListing` refuses to make it ACTIVE until one is
+/// selected, so checkout is impossible without it.
+model Listing {
+  id          String        @id @default(cuid())
+  siteId      String
+  releaseId   String?
+  saleMode    SaleMode      @default(PHYSICAL)
+  title       String
+  /// Price snapshot in minor units, taken from the store when activated.
+  priceCents  Int?
+  currency    String?
+  /// Product handle in the merchant's store.
+  externalHandle String
+  /// Variant id resolved from the store; the checkout line item.
+  externalVariantId String?
+  status      ListingStatus @default(DRAFT)
+  createdById String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  site    Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  release Release? @relation(fields: [releaseId], references: [id], onDelete: SetNull)
+
+  @@unique([siteId, externalHandle])
+  @@index([siteId, status])
+}
+
+enum CommerceProvider {
+  SHOPIFY
+}
+
+enum ListingStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+/// PRD 14.4 sale modes.
+enum SaleMode {
+  PHYSICAL
+  PREORDER
+  KIT
+  PCB_ONLY
+  MECHANICAL_FILES
+  DESIGN_BUNDLE
+  LICENSE
+  TEMPLATE
 }

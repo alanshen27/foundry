@@ -75,6 +75,7 @@ export default async function WorkspaceSitesPage({
         projects={workspace.projects.map((p) => ({ id: p.id, name: p.name, slug: p.slug }))}
         canEdit={hasCapability(role, grants, "site.edit")}
         canPublish={hasCapability(role, grants, "site.publish")}
+        canManageCommerce={hasCapability(role, grants, "commerce.manage")}
       />
     </HomeShell>
   );
