@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { prisma } from "@foundry/db";
 import { Card } from "@/components/ui/card";
 import { HomeShell } from "@/components/home-shell";
+import { SignalPageHeader } from "@/components/signal-page-header";
 import { ThemeSettingsPanel } from "@/components/theme-picker";
 import { UserAvatar } from "@/components/user-avatar";
 import { getCurrentUser } from "@/server/session";
@@ -60,15 +61,13 @@ export default async function WorkspaceSettingsPage({
       folders={workspace.folders}
       user={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
     >
-      <div className="mb-8">
-        <p className="text-muted-foreground font-mono text-[11px] tracking-[0.14em] uppercase">
-          Workspace
-        </p>
-        <h1 className="mt-1 font-mono text-[28px] font-medium tracking-[-0.04em]">Settings</h1>
-        <p className="text-muted-foreground mt-1 text-[13px]">
-          Appearance and workspace members for {workspace.name}
-        </p>
-      </div>
+      <SignalPageHeader
+        code="Workspace"
+        title="Settings"
+        subtitle={`Appearance and workspace members for ${workspace.name}`}
+        glyphSeed={`${workspace.id}-settings`}
+        className="mb-8"
+      />
 
       <section className="mb-10">
         <h2 className="text-muted-foreground mb-3 font-mono text-[11px] font-medium tracking-[0.1em] uppercase">

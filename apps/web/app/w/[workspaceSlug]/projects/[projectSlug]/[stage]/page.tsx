@@ -9,6 +9,7 @@ import {
   type WorkspaceRole,
 } from "@foundry/domain";
 import { getCurrentUser } from "@/server/session";
+import { SignalPageHeader } from "@/components/signal-page-header";
 import { IdeateStage } from "@/components/stages/ideate-stage";
 import { EngineerStage } from "@/components/stages/engineer-stage";
 import { VerifyStage } from "@/components/stages/verify-stage";
@@ -74,7 +75,12 @@ export default async function StagePage({
     <div className={stage === "ENGINEER" ? "h-full" : "mx-auto w-full max-w-4xl p-6 lg:p-8"}>
       {stage === "IDEATE" ? (
         <>
-          <h1 className="mb-6 text-3xl font-semibold tracking-tight">Ideate</h1>
+          <SignalPageHeader
+            code="Stage / 01"
+            title="Ideate"
+            glyphSeed={`${project.id}-ideate`}
+            className="mb-6"
+          />
           <IdeateStage projectId={project.id} branchId={branchId} canEdit={can("ideate.edit")} />
         </>
       ) : null}
@@ -95,7 +101,12 @@ export default async function StagePage({
       ) : null}
       {stage === "VERIFY" ? (
         <>
-          <h1 className="mb-6 text-3xl font-semibold tracking-tight">Verify</h1>
+          <SignalPageHeader
+            code="Stage / 03"
+            title="Verify"
+            glyphSeed={`${project.id}-verify`}
+            className="mb-6"
+          />
           <VerifyStage
             projectId={project.id}
             branchId={branchId}
@@ -107,7 +118,12 @@ export default async function StagePage({
       ) : null}
       {stage === "LAUNCH" ? (
         <>
-          <h1 className="mb-6 text-3xl font-semibold tracking-tight">Launch</h1>
+          <SignalPageHeader
+            code="Stage / 04"
+            title="Launch"
+            glyphSeed={`${project.id}-launch`}
+            className="mb-6"
+          />
           <LaunchStage
             projectId={project.id}
             branchId={branchId}
