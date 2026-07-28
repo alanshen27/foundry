@@ -1,11 +1,12 @@
 # FOUNDRY — Render Blueprint (IaC)
 # https://dashboard.render.com/blueprint/new
 #
-# Hosted Postgres / Auth / Storage stay on Supabase. This Blueprint deploys
-# the Next.js app, BullMQ chat worker, Yjs collab WebSocket service, and Redis.
+# Hosted Postgres / Auth / Storage stay on Supabase. Redis is external
+# (e.g. Upstash) — set REDIS_URL yourself. This Blueprint deploys the
+# Next.js app, BullMQ chat worker, and Yjs collab WebSocket service.
 #
 # After the first sync:
-# 1. Fill every sync:false env var in the Render dashboard.
+# 1. Fill every sync:false env var in the Render dashboard (incl. REDIS_URL).
 # 2. Set Supabase Auth Site URL + redirect allowlist to APP_ORIGIN
 #    (and APP_ORIGIN/auth/confirm, APP_ORIGIN/auth/callback).
 # 3. Paste supabase/templates/*.html into Supabase Auth email templates.
@@ -47,11 +48,9 @@ services:
           name: foundry-web
           type: web
           envVarKey: RENDER_EXTERNAL_URL
+      # External Redis (Upstash / etc). Use rediss:// for TLS.
       - key: REDIS_URL
-        fromService:
-          name: foundry-redis
-          type: keyvalue
-          property: connectionString
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: DIRECT_URL
@@ -105,10 +104,7 @@ services:
       - key: AI_MODEL
         value: gpt-5.6
       - key: REDIS_URL
-        fromService:
-          name: foundry-redis
-          type: keyvalue
-          property: connectionString
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: DIRECT_URL
@@ -177,10 +173,3 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
-
-  - type: keyvalue
-    name: foundry-redis
-    plan: starter
-    region: oregon
-    ipAllowList: []
-    maxmemoryPolicy: noeviction
