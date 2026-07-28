@@ -54,6 +54,13 @@ export type CircuitDoc = {
   wires: CircuitWire[];
   /** Board regions. Empty means the whole schematic is one board. */
   groups: CircuitGroup[];
+  /**
+   * Sketch driving this schematic in the simulator (lib/sim). It lives with
+   * the schematic rather than in the firmware repo because it is a testbench
+   * for *this wiring* — the thing you throw away once the board works — and
+   * because the simulator's API is JavaScript, not the C++ that ships.
+   */
+  sketch?: string;
 };
 
 export type CatalogEntry = {
@@ -205,6 +212,7 @@ export function normalizeCircuitDoc(raw: unknown): CircuitDoc {
       parts: (doc.parts as CircuitPart[]).filter((p) => p && p.id && p.type),
       wires: Array.isArray(doc.wires) ? (doc.wires as CircuitWire[]) : [],
       groups: normalizeGroups(doc.groups),
+      sketch: typeof doc.sketch === "string" ? doc.sketch.slice(0, 20_000) : undefined,
     };
   }
 

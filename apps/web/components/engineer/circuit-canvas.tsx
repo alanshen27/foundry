@@ -18,7 +18,17 @@ import {
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { FileDown, RotateCw, Search, SquareDashed, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Code2,
+  FileDown,
+  Play,
+  RotateCw,
+  Search,
+  Square,
+  SquareDashed,
+  Trash2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -48,6 +58,9 @@ import {
   type PartNode,
 } from "@/components/engineer/circuit-nodes";
 import { partitionBoards, type BoardPartition } from "@/lib/circuit/groups";
+import { Simulator } from "@/lib/sim/engine";
+import { MCU_TYPES, partModel } from "@/lib/sim/parts";
+import { runSketch, type SketchHandle } from "@/lib/sim/sketch";
 import { trpc } from "@/lib/trpc";
 
 let seq = 1;
@@ -124,10 +137,31 @@ function GroupLayer({
   );
 }
 
-function graphToDoc(nodes: PartNode[], edges: Edge[], groups: CircuitGroup[] = []): CircuitDoc {
+const DEFAULT_SKETCH = `// Simulated, not compiled firmware: JavaScript with the Arduino API's shape.
+// delay() must be yielded, which is what keeps the virtual clock deterministic.
+
+function setup() {
+  pinMode(13, OUTPUT);
+}
+
+function* loop() {
+  digitalWrite(13, HIGH);
+  yield delay(500);
+  digitalWrite(13, LOW);
+  yield delay(500);
+}
+`;
+
+function graphToDoc(
+  nodes: PartNode[],
+  edges: Edge[],
+  groups: CircuitGroup[] = [],
+  sketch?: string,
+): CircuitDoc {
   return {
     version: 2,
     groups,
+    sketch,
     parts: nodes.map((n) => ({
       id: n.id,
       type: n.data.partType,
@@ -228,10 +262,22 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     null,
   );
   const [groupTool, setGroupTool] = useState(false);
+  const [sketch, setSketch] = useState(DEFAULT_SKETCH);
+  const [simRunning, setSimRunning] = useState(false);
+  const [simOutputs, setSimOutputs] = useState<Map<string, number>>(new Map());
+  const [simLogs, setSimLogs] = useState<string[]>([]);
+  const [simError, setSimError] = useState<string | null>(null);
+  const [simFault, setSimFault] = useState<{ conflicts: number; unstable: boolean }>({
+    conflicts: 0,
+    unstable: false,
+  });
+  const [showSketch, setShowSketch] = useState(false);
+  /** Live simulator, so interaction handlers can poke it between ticks. */
+  const simRef = useRef<{ sim: Simulator; handle: SketchHandle | null } | null>(null);
   const dirtyRef = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stateRef = useRef({ nodes, edges, groups });
-  stateRef.current = { nodes, edges, groups };
+  const stateRef = useRef({ nodes, edges, groups, sketch });
+  stateRef.current = { nodes, edges, groups, sketch };
   const saveRef = useRef(save);
   saveRef.current = save;
 
@@ -240,9 +286,9 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     dirtyRef.current = true;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const { nodes: n, edges: e, groups: g } = stateRef.current;
+      const { nodes: n, edges: e, groups: g, sketch: s } = stateRef.current;
       saveRef.current.mutate(
-        { projectId, branchId, kind: "CIRCUIT", data: graphToDoc(n, e, g) },
+        { projectId, branchId, kind: "CIRCUIT", data: graphToDoc(n, e, g, s) },
         { onSuccess: () => (dirtyRef.current = false) },
       );
     }, 800);
@@ -256,7 +302,53 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     setNodes(graph.nodes);
     setEdges(graph.edges);
     setGroups(doc.groups);
+    if (doc.sketch !== undefined) setSketch(doc.sketch);
   }, [query.data, canEdit, setNodes, setEdges]);
+
+  /**
+   * The simulation loop. Rebuilt whenever the schematic or sketch changes,
+   * because both the net topology and the compiled program depend on them.
+   *
+   * Runs at 20 Hz against a virtual clock rather than per animation frame: the
+   * sketch's time is its own, so wall-clock pacing only controls how fast you
+   * watch it, and a lower rate keeps React Flow from re-rendering constantly.
+   */
+  useEffect(() => {
+    if (!simRunning) return;
+
+    const doc = graphToDoc(stateRef.current.nodes, stateRef.current.edges, stateRef.current.groups);
+    const sim = new Simulator(doc);
+    const mcu = doc.parts.find((p) => MCU_TYPES.has(p.type));
+    const handle = mcu ? runSketch(sim, mcu.id, stateRef.current.sketch) : null;
+
+    // Run setup, then settle, before any loop() body executes. setup() is what
+    // configures the pull-ups, and the settle turns those into levels — without
+    // this ordering the first loop() reads every pin as floating, so a pulled-up
+    // input reports LOW and the sketch sees a button press that never happened.
+    handle?.advance(0);
+    sim.step();
+
+    simRef.current = { sim, handle };
+    setSimError(handle?.error ?? (mcu ? null : "No microcontroller on the schematic."));
+
+    const startedAt = performance.now();
+    const timer = setInterval(() => {
+      // Virtual time tracks wall time so a delay(500) feels like half a second.
+      handle?.advance((performance.now() - startedAt) * 1000);
+      const snap = sim.step();
+      setSimOutputs(new Map(snap.outputs));
+      setSimFault({ conflicts: snap.conflicts, unstable: snap.unstable });
+      if (handle) {
+        setSimLogs([...handle.logs]);
+        if (handle.error) setSimError(handle.error);
+      }
+    }, 50);
+
+    return () => {
+      clearInterval(timer);
+      simRef.current = null;
+    };
+  }, [simRunning, sketch, nodes.length, edges.length]);
 
   const onConnect = useCallback(
     (conn: Connection) => {
@@ -400,6 +492,47 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     [scheduleSave],
   );
 
+  /**
+   * Press or toggle a part during a simulation. Momentary parts release on
+   * pointer-up anywhere, so dragging off the button does not leave it stuck.
+   */
+  const interact = useCallback((partId: string) => {
+    const live = simRef.current;
+    if (!live) return;
+    const type = stateRef.current.nodes.find((n) => n.id === partId)?.data.partType;
+    const model = type ? partModel(type) : undefined;
+    if (!model?.interactive) return;
+
+    if (model.interactive === "latching") {
+      const current = live.sim.stateOf(partId);
+      if ("position" in current) live.sim.setPartState(partId, { position: current.position ? 0 : 1 });
+      else live.sim.setPartState(partId, { pressed: !current.pressed });
+      return;
+    }
+
+    live.sim.setPartState(partId, { pressed: true });
+    const release = () => {
+      live.sim.setPartState(partId, { pressed: false });
+      window.removeEventListener("pointerup", release);
+    };
+    window.addEventListener("pointerup", release);
+  }, []);
+
+  // Simulation state is pushed onto the nodes so the Wokwi elements light up.
+  // Only touched while running, so the editor keeps its plain appearance.
+  const simNodes = useMemo(() => {
+    if (!simRunning) return nodes;
+    return nodes.map((n) => {
+      const value = simOutputs.get(n.id);
+      const canPress = Boolean(partModel(n.data.partType)?.interactive);
+      if (value === undefined && !canPress) return n;
+      return {
+        ...n,
+        data: { ...n.data, simValue: value ?? 0, onInteract: canPress ? interact : undefined },
+      };
+    });
+  }, [nodes, simRunning, simOutputs, interact]);
+
   const { theme } = useTheme();
   const results = useMemo(() => searchCatalog(search), [search]);
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
@@ -426,7 +559,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
       onMouseLeave={onPaneMouseUp}
     >
       <ReactFlow
-        nodes={nodes}
+        nodes={simNodes}
         edges={edges}
         nodeTypes={circuitNodeTypes}
         onNodesChange={(changes) => {
@@ -647,13 +780,94 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
           </Panel>
         ) : null}
 
+        <Panel position="bottom-right" className="!mr-3 !mb-44">
+          <div className="bg-card/90 flex w-72 flex-col gap-2 rounded-xl border p-2.5 shadow-lg backdrop-blur-md">
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant={simRunning ? "secondary" : "outline"}
+                size="xs"
+                onClick={() => setSimRunning((r) => !r)}
+                aria-pressed={simRunning}
+              >
+                {simRunning ? <Square className="size-3" /> : <Play className="size-3" />}
+                {simRunning ? "Stop" : "Simulate"}
+              </Button>
+              <Button
+                variant={showSketch ? "secondary" : "ghost"}
+                size="xs"
+                onClick={() => setShowSketch((s) => !s)}
+                aria-pressed={showSketch}
+              >
+                <Code2 className="size-3" /> Code
+              </Button>
+              <span className="text-muted-foreground ml-auto text-[10px] uppercase">
+                {simRunning ? "simulated" : "idle"}
+              </span>
+            </div>
+
+            {showSketch ? (
+              <textarea
+                value={sketch}
+                onChange={(e) => {
+                  setSketch(e.target.value);
+                  scheduleSave();
+                }}
+                spellCheck={false}
+                rows={12}
+                className="bg-background focus-visible:border-ring rounded-lg border p-2 font-mono text-[10px] leading-snug outline-none"
+                aria-label="Simulation sketch"
+                disabled={!canEdit}
+              />
+            ) : null}
+
+            {simError ? (
+              <p className="text-destructive flex items-start gap-1 text-[10px] leading-snug">
+                <AlertTriangle className="mt-px size-3 shrink-0" />
+                {simError}
+              </p>
+            ) : null}
+
+            {simRunning && simFault.conflicts > 0 ? (
+              <p className="text-[10px] leading-snug text-amber-500">
+                {simFault.conflicts} net{simFault.conflicts === 1 ? "" : "s"} with two drivers
+                fighting — a short in the making.
+              </p>
+            ) : null}
+
+            {simRunning && simFault.unstable ? (
+              <p className="text-[10px] leading-snug text-amber-500">
+                Circuit never settled — likely a feedback loop.
+              </p>
+            ) : null}
+
+            {simRunning ? (
+              <div className="bg-background max-h-24 overflow-y-auto rounded-md border p-1.5 font-mono text-[10px] leading-snug">
+                {simLogs.length === 0 ? (
+                  <span className="text-muted-foreground">
+                    No output. Use print() in the sketch.
+                  </span>
+                ) : (
+                  simLogs.slice(-12).map((line, i) => <div key={i}>{line}</div>)
+                )}
+              </div>
+            ) : null}
+
+            <p className="text-muted-foreground text-[10px] leading-snug">
+              JavaScript with the Arduino API&apos;s shape, on a virtual clock — not compiled
+              firmware. Click buttons and switches while it runs.
+            </p>
+          </div>
+        </Panel>
+
         <Panel position="bottom-center" className="!mb-3">
           <span className="bg-card/85 text-muted-foreground rounded-lg border px-2.5 py-1 text-[11px] shadow backdrop-blur-md">
             {save.isPending
               ? "Saving…"
               : groupTool
                 ? "Drag a rectangle to mark a board region"
-                : "Autosaves · drag pins to wire · ⌫ deletes"}
+                : simRunning
+                  ? "Simulating · click buttons and switches to interact"
+                  : "Autosaves · drag pins to wire · ⌫ deletes"}
           </span>
         </Panel>
       </ReactFlow>
