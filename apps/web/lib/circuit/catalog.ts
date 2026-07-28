@@ -55,12 +55,12 @@ export type CircuitDoc = {
   /** Board regions. Empty means the whole schematic is one board. */
   groups: CircuitGroup[];
   /**
-   * Sketch driving this schematic in the simulator (lib/sim). It lives with
-   * the schematic rather than in the firmware repo because it is a testbench
-   * for *this wiring* — the thing you throw away once the board works — and
-   * because the simulator's API is JavaScript, not the C++ that ships.
+   * Code file (Engineer > Code) the simulator runs against this schematic.
+   * Only the reference is stored: the file itself belongs to the Code stage,
+   * which already has an editor, history and repo structure. Duplicating the
+   * source here would immediately create two copies that drift.
    */
-  sketch?: string;
+  sketchFileId?: string;
 };
 
 export type CatalogEntry = {
@@ -212,7 +212,10 @@ export function normalizeCircuitDoc(raw: unknown): CircuitDoc {
       parts: (doc.parts as CircuitPart[]).filter((p) => p && p.id && p.type),
       wires: Array.isArray(doc.wires) ? (doc.wires as CircuitWire[]) : [],
       groups: normalizeGroups(doc.groups),
-      sketch: typeof doc.sketch === "string" ? doc.sketch.slice(0, 20_000) : undefined,
+      sketchFileId:
+        typeof doc.sketchFileId === "string" && doc.sketchFileId
+          ? doc.sketchFileId.slice(0, 60)
+          : undefined,
     };
   }
 

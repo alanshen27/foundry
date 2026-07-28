@@ -27,9 +27,11 @@ import {
   Search,
   Square,
   SquareDashed,
+  Terminal,
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -156,12 +158,12 @@ function graphToDoc(
   nodes: PartNode[],
   edges: Edge[],
   groups: CircuitGroup[] = [],
-  sketch?: string,
+  sketchFileId?: string,
 ): CircuitDoc {
   return {
     version: 2,
     groups,
-    sketch,
+    sketchFileId,
     parts: nodes.map((n) => ({
       id: n.id,
       type: n.data.partType,
@@ -262,7 +264,21 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     null,
   );
   const [groupTool, setGroupTool] = useState(false);
-  const [sketch, setSketch] = useState(DEFAULT_SKETCH);
+  const [sketchFileId, setSketchFileId] = useState<string | null>(null);
+  const utils = trpc.useUtils();
+  // Sketches live in the Code stage, so the picker lists that stage's files.
+  const codeFiles = trpc.code.listProjectFiles.useQuery({ projectId, branchId });
+  const reposQuery = trpc.engineer.listRepos.useQuery({ projectId, branchId });
+  const createFile = trpc.code.createFile.useMutation();
+  const sketchFile = trpc.code.getFile.useQuery(
+    { id: sketchFileId ?? "" },
+    { enabled: Boolean(sketchFileId) },
+  );
+  /** Runnable sketches: JavaScript only, since that is what the runtime executes. */
+  const runnableFiles = useMemo(
+    () => (codeFiles.data ?? []).filter((f) => /\.(js|mjs)$/i.test(f.path)),
+    [codeFiles.data],
+  );
   const [simRunning, setSimRunning] = useState(false);
   const [simOutputs, setSimOutputs] = useState<Map<string, number>>(new Map());
   const [simLogs, setSimLogs] = useState<string[]>([]);
@@ -271,13 +287,14 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     conflicts: 0,
     unstable: false,
   });
-  const [showSketch, setShowSketch] = useState(false);
+  const [showSerial, setShowSerial] = useState(true);
+  const [simPins, setSimPins] = useState<{ pin: string; level: 0 | 1 | null }[]>([]);
   /** Live simulator, so interaction handlers can poke it between ticks. */
   const simRef = useRef<{ sim: Simulator; handle: SketchHandle | null } | null>(null);
   const dirtyRef = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stateRef = useRef({ nodes, edges, groups, sketch });
-  stateRef.current = { nodes, edges, groups, sketch };
+  const stateRef = useRef({ nodes, edges, groups, sketchFileId, source: "" });
+  stateRef.current = { ...stateRef.current, nodes, edges, groups, sketchFileId };
   const saveRef = useRef(save);
   saveRef.current = save;
 
@@ -286,9 +303,9 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     dirtyRef.current = true;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const { nodes: n, edges: e, groups: g, sketch: s } = stateRef.current;
+      const { nodes: n, edges: e, groups: g, sketchFileId: f } = stateRef.current;
       saveRef.current.mutate(
-        { projectId, branchId, kind: "CIRCUIT", data: graphToDoc(n, e, g, s) },
+        { projectId, branchId, kind: "CIRCUIT", data: graphToDoc(n, e, g, f ?? undefined) },
         { onSuccess: () => (dirtyRef.current = false) },
       );
     }, 800);
@@ -302,7 +319,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     setNodes(graph.nodes);
     setEdges(graph.edges);
     setGroups(doc.groups);
-    if (doc.sketch !== undefined) setSketch(doc.sketch);
+    setSketchFileId(doc.sketchFileId ?? null);
   }, [query.data, canEdit, setNodes, setEdges]);
 
   /**
@@ -319,7 +336,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     const doc = graphToDoc(stateRef.current.nodes, stateRef.current.edges, stateRef.current.groups);
     const sim = new Simulator(doc);
     const mcu = doc.parts.find((p) => MCU_TYPES.has(p.type));
-    const handle = mcu ? runSketch(sim, mcu.id, stateRef.current.sketch) : null;
+    const handle = mcu ? runSketch(sim, mcu.id, stateRef.current.source) : null;
 
     // Run setup, then settle, before any loop() body executes. setup() is what
     // configures the pull-ups, and the settle turns those into levels — without
@@ -329,7 +346,14 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     sim.step();
 
     simRef.current = { sim, handle };
-    setSimError(handle?.error ?? (mcu ? null : "No microcontroller on the schematic."));
+    setSimError(
+      handle?.error ??
+        (!mcu
+          ? "No microcontroller on the schematic."
+          : !stateRef.current.source
+            ? "No sketch selected — pick a .js file from the Code stage."
+            : null),
+    );
 
     const startedAt = performance.now();
     const timer = setInterval(() => {
@@ -338,6 +362,16 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
       const snap = sim.step();
       setSimOutputs(new Map(snap.outputs));
       setSimFault({ conflicts: snap.conflicts, unstable: snap.unstable });
+      // Live pin monitor for the MCU's digital pins — the readout you actually
+      // want when a sketch does not do what you expected.
+      if (mcu) {
+        setSimPins(
+          Array.from({ length: 14 }, (_, i) => ({
+            pin: String(i),
+            level: sim.pinState(mcu.id, String(i)).level,
+          })),
+        );
+      }
       if (handle) {
         setSimLogs([...handle.logs]);
         if (handle.error) setSimError(handle.error);
@@ -348,7 +382,26 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
       clearInterval(timer);
       simRef.current = null;
     };
-  }, [simRunning, sketch, nodes.length, edges.length]);
+    // Restarts when the selected file's contents change, so editing the sketch
+    // in the Code stage and coming back re-runs the new version.
+  }, [simRunning, sketchFile.data?.content, nodes.length, edges.length]);
+
+  // Keep the source the run loop reads in step with the selected file.
+  stateRef.current.source = sketchFile.data?.content ?? "";
+
+  /** Creates a starter sketch in the firmware repo and selects it. */
+  const createSketch = useCallback(async () => {
+    const repo = reposQuery.data?.[0];
+    if (!repo) return;
+    const made = await createFile.mutateAsync({
+      repoId: repo.id,
+      path: "sim/sketch.js",
+      content: DEFAULT_SKETCH,
+    });
+    await utils.code.listProjectFiles.invalidate();
+    setSketchFileId(made.id);
+    scheduleSave();
+  }, [reposQuery.data, createFile, utils, scheduleSave]);
 
   const onConnect = useCallback(
     (conn: Connection) => {
@@ -781,80 +834,135 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
         ) : null}
 
         <Panel position="bottom-right" className="!mr-3 !mb-44">
-          <div className="bg-card/90 flex w-72 flex-col gap-2 rounded-xl border p-2.5 shadow-lg backdrop-blur-md">
-            <div className="flex items-center gap-1.5">
+          <div className="bg-card/95 flex w-80 flex-col rounded-xl border shadow-xl backdrop-blur-md">
+            {/* Control bar */}
+            <div className="flex items-center gap-1.5 border-b px-2 py-1.5">
               <Button
-                variant={simRunning ? "secondary" : "outline"}
+                variant={simRunning ? "destructive" : "default"}
                 size="xs"
+                disabled={!canEdit}
                 onClick={() => setSimRunning((r) => !r)}
                 aria-pressed={simRunning}
               >
                 {simRunning ? <Square className="size-3" /> : <Play className="size-3" />}
-                {simRunning ? "Stop" : "Simulate"}
+                {simRunning ? "Stop" : "Run"}
               </Button>
-              <Button
-                variant={showSketch ? "secondary" : "ghost"}
-                size="xs"
-                onClick={() => setShowSketch((s) => !s)}
-                aria-pressed={showSketch}
+
+              <select
+                value={sketchFileId ?? ""}
+                onChange={(e) => {
+                  setSketchFileId(e.target.value || null);
+                  scheduleSave();
+                }}
+                className="bg-background min-w-0 flex-1 rounded-md border px-1.5 py-1 font-mono text-[10px]"
+                aria-label="Simulation sketch"
+                disabled={!canEdit}
               >
-                <Code2 className="size-3" /> Code
-              </Button>
-              <span className="text-muted-foreground ml-auto text-[10px] uppercase">
+                <option value="">no sketch</option>
+                {runnableFiles.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.path}
+                  </option>
+                ))}
+              </select>
+
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-wide uppercase",
+                  simRunning ? "bg-amber-500/15 text-amber-500" : "text-muted-foreground",
+                )}
+                title="Behavioural simulation, not compiled firmware"
+              >
                 {simRunning ? "simulated" : "idle"}
               </span>
             </div>
 
-            {showSketch ? (
-              <textarea
-                value={sketch}
-                onChange={(e) => {
-                  setSketch(e.target.value);
-                  scheduleSave();
-                }}
-                spellCheck={false}
-                rows={12}
-                className="bg-background focus-visible:border-ring rounded-lg border p-2 font-mono text-[10px] leading-snug outline-none"
-                aria-label="Simulation sketch"
-                disabled={!canEdit}
-              />
+            {/* No sketch yet: offer to make one in the Code stage. */}
+            {runnableFiles.length === 0 ? (
+              <div className="flex items-center gap-2 border-b px-2 py-1.5">
+                <p className="text-muted-foreground flex-1 text-[10px] leading-snug">
+                  No .js sketches in Code yet.
+                </p>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={!canEdit || !reposQuery.data?.length || createFile.isPending}
+                  onClick={() => void createSketch()}
+                >
+                  <Code2 className="size-3" /> Create
+                </Button>
+              </div>
             ) : null}
 
+            {/* Faults first — they explain everything below them. */}
             {simError ? (
-              <p className="text-destructive flex items-start gap-1 text-[10px] leading-snug">
+              <p className="text-destructive flex items-start gap-1 border-b px-2 py-1.5 text-[10px] leading-snug">
                 <AlertTriangle className="mt-px size-3 shrink-0" />
                 {simError}
               </p>
             ) : null}
 
-            {simRunning && simFault.conflicts > 0 ? (
-              <p className="text-[10px] leading-snug text-amber-500">
-                {simFault.conflicts} net{simFault.conflicts === 1 ? "" : "s"} with two drivers
-                fighting — a short in the making.
+            {simRunning && (simFault.conflicts > 0 || simFault.unstable) ? (
+              <p className="flex items-start gap-1 border-b px-2 py-1.5 text-[10px] leading-snug text-amber-500">
+                <AlertTriangle className="mt-px size-3 shrink-0" />
+                {simFault.conflicts > 0
+                  ? `${simFault.conflicts} net${simFault.conflicts === 1 ? "" : "s"} with two drivers fighting.`
+                  : "Circuit never settled — likely a feedback loop."}
               </p>
             ) : null}
 
-            {simRunning && simFault.unstable ? (
-              <p className="text-[10px] leading-snug text-amber-500">
-                Circuit never settled — likely a feedback loop.
-              </p>
+            {/* Digital pin monitor: the readout you want when a sketch misbehaves. */}
+            {simRunning && simPins.length > 0 ? (
+              <div className="grid grid-cols-7 gap-x-1 gap-y-0.5 border-b px-2 py-1.5">
+                {simPins.map((p) => (
+                  <div key={p.pin} className="flex flex-col items-center">
+                    <span className="text-muted-foreground font-mono text-[9px]">{p.pin}</span>
+                    <span
+                      className={cn(
+                        "h-1.5 w-full rounded-sm",
+                        p.level === 1
+                          ? "bg-emerald-500"
+                          : p.level === 0
+                            ? "bg-muted-foreground/40"
+                            : "bg-muted-foreground/10",
+                      )}
+                      title={p.level === null ? "floating" : p.level ? "high" : "low"}
+                    />
+                  </div>
+                ))}
+              </div>
             ) : null}
 
-            {simRunning ? (
-              <div className="bg-background max-h-24 overflow-y-auto rounded-md border p-1.5 font-mono text-[10px] leading-snug">
+            {/* Serial monitor */}
+            <button
+              type="button"
+              onClick={() => setShowSerial((v) => !v)}
+              className="text-muted-foreground hover:bg-muted/40 flex items-center gap-1 px-2 py-1 text-[10px] font-semibold tracking-wide uppercase"
+            >
+              <Terminal className="size-3" /> Serial
+              <span className="ml-auto font-normal normal-case">
+                {simLogs.length > 0 ? `${simLogs.length} lines` : "—"}
+              </span>
+            </button>
+            {showSerial ? (
+              <div className="bg-background/80 max-h-32 overflow-y-auto px-2 pb-1.5 font-mono text-[10px] leading-relaxed">
                 {simLogs.length === 0 ? (
                   <span className="text-muted-foreground">
-                    No output. Use print() in the sketch.
+                    {simRunning ? "No output — call print() in the sketch." : "Not running."}
                   </span>
                 ) : (
-                  simLogs.slice(-12).map((line, i) => <div key={i}>{line}</div>)
+                  simLogs.slice(-40).map((line, i) => (
+                    <div key={i} className="whitespace-pre-wrap">
+                      {line}
+                    </div>
+                  ))
                 )}
               </div>
             ) : null}
 
-            <p className="text-muted-foreground text-[10px] leading-snug">
-              JavaScript with the Arduino API&apos;s shape, on a virtual clock — not compiled
-              firmware. Click buttons and switches while it runs.
+            <p className="text-muted-foreground border-t px-2 py-1.5 text-[10px] leading-snug">
+              Runs the selected Code file as JavaScript with the Arduino API&apos;s shape, on a
+              virtual clock. Not compiled firmware. Click buttons and switches while it runs.
             </p>
           </div>
         </Panel>
