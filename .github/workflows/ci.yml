@@ -24,6 +24,7 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://foundry:foundry@localhost:5432/foundry
+      DIRECT_URL: postgresql://foundry:foundry@localhost:5432/foundry
       AUTH_MODE: local
       AUTH_SECRET: ci-secret
       STORAGE_MODE: local
