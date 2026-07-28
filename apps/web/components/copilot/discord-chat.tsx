@@ -1,15 +1,8 @@
 "use client";
 
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-  type KeyboardEvent,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { UIMessage } from "ai";
-import { AtSign, Hash, Loader2, Send, Sparkles, Square, XCircle } from "lucide-react";
+import { AtSign, Loader2, Send, Sparkles, Square, XCircle } from "lucide-react";
 import { FoundryMarkIcon } from "@/components/foundry-mark";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -46,22 +39,23 @@ function initials(name: string): string {
 function Avatar({ message, viewer }: { message: UIMessage; viewer: Viewer }) {
   if (message.role !== "user") {
     return (
-      <div className="size-10 shrink-0 overflow-hidden rounded-full">
-        <FoundryMarkIcon className="size-10" />
+      <div className="bg-primary/10 border-border flex size-9 shrink-0 items-center justify-center overflow-hidden border">
+        <FoundryMarkIcon className="size-5" />
       </div>
     );
   }
   if (viewer.avatarUrl) {
     return (
+      // eslint-disable-next-line @next/next/no-img-element
       <img
         src={viewer.avatarUrl}
         alt={viewer.name}
-        className="size-10 shrink-0 rounded-full object-cover"
+        className="border-border size-9 shrink-0 border object-cover"
       />
     );
   }
   return (
-    <div className="bg-muted text-foreground flex size-10 shrink-0 items-center justify-center rounded-full text-xs font-semibold">
+    <div className="bg-muted text-foreground border-border flex size-9 shrink-0 items-center justify-center border font-mono text-[11px] font-semibold tracking-[0.04em]">
       {initials(viewer.name)}
     </div>
   );
@@ -95,28 +89,32 @@ function ChatMessage({
   return (
     <div
       className={cn(
-        "hover:bg-muted/30 group flex gap-4 px-6",
+        "hover:bg-muted/30 group flex gap-3 px-5",
         grouped ? "py-0.5" : "mt-4 py-0.5 first:mt-0",
       )}
     >
-      <div className="w-10 shrink-0">
+      <div className="w-9 shrink-0">
         {grouped ? null : <Avatar message={message} viewer={viewer} />}
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col gap-1 pb-0.5">
         {grouped ? null : (
           <div className="flex items-center gap-2">
-            <span className={cn("text-sm font-semibold", !isUser && "text-primary")}>
+            <span
+              className={cn(
+                "font-mono text-[12px] font-medium tracking-[0.04em]",
+                !isUser && "text-primary",
+              )}
+            >
               {isUser ? viewer.name : COPILOT_NAME}
             </span>
             {isUser ? null : (
-              <span className="bg-primary/15 text-primary rounded-none px-1.5 py-px text-[10px] font-semibold uppercase">
+              <span className="bg-primary text-primary-foreground px-1.5 py-px font-mono text-[9px] font-semibold tracking-[0.1em] uppercase">
                 AI
               </span>
             )}
           </div>
         )}
-
         {message.parts.map((part, i) => {
           const partKey =
             "toolCallId" in part && typeof part.toolCallId === "string"
@@ -291,43 +289,55 @@ export function DiscordChat({
       <ChannelRail title={projectName} subtitle={workspaceName} />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-6">
-          <Hash className="text-muted-foreground size-5 shrink-0" />
-          <h1 className="truncate text-[15px] font-semibold">{channelName}</h1>
-          <span className="bg-border mx-1 hidden h-5 w-px shrink-0 sm:block" />
-          <p className="text-muted-foreground hidden truncate text-xs sm:block">
-            Mention @AI to work with the copilot
+        <header className="bg-card flex h-12 shrink-0 items-center gap-2 border-b px-5">
+          <FoundryMarkIcon className="size-4 shrink-0" />
+          <h1 className="truncate font-mono text-[13px] font-medium tracking-[0.06em] uppercase">
+            {channelName}
+          </h1>
+          <span className="bg-border mx-1 hidden h-4 w-px shrink-0 sm:block" />
+          <p className="text-muted-foreground hidden truncate font-mono text-[11px] tracking-[0.04em] sm:block">
+            Mention @AI · Foundry Copilot
           </p>
           {busy ? (
-            <span className="text-muted-foreground ml-auto flex shrink-0 items-center gap-1.5 text-xs">
+            <span className="text-muted-foreground ml-auto flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-[0.06em] uppercase">
               <Loader2 className="size-3.5 animate-spin" />
-              working…
+              working
             </span>
           ) : null}
         </header>
 
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto py-4">
           {messages.length === 0 ? (
-            <div className="flex flex-col gap-4 px-6 pt-8">
-              <div className="bg-muted flex size-16 items-center justify-center rounded-full">
-                <Hash className="text-foreground size-8" />
+            <div className="flex flex-col gap-5 px-5 pt-10">
+              <div className="bg-primary relative flex size-14 items-center justify-center overflow-hidden">
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 opacity-30"
+                  style={{
+                    backgroundImage: "radial-gradient(circle, #faf9f5 0.55px, transparent 0.65px)",
+                    backgroundSize: "3.5px 3.5px",
+                  }}
+                />
+                <FoundryMarkIcon className="relative z-10 size-7 brightness-0 invert" />
               </div>
-              <div className="flex flex-col gap-1">
-                <h2 className="text-3xl font-bold">Welcome to #{channelName}</h2>
-                <p className="text-muted-foreground max-w-xl text-[15px] leading-relaxed">
-                  This is the start of the channel. Mention{" "}
-                  <span className="text-primary font-semibold">@AI</span> and the Foundry copilot
-                  will fill out the brief, requirements, BOM, circuit, 3D model, and checks.
+              <div className="flex flex-col gap-2">
+                <h2 className="font-mono text-2xl font-medium tracking-[-0.03em]">
+                  #{channelName}
+                </h2>
+                <p className="text-muted-foreground max-w-xl text-[14px] leading-relaxed">
+                  Mention <span className="text-primary font-mono font-medium">@AI</span> and the
+                  Foundry copilot will fill out the brief, requirements, BOM, circuit, 3D model, and
+                  checks.
                 </p>
               </div>
-              <div className="mt-2 flex flex-wrap gap-2">
+              <div className="mt-1 flex flex-wrap gap-2">
                 {SUGGESTIONS.map((s) => (
                   <button
                     key={s}
                     type="button"
                     disabled={busy}
                     onClick={() => send(s)}
-                    className="bg-muted/60 hover:bg-muted rounded-full border px-3.5 py-1.5 text-left text-[13px] transition-colors disabled:pointer-events-none disabled:opacity-50"
+                    className="border-border bg-card hover:border-foreground/30 rounded-none border px-3 py-2 text-left font-mono text-[12px] transition-colors disabled:pointer-events-none disabled:opacity-50"
                   >
                     {s}
                   </button>
@@ -341,11 +351,7 @@ export function DiscordChat({
                 message={m}
                 viewer={user}
                 grouped={messages[i - 1]?.role === m.role}
-                failed={
-                  status === "error" &&
-                  m.role === "assistant" &&
-                  i === messages.length - 1
-                }
+                failed={status === "error" && m.role === "assistant" && i === messages.length - 1}
               />
             ))
           )}

@@ -23,9 +23,9 @@ async function readApiError(response: Response, fallback: string): Promise<strin
  * 1. POST enqueues a run (returns immediately)
  * 2. GET SSE on /api/ai/chat/runs/:runId/stream fans out chunks to every client
  */
-export class BackgroundChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
-  extends DefaultChatTransport<UI_MESSAGE>
-{
+export class BackgroundChatTransport<
+  UI_MESSAGE extends UIMessage = UIMessage,
+> extends DefaultChatTransport<UI_MESSAGE> {
   constructor(private readonly ctx: Body) {
     super();
   }

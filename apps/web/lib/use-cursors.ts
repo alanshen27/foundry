@@ -57,6 +57,13 @@ export function useCursors(
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    // CAD/PCB/schematic pass "anonymous" until the session query resolves.
+    // Joining under that shared id collapses every loading client into one peer.
+    if (!projectId || !branchId || self.userId === "anonymous") {
+      setPeers([]);
+      return;
+    }
+
     const channel = cursorChannel(projectId, branchId);
     const handle = port.join(
       channel,

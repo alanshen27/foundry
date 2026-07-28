@@ -18,8 +18,7 @@ export type AuthenticatedIdentity = {
  * requires email confirmation before a session is issued (Supabase).
  */
 export type SignUpResult =
-  | { ok: true; identity: AuthenticatedIdentity; hasSession: boolean }
-  | { ok: false; error: string };
+  { ok: true; identity: AuthenticatedIdentity; hasSession: boolean } | { ok: false; error: string };
 
 export interface AuthPort {
   /** Resolve the identity for the current request, if signed in. */

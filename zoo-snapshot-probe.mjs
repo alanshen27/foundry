@@ -28,8 +28,7 @@ url.searchParams.set("unlocked_framerate", "false");
 const ws = new WebSocket(url);
 ws.binaryType = "arraybuffer";
 
-const send = (cmd, id) =>
-  ws.send(JSON.stringify({ type: "modeling_cmd_req", cmd_id: id, cmd }));
+const send = (cmd, id) => ws.send(JSON.stringify({ type: "modeling_cmd_req", cmd_id: id, cmd }));
 
 const uuid = () => crypto.randomUUID();
 const SNAP_ID = uuid();

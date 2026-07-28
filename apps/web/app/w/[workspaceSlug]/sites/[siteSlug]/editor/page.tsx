@@ -74,6 +74,7 @@ export default async function SiteEditorPage({
         siteName={site.name}
         siteSlug={site.slug}
         workspaceSlug={workspace.slug}
+        user={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
         canEdit={hasCapability(role, grants, "site.edit")}
         canPublish={hasCapability(role, grants, "site.publish")}
         canManageCommerce={hasCapability(role, grants, "commerce.manage")}

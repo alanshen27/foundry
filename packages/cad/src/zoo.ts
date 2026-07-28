@@ -24,7 +24,8 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 function asError(err: unknown): string {
   if (err instanceof ApiError) {
-    const body = err.body as { message?: string; error_code?: string; request_id?: string } | undefined;
+    const body = err.body as
+      { message?: string; error_code?: string; request_id?: string } | undefined;
     const parts = [
       body?.message,
       body?.error_code ? `code=${body.error_code}` : null,
@@ -119,7 +120,9 @@ async function pollTextToCad(
     const done = completedResult(op, id);
     if (done) {
       if (done.ok) {
-        console.log(`[zoo] id=${id} completed kclChars=${done.data.kcl.length} after ~${(i + 1) * POLL_MS}ms`);
+        console.log(
+          `[zoo] id=${id} completed kclChars=${done.data.kcl.length} after ~${(i + 1) * POLL_MS}ms`,
+        );
       }
       return done;
     }
@@ -212,7 +215,9 @@ async function pollMultiFileOp(
       return { ok: true, data: { files, id } };
     }
     if (i > 0 && i % 8 === 0) {
-      console.log(`[zoo] still waiting multi-file op=${id} status=${op.status} ~${(i * POLL_MS) / 1000}s`);
+      console.log(
+        `[zoo] still waiting multi-file op=${id} status=${op.status} ~${(i * POLL_MS) / 1000}s`,
+      );
     }
     await sleep(POLL_MS, signal);
   }
@@ -252,7 +257,8 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
         if (!prompt.trim()) {
           return {
             ok: false,
-            error: "text_to_cad needs a prompt (do not invent zooOpId — only reuse ids from prior tool errors)",
+            error:
+              "text_to_cad needs a prompt (do not invent zooOpId — only reuse ids from prior tool errors)",
           };
         }
         const res = await ml.create_text_to_cad({

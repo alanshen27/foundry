@@ -28,9 +28,7 @@ describe("defaultFolderColor", () => {
   });
 
   it("spreads folders across the palette", () => {
-    const seen = new Set(
-      Array.from({ length: 40 }, (_, i) => defaultFolderColor(`folder-${i}`)),
-    );
+    const seen = new Set(Array.from({ length: 40 }, (_, i) => defaultFolderColor(`folder-${i}`)));
     expect(seen.size).toBeGreaterThan(3);
   });
 

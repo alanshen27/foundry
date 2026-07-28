@@ -2,10 +2,7 @@ import "server-only";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import {
-  buildKclProject,
-  type CadDoc,
-} from "@foundry/cad";
+import { buildKclProject, type CadDoc } from "@foundry/cad";
 
 /**
  * Materialize a CadDoc multi-file project onto disk for Zoo MCP.

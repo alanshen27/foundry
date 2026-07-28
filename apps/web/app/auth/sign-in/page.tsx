@@ -93,7 +93,10 @@ function SignInForm() {
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="password" className="font-mono text-[11px] tracking-[0.1em] uppercase">
+              <Label
+                htmlFor="password"
+                className="font-mono text-[11px] tracking-[0.1em] uppercase"
+              >
                 Password
               </Label>
               <Input
@@ -111,7 +114,11 @@ function SignInForm() {
                 {error}
               </p>
             ) : null}
-            <Button type="submit" disabled={submitting} className="rounded-none font-mono uppercase tracking-[0.08em]">
+            <Button
+              type="submit"
+              disabled={submitting}
+              className="rounded-none font-mono uppercase tracking-[0.08em]"
+            >
               {submitting ? "Signing in…" : "Sign in"}
             </Button>
           </form>

@@ -47,10 +47,7 @@ export function labelForKind(kind: EngineerDocKind): string {
 }
 
 /** Map legacy ?view= values onto a document tab. */
-export function tabFromViewParam(
-  view: string | undefined,
-  partId?: string | null,
-): EngineerDocTab {
+export function tabFromViewParam(view: string | undefined, partId?: string | null): EngineerDocTab {
   if (view === "model") {
     return {
       key: tabKeyFor("model", partId ?? undefined),

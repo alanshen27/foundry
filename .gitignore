@@ -3,6 +3,7 @@ node_modules/
 
 # builds
 .next/
+.next-test/
 .turbo/
 dist/
 coverage/

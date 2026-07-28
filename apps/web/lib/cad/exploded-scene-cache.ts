@@ -12,10 +12,7 @@ type Entry = {
 
 const cache = new Map<string, Entry>();
 
-export function explodedCacheKey(
-  scope: string,
-  modelUpdatedAt: string | null | undefined,
-): string {
+export function explodedCacheKey(scope: string, modelUpdatedAt: string | null | undefined): string {
   return `ex1|${scope}|m:${modelUpdatedAt ?? "none"}`;
 }
 

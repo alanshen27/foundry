@@ -5,13 +5,7 @@
 import { parseCadParams, setCadParam } from "./params";
 
 export type CadToolGroup =
-  | "sketch"
-  | "create"
-  | "feature"
-  | "modify"
-  | "transform"
-  | "pattern"
-  | "boolean";
+  "sketch" | "create" | "feature" | "modify" | "transform" | "pattern" | "boolean";
 
 export type CadToolField =
   | {
@@ -157,9 +151,7 @@ export function upsertParams(script: string, params: CadToolValues): string {
     if (existing.has(name)) {
       next = setCadParam(next, name, value);
     } else {
-      additions.push(
-        `${name} = ${typeof value === "boolean" ? String(value) : String(value)}`,
-      );
+      additions.push(`${name} = ${typeof value === "boolean" ? String(value) : String(value)}`);
     }
   }
   if (!additions.length) return next;
@@ -256,7 +248,15 @@ export const CAD_TOOLS: CadToolDef[] = [
     description: "Circle profile on a plane.",
     fields: [
       { key: "plane", label: "Plane", type: "select", default: "XY", options: PLANE_OPTIONS },
-      { key: "radius", label: "Radius", type: "number", default: 20, unit: "mm", min: 0.1, step: 0.5 },
+      {
+        key: "radius",
+        label: "Radius",
+        type: "number",
+        default: 20,
+        unit: "mm",
+        min: 0.1,
+        step: 0.5,
+      },
     ],
   },
   {
@@ -268,7 +268,15 @@ export const CAD_TOOLS: CadToolDef[] = [
       { key: "plane", label: "Plane", type: "select", default: "XY", options: PLANE_OPTIONS },
       { key: "width", label: "Width", type: "number", default: 40, unit: "mm", min: 0.1, step: 1 },
       { key: "depth", label: "Depth", type: "number", default: 40, unit: "mm", min: 0.1, step: 1 },
-      { key: "height", label: "Height", type: "number", default: 40, unit: "mm", min: 0.1, step: 1 },
+      {
+        key: "height",
+        label: "Height",
+        type: "number",
+        default: 40,
+        unit: "mm",
+        min: 0.1,
+        step: 1,
+      },
     ],
   },
   {
@@ -278,8 +286,24 @@ export const CAD_TOOLS: CadToolDef[] = [
     description: "Cylinder (circle + extrude).",
     fields: [
       { key: "plane", label: "Plane", type: "select", default: "XY", options: PLANE_OPTIONS },
-      { key: "radius", label: "Radius", type: "number", default: 15, unit: "mm", min: 0.1, step: 0.5 },
-      { key: "height", label: "Height", type: "number", default: 40, unit: "mm", min: 0.1, step: 1 },
+      {
+        key: "radius",
+        label: "Radius",
+        type: "number",
+        default: 15,
+        unit: "mm",
+        min: 0.1,
+        step: 0.5,
+      },
+      {
+        key: "height",
+        label: "Height",
+        type: "number",
+        default: 40,
+        unit: "mm",
+        min: 0.1,
+        step: 1,
+      },
     ],
   },
   {
@@ -288,7 +312,15 @@ export const CAD_TOOLS: CadToolDef[] = [
     group: "feature",
     description: "Extrude the last sketch, or create a box if none exists.",
     fields: [
-      { key: "length", label: "Length", type: "number", default: 20, unit: "mm", min: 0.1, step: 1 },
+      {
+        key: "length",
+        label: "Length",
+        type: "number",
+        default: 20,
+        unit: "mm",
+        min: 0.1,
+        step: 1,
+      },
       { key: "symmetric", label: "Symmetric", type: "boolean", default: false },
     ],
   },
@@ -299,9 +331,25 @@ export const CAD_TOOLS: CadToolDef[] = [
     description: "Revolve a profile around an axis (creates a lathed solid).",
     fields: [
       { key: "plane", label: "Plane", type: "select", default: "XZ", options: PLANE_OPTIONS },
-      { key: "radius", label: "Outer R", type: "number", default: 25, unit: "mm", min: 0.1, step: 1 },
+      {
+        key: "radius",
+        label: "Outer R",
+        type: "number",
+        default: 25,
+        unit: "mm",
+        min: 0.1,
+        step: 1,
+      },
       { key: "inner", label: "Inner R", type: "number", default: 10, unit: "mm", min: 0, step: 1 },
-      { key: "height", label: "Height", type: "number", default: 20, unit: "mm", min: 0.1, step: 1 },
+      {
+        key: "height",
+        label: "Height",
+        type: "number",
+        default: 20,
+        unit: "mm",
+        min: 0.1,
+        step: 1,
+      },
       { key: "axis", label: "Axis", type: "select", default: "Y", options: AXIS_OPTIONS },
       { key: "angle", label: "Angle", type: "number", default: 360, unit: "deg", min: 1, step: 5 },
     ],
@@ -313,7 +361,15 @@ export const CAD_TOOLS: CadToolDef[] = [
     description: "Round tagged / end edges of the last solid.",
     requiresSolid: true,
     fields: [
-      { key: "radius", label: "Radius", type: "number", default: 2, unit: "mm", min: 0.1, step: 0.5 },
+      {
+        key: "radius",
+        label: "Radius",
+        type: "number",
+        default: 2,
+        unit: "mm",
+        min: 0.1,
+        step: 0.5,
+      },
     ],
   },
   {
@@ -323,7 +379,15 @@ export const CAD_TOOLS: CadToolDef[] = [
     description: "Bevel end edges of the last solid.",
     requiresSolid: true,
     fields: [
-      { key: "length", label: "Length", type: "number", default: 2, unit: "mm", min: 0.1, step: 0.5 },
+      {
+        key: "length",
+        label: "Length",
+        type: "number",
+        default: 2,
+        unit: "mm",
+        min: 0.1,
+        step: 0.5,
+      },
     ],
   },
   {
@@ -333,7 +397,15 @@ export const CAD_TOOLS: CadToolDef[] = [
     description: "Hollow the last solid, open on END face.",
     requiresSolid: true,
     fields: [
-      { key: "thickness", label: "Thickness", type: "number", default: 2, unit: "mm", min: 0.1, step: 0.5 },
+      {
+        key: "thickness",
+        label: "Thickness",
+        type: "number",
+        default: 2,
+        unit: "mm",
+        min: 0.1,
+        step: 0.5,
+      },
     ],
   },
   {
@@ -343,7 +415,15 @@ export const CAD_TOOLS: CadToolDef[] = [
     description: "Cut a circular hole through the last solid (END face).",
     requiresSolid: true,
     fields: [
-      { key: "diameter", label: "Diameter", type: "number", default: 8, unit: "mm", min: 0.1, step: 0.5 },
+      {
+        key: "diameter",
+        label: "Diameter",
+        type: "number",
+        default: 8,
+        unit: "mm",
+        min: 0.1,
+        step: 0.5,
+      },
       { key: "depth", label: "Depth", type: "number", default: 50, unit: "mm", min: 0.1, step: 1 },
     ],
   },
@@ -407,7 +487,15 @@ export const CAD_TOOLS: CadToolDef[] = [
     requiresSolid: true,
     fields: [
       { key: "instances", label: "Count", type: "number", default: 3, min: 2, step: 1 },
-      { key: "distance", label: "Spacing", type: "number", default: 50, unit: "mm", min: 0.1, step: 1 },
+      {
+        key: "distance",
+        label: "Spacing",
+        type: "number",
+        default: 50,
+        unit: "mm",
+        min: 0.1,
+        step: 1,
+      },
       { key: "axis", label: "Axis", type: "select", default: "X", options: AXIS_OPTIONS },
     ],
   },
@@ -419,7 +507,15 @@ export const CAD_TOOLS: CadToolDef[] = [
     requiresSolid: true,
     fields: [
       { key: "instances", label: "Count", type: "number", default: 4, min: 2, step: 1 },
-      { key: "arcDegrees", label: "Arc", type: "number", default: 360, unit: "deg", min: 1, step: 15 },
+      {
+        key: "arcDegrees",
+        label: "Arc",
+        type: "number",
+        default: 360,
+        unit: "deg",
+        min: 1,
+        step: 15,
+      },
     ],
   },
   {
@@ -677,11 +773,7 @@ ${body} = revolve(${profile}, axis = ${axis}, angle = ${aName}deg)`,
       const tName = nextBinding(script, "shellThickness");
       const thickness = num(values, "thickness", 2);
       let next = upsertParams(script, { [tName]: thickness });
-      next = pipeOntoSolid(
-        next,
-        solid!,
-        `|> shell(faces = [END], thickness = ${tName})`,
-      );
+      next = pipeOntoSolid(next, solid!, `|> shell(faces = [END], thickness = ${tName})`);
       return { script: next, target: solid };
     }
     case "hole": {
@@ -702,10 +794,7 @@ ${body} = revolve(${profile}, axis = ${axis}, angle = ${aName}deg)`,
     case "mirror": {
       const plane = str(values, "plane", "YZ");
       const body = nextBinding(script, "body");
-      const next = appendBlock(
-        script,
-        `${body} = mirror3d([${solid}], across = ${plane})`,
-      );
+      const next = appendBlock(script, `${body} = mirror3d([${solid}], across = ${plane})`);
       return { script: next, target: body };
     }
     case "rotate": {
@@ -731,11 +820,7 @@ ${body} = revolve(${profile}, axis = ${axis}, angle = ${aName}deg)`,
       const yName = nextBinding(script, "moveY");
       const zName = nextBinding(script, "moveZ");
       let next = upsertParams(script, { [xName]: x, [yName]: y, [zName]: z });
-      next = pipeOntoSolid(
-        next,
-        solid!,
-        `|> translate(x = ${xName}, y = ${yName}, z = ${zName})`,
-      );
+      next = pipeOntoSolid(next, solid!, `|> translate(x = ${xName}, y = ${yName}, z = ${zName})`);
       return { script: next, target: solid };
     }
     case "scale": {
@@ -746,11 +831,7 @@ ${body} = revolve(${profile}, axis = ${axis}, angle = ${aName}deg)`,
       const yName = nextBinding(script, "scaleY");
       const zName = nextBinding(script, "scaleZ");
       let next = upsertParams(script, { [xName]: x, [yName]: y, [zName]: z });
-      next = pipeOntoSolid(
-        next,
-        solid!,
-        `|> scale(x = ${xName}, y = ${yName}, z = ${zName})`,
-      );
+      next = pipeOntoSolid(next, solid!, `|> scale(x = ${xName}, y = ${yName}, z = ${zName})`);
       return { script: next, target: solid };
     }
     case "patternLinear": {

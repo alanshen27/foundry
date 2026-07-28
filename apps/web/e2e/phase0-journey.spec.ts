@@ -123,10 +123,9 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
   const width = page.locator('label:has-text("width") input[type="number"]');
   await expect(width).toHaveValue("60");
   // Editing the control rewrites the script and autosaves (900ms debounce).
-  const saved = page.waitForResponse(
-    (r) => r.url().includes("design.save") && r.ok(),
-    { timeout: 30_000 },
-  );
+  const saved = page.waitForResponse((r) => r.url().includes("design.save") && r.ok(), {
+    timeout: 30_000,
+  });
   await width.fill("75");
   await saved;
   await page.reload();

@@ -50,10 +50,7 @@ export async function loadChannelHistory(
  * in-flight tool parts to keep the model prompt valid — writing that back would
  * quietly erase completed tool cards from earlier turns.
  */
-export async function saveNewMessages(
-  scope: ChannelScope,
-  messages: UIMessage[],
-): Promise<number> {
+export async function saveNewMessages(scope: ChannelScope, messages: UIMessage[]): Promise<number> {
   const rows = messages
     .filter((message) => message.id && message.parts.length > 0)
     .map((message, index) => ({

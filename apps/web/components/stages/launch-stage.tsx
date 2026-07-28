@@ -204,13 +204,18 @@ export function LaunchStage({ projectId, branchId, canCreate, verifyApproved }: 
                         </Button>
                       </div>
                     </div>
-                    {r.notes ? <p className="text-muted-foreground mt-1 text-sm">{r.notes}</p> : null}
+                    {r.notes ? (
+                      <p className="text-muted-foreground mt-1 text-sm">{r.notes}</p>
+                    ) : null}
                     {isOpen && summary ? (
                       <div className="text-muted-foreground mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
                         <Stat label="Requirements" value={summary.requirements} />
                         <Stat label="Components" value={summary.components} />
                         <Stat label="Repos" value={summary.repos} />
-                        <Stat label="Checks passed" value={`${summary.checksPassed}/${summary.checks}`} />
+                        <Stat
+                          label="Checks passed"
+                          value={`${summary.checksPassed}/${summary.checks}`}
+                        />
                         <Stat label="Waived" value={summary.checksWaived} />
                         <Stat label="Est. BOM" value={formatCents(summary.bomCents)} />
                       </div>

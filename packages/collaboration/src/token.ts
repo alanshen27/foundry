@@ -2,8 +2,12 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 const TTL_MS = 60 * 60 * 1000;
 
+export type CollabRoomKind = "codefile" | "siteprompt";
+
 export type CollabClaims = {
-  fileId: string;
+  kind: CollabRoomKind;
+  /** CodeFile id or Site id, matching the room suffix. */
+  resourceId: string;
   userId: string;
   name: string;
   avatarUrl?: string | null;
@@ -40,7 +44,14 @@ export function verifyCollabToken(token: string, secretMaterial: string): Collab
   try {
     const claims = JSON.parse(Buffer.from(payload, "base64url").toString()) as CollabClaims;
     if (typeof claims.exp !== "number" || claims.exp < Date.now()) return null;
-    if (!claims.fileId || !claims.userId || !claims.name) return null;
+    if (
+      (claims.kind !== "codefile" && claims.kind !== "siteprompt") ||
+      !claims.resourceId ||
+      !claims.userId ||
+      !claims.name
+    ) {
+      return null;
+    }
     return claims;
   } catch {
     return null;

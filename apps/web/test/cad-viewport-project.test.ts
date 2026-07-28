@@ -41,9 +41,7 @@ describe("cadViewportInput", () => {
     expect(input.projectFiles).toBeDefined();
     // The imported part must travel with the entry, or the engine renders nothing.
     expect(input.projectFiles![toZooKclPath(part.path)]).toContain("width = 10");
-    expect(input.projectFiles![input.entryPath!]).toContain(
-      `import "${toZooKclPath(part.path)}"`,
-    );
+    expect(input.projectFiles![input.entryPath!]).toContain(`import "${toZooKclPath(part.path)}"`);
   });
 
   it("keeps every workspace part in the submitted file map", () => {

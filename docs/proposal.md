@@ -23,20 +23,20 @@ Our goal is a functional proof of concept demonstrating that AI-assisted coordin
 
 This proposal does not begin from zero. A working application was built in advance of this submission, which substantially de-risks the schedule. The following exists, runs, and is covered by tests today:
 
-| Capability | Status |
-| --- | --- |
-| Monorepo, strict TypeScript, linting, CI on every push | Complete |
-| Authentication, workspaces, projects, branches, invitations | Complete |
-| Capability-based permissions and an append-only audit log | Complete |
-| Product brief and structured requirements with full CRUD | Complete |
-| AI copilot: 26 tools, background job queue, streamed responses, cancellable runs | Complete |
-| Four-stage project workspace (Ideate, Engineer, Verify, Launch) | Complete |
-| Schematic capture canvas with a 50-part catalog | Working baseline |
-| PCB placement editor with 3D preview | Working baseline |
-| Mechanical CAD viewport with natural-language model generation | Working baseline |
-| In-browser code editor over project files | Working baseline |
-| Verification checklist with waivers and a stage approval gate | Working baseline |
-| Immutable release snapshots | Working baseline |
+| Capability                                                                       | Status           |
+| -------------------------------------------------------------------------------- | ---------------- |
+| Monorepo, strict TypeScript, linting, CI on every push                           | Complete         |
+| Authentication, workspaces, projects, branches, invitations                      | Complete         |
+| Capability-based permissions and an append-only audit log                        | Complete         |
+| Product brief and structured requirements with full CRUD                         | Complete         |
+| AI copilot: 26 tools, background job queue, streamed responses, cancellable runs | Complete         |
+| Four-stage project workspace (Ideate, Engineer, Verify, Launch)                  | Complete         |
+| Schematic capture canvas with a 50-part catalog                                  | Working baseline |
+| PCB placement editor with 3D preview                                             | Working baseline |
+| Mechanical CAD viewport with natural-language model generation                   | Working baseline |
+| In-browser code editor over project files                                        | Working baseline |
+| Verification checklist with waivers and a stage approval gate                    | Working baseline |
+| Immutable release snapshots                                                      | Working baseline |
 
 The codebase currently comprises 24 database models, 13 API routers, and 104 automated test cases across 15 test files, with continuous integration enforcing lint, type-check, and test passes.
 
@@ -59,7 +59,7 @@ The prototype delivers one complete workflow end to end rather than partially re
 
 **Structured intake.** A user enters a product idea in natural language. The system produces a structured brief covering target users, use cases, key features, technical requirements, constraints, risks, and initial development tasks.
 
-**The Product Graph.** A typed graph connecting requirements, components, software modules, tasks, risks, and tests. Each node records its provenance — whether it originated from a user, an import, or an agent — so the rationale behind any element remains recoverable. Edges are typed, allowing the system to answer two questions that are currently impossible: *why does this exist?* and *what does this affect?*
+**The Product Graph.** A typed graph connecting requirements, components, software modules, tasks, risks, and tests. Each node records its provenance — whether it originated from a user, an import, or an agent — so the rationale behind any element remains recoverable. Edges are typed, allowing the system to answer two questions that are currently impossible: _why does this exist?_ and _what does this affect?_
 
 **Impact analysis.** Given a change to any node, the system traverses the graph and reports affected downstream elements, marking them as requiring review. For example, changing the battery surfaces its effects on operating time, weight, enclosure volume, cost, power-management firmware, and the associated test cases.
 
@@ -110,14 +110,14 @@ We will evaluate the system with one worked example: a compact environmental mon
 
 The plan assumes roughly two weeks of concentrated work across four people.
 
-| Phase | Work |
-| --- | --- |
+| Phase            | Work                                                                                                                                                 |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Week 1, days 1–2 | Graph schema and API; agent role definitions and tool contracts; suggestion store schema. Interfaces between workstreams frozen at the end of day 2. |
-| Week 1, days 3–5 | Graph traversal and impact analysis; three agents producing structured output; suggestion review UI; first two consistency checks. |
-| Week 1, day 5 | **Milestone: vertical slice.** An idea produces requirements, which appear as reviewable suggestions and land in the graph. |
-| Week 2, days 1–3 | Graph visualization; remaining checks; GitHub issue generation; comments; optimistic locking. |
-| Week 2, day 3 | **Milestone: feature complete.** Scope freeze; only bug fixes thereafter. |
-| Week 2, days 4–5 | Export generation, end-to-end demonstration rehearsal, report and presentation. |
+| Week 1, days 3–5 | Graph traversal and impact analysis; three agents producing structured output; suggestion review UI; first two consistency checks.                   |
+| Week 1, day 5    | **Milestone: vertical slice.** An idea produces requirements, which appear as reviewable suggestions and land in the graph.                          |
+| Week 2, days 1–3 | Graph visualization; remaining checks; GitHub issue generation; comments; optimistic locking.                                                        |
+| Week 2, day 3    | **Milestone: feature complete.** Scope freeze; only bug fixes thereafter.                                                                            |
+| Week 2, days 4–5 | Export generation, end-to-end demonstration rehearsal, report and presentation.                                                                      |
 
 The day-2 interface freeze and the day-3 scope freeze in week 2 are the two mechanisms that keep four people working in parallel without blocking one another or discovering integration problems too late to fix.
 
@@ -129,12 +129,12 @@ Three factors make the timeline credible. The infrastructure the project depends
 
 Each member owns one vertical workstream end to end — schema through API through interface — so that ownership is unambiguous and no two people edit the same code for the same reason. Workstreams communicate through interfaces agreed and frozen on day 2.
 
-| Member | Primary workstream | Specific ownership |
-| --- | --- | --- |
-| **Will Sun** | Product Graph and impact analysis | Node and edge schema; provenance recording; traversal and impact-analysis queries; staleness propagation; graph API. Also owns the final end-to-end demonstration script and the written report and presentation. |
-| **Alan Shen** | Agent system and platform architecture | Agent role definitions, prompts, and tool contracts; the suggestion store and propose-review-apply pipeline; agent orchestration, model selection, and parallelism; overall architecture, code review, and CI health. |
-| **Jason Xiao** | Frontend workspace and visualization | Graph visualization; requirement, task, and component editors; suggestion review and diff interface; comment threads; presentation of check results. |
-| **Zhiheng Li** | Checks engine, GitHub, and export | The four automated consistency checks and their result model; GitHub issue generation and repository display; project package export; optimistic locking for concurrent edits. |
+| Member         | Primary workstream                     | Specific ownership                                                                                                                                                                                                    |
+| -------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Will Sun**   | Product Graph and impact analysis      | Node and edge schema; provenance recording; traversal and impact-analysis queries; staleness propagation; graph API. Also owns the final end-to-end demonstration script and the written report and presentation.     |
+| **Alan Shen**  | Agent system and platform architecture | Agent role definitions, prompts, and tool contracts; the suggestion store and propose-review-apply pipeline; agent orchestration, model selection, and parallelism; overall architecture, code review, and CI health. |
+| **Jason Xiao** | Frontend workspace and visualization   | Graph visualization; requirement, task, and component editors; suggestion review and diff interface; comment threads; presentation of check results.                                                                  |
+| **Zhiheng Li** | Checks engine, GitHub, and export      | The four automated consistency checks and their result model; GitHub issue generation and repository display; project package export; optimistic locking for concurrent edits.                                        |
 
 **Shared responsibilities.** Every member writes tests for their own workstream and reviews at least one other member's pull requests. Integration issues at a boundary are resolved jointly by the two owners rather than escalated.
 
@@ -161,14 +161,14 @@ Correctness of impact analysis will be measured against a hand-constructed depen
 
 The scope is arranged so that difficult components degrade to simpler ones without abandoning the central idea.
 
-| Risk | Fallback |
-| --- | --- |
-| Multi-agent coordination proves unstable | Replace concurrent agents with a fixed sequential pipeline in which each stage consumes the previous stage's structured output. The three roles remain; only the orchestration simplifies. |
-| Graph traversal or impact analysis proves too complex | Reduce to single-hop dependency lookup, which still demonstrates traceability, and present multi-hop propagation as future work. |
-| Graph visualization proves difficult to build well | Present the graph as linked tables and dependency lists. The underlying model and analysis are unaffected. |
-| Concurrent editing causes data loss | Fall back to explicit document locking, or to per-user drafts merged on save. |
-| GitHub API integration cannot be completed | Generate downloadable and copyable issue templates instead of creating issues directly. |
-| Automated checks prove unreliable | Narrow to the two most deterministic checks — requirement-to-test coverage and task dependency completeness — rather than shipping checks that produce false results. |
-| A member is blocked or unavailable | Because each workstream is independently demonstrable, remaining members absorb the highest-value incomplete item. The day-2 interface freeze ensures no workstream is a hard prerequisite for another. |
+| Risk                                                  | Fallback                                                                                                                                                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Multi-agent coordination proves unstable              | Replace concurrent agents with a fixed sequential pipeline in which each stage consumes the previous stage's structured output. The three roles remain; only the orchestration simplifies.              |
+| Graph traversal or impact analysis proves too complex | Reduce to single-hop dependency lookup, which still demonstrates traceability, and present multi-hop propagation as future work.                                                                        |
+| Graph visualization proves difficult to build well    | Present the graph as linked tables and dependency lists. The underlying model and analysis are unaffected.                                                                                              |
+| Concurrent editing causes data loss                   | Fall back to explicit document locking, or to per-user drafts merged on save.                                                                                                                           |
+| GitHub API integration cannot be completed            | Generate downloadable and copyable issue templates instead of creating issues directly.                                                                                                                 |
+| Automated checks prove unreliable                     | Narrow to the two most deterministic checks — requirement-to-test coverage and task dependency completeness — rather than shipping checks that produce false results.                                   |
+| A member is blocked or unavailable                    | Because each workstream is independently demonstrable, remaining members absorb the highest-value incomplete item. The day-2 interface freeze ensures no workstream is a hard prerequisite for another. |
 
 **Minimum viable outcome.** Even if every fallback above is exercised, the delivered prototype will still allow a user to enter a product idea, generate structured requirements through multiple AI roles, review and edit those suggestions before they are applied, inspect dependencies between project elements, run consistency checks, and export a complete development report. That result still demonstrates the thesis: that a shared, traceable product model with human-reviewed AI assistance materially improves coordination in early-stage hardware development.

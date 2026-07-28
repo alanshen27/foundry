@@ -37,9 +37,36 @@ const circuit: CircuitDoc = {
 const placed = normalizePcbDoc({
   board: { widthMm: 40, heightMm: 25, thicknessMm: 1.6, cornerRadiusMm: 2 },
   footprints: [
-    { id: "f1", libraryId: "R_0603", refDes: "R1", xMm: 12, yMm: 12, rotationDeg: 0, side: "front", partId: "r1" },
-    { id: "f2", libraryId: "R_0603", refDes: "R2", xMm: 26, yMm: 12, rotationDeg: 0, side: "front", partId: "r2" },
-    { id: "f3", libraryId: "R_0603", refDes: "R3", xMm: 12, yMm: 20, rotationDeg: 0, side: "front", partId: "r3" },
+    {
+      id: "f1",
+      libraryId: "R_0603",
+      refDes: "R1",
+      xMm: 12,
+      yMm: 12,
+      rotationDeg: 0,
+      side: "front",
+      partId: "r1",
+    },
+    {
+      id: "f2",
+      libraryId: "R_0603",
+      refDes: "R2",
+      xMm: 26,
+      yMm: 12,
+      rotationDeg: 0,
+      side: "front",
+      partId: "r2",
+    },
+    {
+      id: "f3",
+      libraryId: "R_0603",
+      refDes: "R3",
+      xMm: 12,
+      yMm: 20,
+      rotationDeg: 0,
+      side: "front",
+      partId: "r3",
+    },
   ],
 });
 
@@ -56,7 +83,8 @@ const show = (label: string, doc: typeof placed) => {
 };
 
 console.log("Pad positions (routing must land exactly on these):");
-for (const p of pads) console.log(`  ${p.refDes}.${p.pin}  x=${p.xMm}  y=${p.yMm}  ${p.layers.join("/")}`);
+for (const p of pads)
+  console.log(`  ${p.refDes}.${p.pin}  x=${p.xMm}  y=${p.yMm}  ${p.layers.join("/")}`);
 
 show("1. Placed, nothing routed", placed);
 

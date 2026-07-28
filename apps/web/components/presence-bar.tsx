@@ -38,7 +38,7 @@ export function PresenceBar({
       (m) => setMembers(dedupePresenceMembers(m) as Member[]),
     );
     return () => handle.leave();
-  }, [channel, self.userId, realtime]);
+  }, [channel, self.userId, self.name, self.avatarUrl, realtime]);
 
   const list = useMemo(() => {
     const deduped = dedupePresenceMembers(members);

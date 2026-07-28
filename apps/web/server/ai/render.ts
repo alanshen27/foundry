@@ -104,10 +104,7 @@ export async function extractProductImages(
           /* ignore bad urls */
         }
       };
-      push(
-        document.querySelector('meta[property="og:image"]')?.getAttribute("content"),
-        "og",
-      );
+      push(document.querySelector('meta[property="og:image"]')?.getAttribute("content"), "og");
       push(
         document.querySelector('meta[name="twitter:image"]')?.getAttribute("content"),
         "twitter",

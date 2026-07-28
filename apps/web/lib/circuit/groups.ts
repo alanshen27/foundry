@@ -68,7 +68,10 @@ function rectsOverlap(a: CircuitGroup, b: CircuitGroup): boolean {
  * Pass `nets` when the caller already built them, so a schematic is not walked
  * twice on the same render.
  */
-export function partitionBoards(circuit: CircuitDoc, nets: Net[] = buildNets(circuit)): BoardPartition {
+export function partitionBoards(
+  circuit: CircuitDoc,
+  nets: Net[] = buildNets(circuit),
+): BoardPartition {
   const groups = circuit.groups;
   const groupById = new Map(groups.map((g) => [g.id, g]));
 

@@ -3,14 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import {
-  Boxes,
-  ChevronRight,
-  FolderPlus,
-  Loader2,
-  MoreHorizontal,
-  Plus,
-} from "lucide-react";
+import { ChevronRight, FolderPlus, Loader2, MoreHorizontal, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,9 +15,10 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { FolderColorPicker } from "@/components/folder-color-picker";
+import { MatrixCover, MatrixScreen } from "@/components/matrix-cover";
 import { MoveToFolderDialog } from "@/components/move-to-folder-dialog";
+import { ProjectCreateBar } from "@/components/project-create-bar";
 import { ShareButton } from "@/components/share-button";
-import { avatarColor } from "@/lib/avatar-color";
 import { folderColorStyle, type FolderColor } from "@/lib/folder-color";
 import { childFolders, folderBreadcrumbs, type FolderRef } from "@/lib/workspace-folders";
 import { FolderGlyph } from "@/components/signal-icons";
@@ -60,9 +54,12 @@ export type BrowserProject = {
   stale?: boolean;
 };
 
-/** One cell of a preview tile: the 3D render, or a muted initial. */
+/** One cell of a preview tile: the 3D render, or a title-colored matrix cover. */
 function PreviewFace({ project, className }: { project: BrowserProject; className?: string }) {
-  if (project.thumbnailUrl) {
+  const [broken, setBroken] = useState(false);
+  // Skip stale thumbs (wrong format / outdated model) so matrix covers show
+  // until a fresh render lands — avoids caching Zoo error frames on cards.
+  if (project.thumbnailUrl && !project.stale && !broken) {
     return (
       // Not next/image: these are authenticated proxy URLs, not optimizable assets.
       // eslint-disable-next-line @next/next/no-img-element
@@ -71,24 +68,18 @@ function PreviewFace({ project, className }: { project: BrowserProject; classNam
         alt=""
         className={cn("size-full scale-125 object-cover", className)}
         loading="lazy"
+        onError={() => setBroken(true)}
       />
     );
   }
-  const color = avatarColor(project.id);
-  return (
-    <div className={cn("relative flex size-full items-center justify-center overflow-hidden", className)}>
-      <div className={cn("absolute inset-0 opacity-40", color.tile)} />
-      <span className="relative font-mono text-[2rem] font-medium tracking-[-0.06em] opacity-80">
-        {project.name.slice(0, 1).toUpperCase()}
-      </span>
-    </div>
-  );
+  return <MatrixCover seed={project.name} className={className} />;
 }
 
 function FolderTileFace({ folder }: { folder: FolderRef }) {
   const style = folderColorStyle(folder.color, folder.id);
   const signal = !folder.color || folder.color === "orange";
   const voidColor = signal ? "#ff5a00" : "var(--background)";
+  const dot = signal ? "#faf9f5" : "currentColor";
   return (
     <div
       className={cn(
@@ -98,36 +89,24 @@ function FolderTileFace({ folder }: { folder: FolderRef }) {
       )}
       style={{ ["--glyph-void" as string]: voidColor }}
     >
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-[0.22]"
-        style={{
-          backgroundImage: signal
-            ? "radial-gradient(circle, #faf9f5 0.55px, transparent 0.65px)"
-            : "radial-gradient(circle, currentColor 0.55px, transparent 0.65px)",
-          backgroundSize: "3.5px 3.5px",
-        }}
-      />
-      <span className="absolute top-2 left-2 font-mono text-[10px] tracking-[0.14em] uppercase opacity-70">
+      <MatrixScreen color={dot} opacity={signal ? 0.4 : 0.28} />
+      <span className="absolute top-2 left-2 z-[1] font-mono text-[10px] tracking-[0.14em] uppercase opacity-70">
         DIR
       </span>
-      <div className="absolute inset-0 flex items-center justify-center">
+      <div className="absolute inset-0 z-[1] flex items-center justify-center">
         <FolderGlyph className="size-[48%] max-w-[5rem]" />
       </div>
     </div>
   );
 }
 
-function ProjectTileFace({
-  project,
-  rendering,
-}: {
-  project: BrowserProject;
-  rendering: boolean;
-}) {
+function ProjectTileFace({ project, rendering }: { project: BrowserProject; rendering: boolean }) {
+  const hasThumb = Boolean(project.thumbnailUrl && !project.stale);
   return (
     <div className={cn(TILE_FACE, "bg-muted")}>
       <PreviewFace project={project} />
+      {/* Keep a light matrix screen over 3D thumbs so every card reads as signal UI. */}
+      {hasThumb ? <MatrixScreen color="#faf9f5" opacity={0.2} className="z-[1]" /> : null}
       {rendering ? (
         <div
           className="bg-background/70 absolute inset-0 z-[2] flex items-center justify-center backdrop-blur-sm"
@@ -135,12 +114,6 @@ function ProjectTileFace({
         >
           <Loader2 className="text-muted-foreground size-4 animate-spin" />
         </div>
-      ) : null}
-      {!project.hasModel && !project.thumbnailUrl ? (
-        <span className="border-border bg-card text-muted-foreground absolute bottom-2 left-2 z-[2] inline-flex items-center gap-1 border px-1.5 py-0.5 font-mono text-[9px] tracking-[0.08em] uppercase">
-          <Boxes className="size-2.5" />
-          No model
-        </span>
       ) : null}
     </div>
   );
@@ -200,6 +173,11 @@ export function WorkspaceFolderBrowser({
   const [folderName, setFolderName] = useState("");
   const [projectName, setProjectName] = useState("");
   const [projectDescription, setProjectDescription] = useState("");
+  const [blankFolderId, setBlankFolderId] = useState<string>(folderId ?? "");
+
+  useEffect(() => {
+    if (newProjectOpen) setBlankFolderId(folderId ?? "");
+  }, [newProjectOpen, folderId]);
 
   const [renameFolder, setRenameFolder] = useState<FolderRef | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -322,12 +300,19 @@ export function WorkspaceFolderBrowser({
       workspaceId,
       name: projectName.trim(),
       description: projectDescription.trim() || undefined,
-      folderId,
+      folderId: blankFolderId || null,
     });
   }
 
   return (
     <div>
+      <ProjectCreateBar
+        workspaceId={workspaceId}
+        workspaceSlug={workspaceSlug}
+        folders={folders}
+        defaultFolderId={folderId}
+      />
+
       <div className="mb-6 flex items-start justify-between gap-4">
         <div className="min-w-0">
           <nav
@@ -377,7 +362,7 @@ export function WorkspaceFolderBrowser({
             onClick={() => setNewProjectOpen(true)}
           >
             <Plus className="size-3.5" />
-            New project
+            Blank project
           </Button>
           {!folderId ? (
             <ShareButton workspaceId={workspaceId} workspaceName={workspaceName} variant="invite" />
@@ -400,11 +385,16 @@ export function WorkspaceFolderBrowser({
             Create a folder or project to organize work here.
           </p>
           <div className="mt-4 flex gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => setNewFolderOpen(true)}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setNewFolderOpen(true)}
+            >
               New folder
             </Button>
             <Button type="button" size="sm" onClick={() => setNewProjectOpen(true)}>
-              New project
+              Blank project
             </Button>
           </div>
         </div>
@@ -446,9 +436,7 @@ export function WorkspaceFolderBrowser({
                 }}
                 onDelete={() => {
                   if (
-                    confirm(
-                      `Delete “${folder.name}”? Projects and subfolders move up one level.`,
-                    )
+                    confirm(`Delete “${folder.name}”? Projects and subfolders move up one level.`)
                   ) {
                     deleteMut.mutate({ folderId: folder.id });
                   }
@@ -465,10 +453,7 @@ export function WorkspaceFolderBrowser({
                 className="block"
               >
                 <div className="border-border bg-card hover:border-foreground/30 overflow-hidden border transition-colors">
-                  <ProjectTileFace
-                    project={project}
-                    rendering={renderingIds.has(project.id)}
-                  />
+                  <ProjectTileFace project={project} rendering={renderingIds.has(project.id)} />
                   <div className={TILE_CAPTION}>
                     <div className="min-w-0">
                       <p className="truncate font-mono text-[12px] font-medium tracking-[-0.02em]">
@@ -531,8 +516,10 @@ export function WorkspaceFolderBrowser({
       <Dialog open={newProjectOpen} onOpenChange={setNewProjectOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>New project</DialogTitle>
-            <DialogDescription>Create a project in {currentName}.</DialogDescription>
+            <DialogTitle>Blank project</DialogTitle>
+            <DialogDescription>
+              Create an empty project in {currentName} without kicking off the AI pipeline.
+            </DialogDescription>
           </DialogHeader>
           <form onSubmit={submitProject} className="flex flex-col gap-3">
             <Input
@@ -549,6 +536,35 @@ export function WorkspaceFolderBrowser({
               placeholder="Description (optional)"
               aria-label="Project description"
             />
+            <div>
+              <label
+                htmlFor="blank-project-folder"
+                className="text-muted-foreground font-mono text-[10px] tracking-[0.14em] uppercase"
+              >
+                Folder
+              </label>
+              <select
+                id="blank-project-folder"
+                className="border-input bg-background mt-1.5 h-9 w-full border px-3 text-sm outline-none"
+                value={blankFolderId}
+                onChange={(e) => setBlankFolderId(e.target.value)}
+              >
+                <option value="">Workspace root</option>
+                {folders
+                  .map((f) => ({
+                    id: f.id,
+                    label: folderBreadcrumbs(folders, f.id)
+                      .map((c) => c.name)
+                      .join(" / "),
+                  }))
+                  .sort((a, b) => a.label.localeCompare(b.label))
+                  .map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.label}
+                    </option>
+                  ))}
+              </select>
+            </div>
             {createProject.error ? (
               <p className="text-destructive text-[12px]">{createProject.error.message}</p>
             ) : null}

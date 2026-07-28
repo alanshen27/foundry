@@ -19,8 +19,24 @@ describe("normalizePcbDoc", () => {
     const doc = normalizePcbDoc({
       board: { widthMm: 2000, heightMm: 1, thicknessMm: 99, cornerRadiusMm: -3 },
       footprints: [
-        { id: "a", libraryId: "R_0603", refDes: "R1", xMm: 10, yMm: 10, rotationDeg: 90, side: "front" },
-        { id: "b", libraryId: "not-a-real-fp", refDes: "X1", xMm: 0, yMm: 0, rotationDeg: 0, side: "front" },
+        {
+          id: "a",
+          libraryId: "R_0603",
+          refDes: "R1",
+          xMm: 10,
+          yMm: 10,
+          rotationDeg: 90,
+          side: "front",
+        },
+        {
+          id: "b",
+          libraryId: "not-a-real-fp",
+          refDes: "X1",
+          xMm: 0,
+          yMm: 0,
+          rotationDeg: 0,
+          side: "front",
+        },
       ],
     });
     expect(doc.board.widthMm).toBe(500);
@@ -106,9 +122,9 @@ describe("searchFootprints", () => {
   it("filters by keyword", () => {
     const hits = searchFootprints("soic");
     expect(hits.some((f) => f.id === "SOIC-8")).toBe(true);
-    expect(hits.every((f) => f.keywords.includes("soic") || f.name.toLowerCase().includes("soic"))).toBe(
-      true,
-    );
+    expect(
+      hits.every((f) => f.keywords.includes("soic") || f.name.toLowerCase().includes("soic")),
+    ).toBe(true);
   });
 });
 

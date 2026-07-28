@@ -48,7 +48,10 @@ function partSourceForModule(part: CadComponent): string {
   return `${trimmed}\n`;
 }
 
-function buildProjectFiles(cad: CadDoc, parts: CadComponent[]): {
+function buildProjectFiles(
+  cad: CadDoc,
+  parts: CadComponent[],
+): {
   files: Record<string, string>;
   meshAssets: CadViewportMesh[];
 } {

@@ -143,9 +143,7 @@ function kclSubmitErrorMessage(result: unknown): string | null {
 
   if (r.success === false) {
     if (Array.isArray(r.errors)) {
-      const msgs = (r.errors as { message?: string }[])
-        .map((e) => e.message)
-        .filter(Boolean);
+      const msgs = (r.errors as { message?: string }[]).map((e) => e.message).filter(Boolean);
       if (msgs.length) return msgs.join("; ");
     }
     return "KCL execution failed";
@@ -720,9 +718,7 @@ export function CadViewport({
           console.log(
             "files",
             Object.keys(files!).sort(),
-            Object.fromEntries(
-              Object.entries(files!).map(([p, s]) => [p, `${s.length} chars`]),
-            ),
+            Object.fromEntries(Object.entries(files!).map(([p, s]) => [p, `${s.length} chars`])),
           );
           console.groupEnd();
           const project = new Map(Object.entries(files!));
@@ -813,7 +809,9 @@ export function CadViewport({
     foreignImportOnly,
     entryPath,
     meshAssets.map((a) => a.fileUrl).join("|"),
-    projectFiles ? Object.keys(projectFiles).sort().join("|") + Object.values(projectFiles).join("\0").length : "",
+    projectFiles
+      ? Object.keys(projectFiles).sort().join("|") + Object.values(projectFiles).join("\0").length
+      : "",
   ]);
 
   // Thumbnail / capture pages: lock a fixed camera after first successful paint.
@@ -869,7 +867,11 @@ export function CadViewport({
               <ToolbarBtn title="Home / isometric" disabled={!ready} onClick={() => void home()}>
                 <Home className="size-3.5" />
               </ToolbarBtn>
-              <ToolbarBtn title="Zoom in" disabled={!ready} onClick={() => void zoom(ZOOM_BUTTON_STEP)}>
+              <ToolbarBtn
+                title="Zoom in"
+                disabled={!ready}
+                onClick={() => void zoom(ZOOM_BUTTON_STEP)}
+              >
                 <Focus className="size-3.5" />
               </ToolbarBtn>
               <ToolbarBtn
@@ -886,13 +888,19 @@ export function CadViewport({
               >
                 <Crosshair className="size-3.5" />
               </ToolbarBtn>
-              <ToolbarBtn title="Reset to iso" disabled={!ready} onClick={() => void applyView("iso")}>
+              <ToolbarBtn
+                title="Reset to iso"
+                disabled={!ready}
+                onClick={() => void applyView("iso")}
+              >
                 <RotateCcw className="size-3.5" />
               </ToolbarBtn>
               <Divider />
               <ToolbarBtn
                 title={
-                  projection === "perspective" ? "Orthographic projection" : "Perspective projection"
+                  projection === "perspective"
+                    ? "Orthographic projection"
+                    : "Perspective projection"
                 }
                 active={projection === "orthographic"}
                 disabled={!ready}
@@ -916,7 +924,11 @@ export function CadViewport({
               >
                 <Axis3d className="size-3.5" />
               </ToolbarBtn>
-              <ToolbarBtn title="Capture PNG of current view" disabled={!ready} onClick={captureView}>
+              <ToolbarBtn
+                title="Capture PNG of current view"
+                disabled={!ready}
+                onClick={captureView}
+              >
                 <Camera className="size-3.5" />
               </ToolbarBtn>
               <span className="text-muted-foreground ml-1 hidden items-center gap-1 px-1 text-[10px] sm:inline-flex">
@@ -935,9 +947,7 @@ export function CadViewport({
             <span className="hidden sm:inline">Orbit: drag</span>
             <span className="hidden sm:inline">Pan: shift/right-drag</span>
             <span className="hidden sm:inline">Zoom: scroll or alt+drag</span>
-            {navTool === "select" ? (
-              <span className="hidden sm:inline">Select: click</span>
-            ) : null}
+            {navTool === "select" ? <span className="hidden sm:inline">Select: click</span> : null}
           </div>
         </>
       ) : null}
@@ -956,7 +966,9 @@ export function CadViewport({
             className="pointer-events-none absolute inset-0"
             tone="signal"
             label={
-              status === "executing" ? "Building model in Zoo engine" : "Connecting to Zoo CAD engine"
+              status === "executing"
+                ? "Building model in Zoo engine"
+                : "Connecting to Zoo CAD engine"
             }
           />
         )

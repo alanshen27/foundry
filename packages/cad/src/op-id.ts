@@ -1,8 +1,7 @@
 /** Models invent nil/repeating UUIDs; those must never hit the Zoo resume path. */
 export function isPlausibleZooOpId(id: string | undefined | null): boolean {
   if (!id || typeof id !== "string") return false;
-  const uuid =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (!uuid.test(id.trim())) return false;
   const hex = id.replace(/-/g, "").toLowerCase();
   // Placeholders like 4444…8444… still validate as UUID v4 — reject low entropy.

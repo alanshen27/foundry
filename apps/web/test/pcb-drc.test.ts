@@ -29,8 +29,26 @@ function board(extra: Record<string, unknown> = {}): PcbDoc {
   return normalizePcbDoc({
     board: { widthMm: 80, heightMm: 50, thicknessMm: 1.6, cornerRadiusMm: 1 },
     footprints: [
-      { id: "f1", libraryId: "R_0603", refDes: "R1", xMm: 10, yMm: 10, rotationDeg: 0, side: "front", partId: "r1" },
-      { id: "f2", libraryId: "R_0603", refDes: "R2", xMm: 20, yMm: 10, rotationDeg: 0, side: "front", partId: "r2" },
+      {
+        id: "f1",
+        libraryId: "R_0603",
+        refDes: "R1",
+        xMm: 10,
+        yMm: 10,
+        rotationDeg: 0,
+        side: "front",
+        partId: "r1",
+      },
+      {
+        id: "f2",
+        libraryId: "R_0603",
+        refDes: "R2",
+        xMm: 20,
+        yMm: 10,
+        rotationDeg: 0,
+        side: "front",
+        partId: "r2",
+      },
     ],
     ...extra,
   });
@@ -87,11 +105,33 @@ describe("runDrc — shorts", () => {
 describe("runDrc — clearance", () => {
   it("flags two unconnected tracks closer than the rule", () => {
     const doc = board({
-      rules: { clearanceMm: 0.2, trackWidthMm: 0.25, viaDiameterMm: 0.6, viaDrillMm: 0.3, edgeClearanceMm: 0.3 },
+      rules: {
+        clearanceMm: 0.2,
+        trackWidthMm: 0.25,
+        viaDiameterMm: 0.6,
+        viaDrillMm: 0.3,
+        edgeClearanceMm: 0.3,
+      },
       tracks: [
-        { id: "a", layer: "F.Cu", widthMm: 0.2, points: [{ xMm: 30, yMm: 20 }, { xMm: 40, yMm: 20 }] },
+        {
+          id: "a",
+          layer: "F.Cu",
+          widthMm: 0.2,
+          points: [
+            { xMm: 30, yMm: 20 },
+            { xMm: 40, yMm: 20 },
+          ],
+        },
         // Centre lines 0.3 mm apart, minus two 0.1 mm half-widths = 0.1 mm gap.
-        { id: "b", layer: "F.Cu", widthMm: 0.2, points: [{ xMm: 30, yMm: 20.3 }, { xMm: 40, yMm: 20.3 }] },
+        {
+          id: "b",
+          layer: "F.Cu",
+          widthMm: 0.2,
+          points: [
+            { xMm: 30, yMm: 20.3 },
+            { xMm: 40, yMm: 20.3 },
+          ],
+        },
       ],
     });
     expect(rules(check(doc).violations)).toContain("clearance");
@@ -100,8 +140,24 @@ describe("runDrc — clearance", () => {
   it("passes when the gap meets the rule", () => {
     const doc = board({
       tracks: [
-        { id: "a", layer: "F.Cu", widthMm: 0.2, points: [{ xMm: 30, yMm: 20 }, { xMm: 40, yMm: 20 }] },
-        { id: "b", layer: "F.Cu", widthMm: 0.2, points: [{ xMm: 30, yMm: 21 }, { xMm: 40, yMm: 21 }] },
+        {
+          id: "a",
+          layer: "F.Cu",
+          widthMm: 0.2,
+          points: [
+            { xMm: 30, yMm: 20 },
+            { xMm: 40, yMm: 20 },
+          ],
+        },
+        {
+          id: "b",
+          layer: "F.Cu",
+          widthMm: 0.2,
+          points: [
+            { xMm: 30, yMm: 21 },
+            { xMm: 40, yMm: 21 },
+          ],
+        },
       ],
     });
     expect(rules(check(doc).violations)).not.toContain("clearance");
@@ -110,8 +166,24 @@ describe("runDrc — clearance", () => {
   it("ignores tracks on opposite layers", () => {
     const doc = board({
       tracks: [
-        { id: "a", layer: "F.Cu", widthMm: 0.2, points: [{ xMm: 30, yMm: 20 }, { xMm: 40, yMm: 20 }] },
-        { id: "b", layer: "B.Cu", widthMm: 0.2, points: [{ xMm: 30, yMm: 20.05 }, { xMm: 40, yMm: 20.05 }] },
+        {
+          id: "a",
+          layer: "F.Cu",
+          widthMm: 0.2,
+          points: [
+            { xMm: 30, yMm: 20 },
+            { xMm: 40, yMm: 20 },
+          ],
+        },
+        {
+          id: "b",
+          layer: "B.Cu",
+          widthMm: 0.2,
+          points: [
+            { xMm: 30, yMm: 20.05 },
+            { xMm: 40, yMm: 20.05 },
+          ],
+        },
       ],
     });
     expect(rules(check(doc).violations)).not.toContain("clearance");
@@ -122,7 +194,15 @@ describe("runDrc — board edges", () => {
   it("flags copper outside the outline", () => {
     const doc = board({
       tracks: [
-        { id: "a", layer: "F.Cu", widthMm: 0.25, points: [{ xMm: -5, yMm: 20 }, { xMm: 5, yMm: 20 }] },
+        {
+          id: "a",
+          layer: "F.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: -5, yMm: 20 },
+            { xMm: 5, yMm: 20 },
+          ],
+        },
       ],
     });
     expect(rules(check(doc).violations)).toContain("off-board");
@@ -131,7 +211,15 @@ describe("runDrc — board edges", () => {
   it("warns about copper too near the edge", () => {
     const doc = board({
       tracks: [
-        { id: "a", layer: "F.Cu", widthMm: 0.25, points: [{ xMm: 0.2, yMm: 20 }, { xMm: 10, yMm: 20 }] },
+        {
+          id: "a",
+          layer: "F.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: 0.2, yMm: 20 },
+            { xMm: 10, yMm: 20 },
+          ],
+        },
       ],
     });
     const found = check(doc).violations.find((v) => v.rule === "edge-clearance");
@@ -150,7 +238,15 @@ describe("runDrc — feature sizes", () => {
   it("warns on a track thinner than the rule", () => {
     const doc = board({
       tracks: [
-        { id: "a", layer: "F.Cu", widthMm: 0.1, points: [{ xMm: 30, yMm: 30 }, { xMm: 40, yMm: 30 }] },
+        {
+          id: "a",
+          layer: "F.Cu",
+          widthMm: 0.1,
+          points: [
+            { xMm: 30, yMm: 30 },
+            { xMm: 40, yMm: 30 },
+          ],
+        },
       ],
     });
     const found = check(doc).violations.find((v) => v.rule === "track-width");
@@ -186,7 +282,15 @@ describe("runDrc — connectivity", () => {
   it("warns about a track end connected to nothing", () => {
     const doc = board({
       tracks: [
-        { id: "a", layer: "F.Cu", widthMm: 0.25, points: [{ xMm: 30, yMm: 30 }, { xMm: 40, yMm: 30 }] },
+        {
+          id: "a",
+          layer: "F.Cu",
+          widthMm: 0.25,
+          points: [
+            { xMm: 30, yMm: 30 },
+            { xMm: 40, yMm: 30 },
+          ],
+        },
       ],
     });
     const dangling = check(doc).violations.filter((v) => v.rule === "dangling-track");
@@ -217,8 +321,24 @@ describe("runDrc — placement", () => {
     const doc = normalizePcbDoc({
       board: { widthMm: 80, heightMm: 50 },
       footprints: [
-        { id: "f1", libraryId: "SOIC-8", refDes: "U1", xMm: 20, yMm: 20, rotationDeg: 0, side: "front" },
-        { id: "f2", libraryId: "SOIC-8", refDes: "U2", xMm: 21, yMm: 20, rotationDeg: 0, side: "front" },
+        {
+          id: "f1",
+          libraryId: "SOIC-8",
+          refDes: "U1",
+          xMm: 20,
+          yMm: 20,
+          rotationDeg: 0,
+          side: "front",
+        },
+        {
+          id: "f2",
+          libraryId: "SOIC-8",
+          refDes: "U2",
+          xMm: 21,
+          yMm: 20,
+          rotationDeg: 0,
+          side: "front",
+        },
       ],
     });
     expect(rules(check(doc, circuit()).violations)).toContain("courtyard-overlap");
@@ -228,8 +348,24 @@ describe("runDrc — placement", () => {
     const doc = normalizePcbDoc({
       board: { widthMm: 80, heightMm: 50 },
       footprints: [
-        { id: "f1", libraryId: "SOIC-8", refDes: "U1", xMm: 20, yMm: 20, rotationDeg: 0, side: "front" },
-        { id: "f2", libraryId: "SOIC-8", refDes: "U2", xMm: 21, yMm: 20, rotationDeg: 0, side: "back" },
+        {
+          id: "f1",
+          libraryId: "SOIC-8",
+          refDes: "U1",
+          xMm: 20,
+          yMm: 20,
+          rotationDeg: 0,
+          side: "front",
+        },
+        {
+          id: "f2",
+          libraryId: "SOIC-8",
+          refDes: "U2",
+          xMm: 21,
+          yMm: 20,
+          rotationDeg: 0,
+          side: "back",
+        },
       ],
     });
     expect(rules(check(doc, circuit()).violations)).not.toContain("courtyard-overlap");

@@ -10,7 +10,13 @@
  * into the pad's local frame where the rectangle is axis-aligned.
  */
 
-import { footprintDef, type PcbFootprint, type PcbLayer, type PcbPadDef, type PcbPoint } from "@/lib/pcb/doc";
+import {
+  footprintDef,
+  type PcbFootprint,
+  type PcbLayer,
+  type PcbPadDef,
+  type PcbPoint,
+} from "@/lib/pcb/doc";
 
 /**
  * Footprint-local pad centre -> board millimetres, mirroring the transform the
@@ -64,8 +70,14 @@ function orientation(ax: number, ay: number, bx: number, by: number, cx: number,
 
 /** True when segments ab and cd properly intersect or touch. */
 export function segmentsIntersect(
-  ax: number, ay: number, bx: number, by: number,
-  cx: number, cy: number, dx: number, dy: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx: number,
+  dy: number,
 ): boolean {
   const d1 = orientation(cx, cy, dx, dy, ax, ay);
   const d2 = orientation(cx, cy, dx, dy, bx, by);
@@ -83,8 +95,14 @@ export function segmentsIntersect(
  * callers can treat "touching" and "overlapping" identically.
  */
 export function segmentSegmentDistance(
-  ax: number, ay: number, bx: number, by: number,
-  cx: number, cy: number, dx: number, dy: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx: number,
+  dy: number,
 ): number {
   if (segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy)) return 0;
   return Math.min(
@@ -177,7 +195,10 @@ export function pointInPad(pad: PadInstance, x: number, y: number, toleranceMm =
 /** Shortest distance from segment ab to the pad's copper. */
 export function segmentPadDistance(
   pad: PadInstance,
-  ax: number, ay: number, bx: number, by: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
 ): number {
   const [lax, lay] = toPadLocal(pad, ax, ay);
   const [lbx, lby] = toPadLocal(pad, bx, by);

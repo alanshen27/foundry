@@ -66,7 +66,10 @@ export const launchRouter = router({
         where: { projectId_version: { projectId: input.projectId, version: input.version } },
       });
       if (duplicate) {
-        throw new TRPCError({ code: "CONFLICT", message: `Version ${input.version} already exists` });
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Version ${input.version} already exists`,
+        });
       }
 
       const [requirements, components, repoLinks, checks, designDocs] = await Promise.all([
@@ -97,10 +100,7 @@ export const launchRouter = router({
         },
       });
 
-      const bomCents = components.reduce(
-        (sum, c) => sum + (c.unitCostCents ?? 0) * c.quantity,
-        0,
-      );
+      const bomCents = components.reduce((sum, c) => sum + (c.unitCostCents ?? 0) * c.quantity, 0);
 
       // Immutable, self-contained snapshot (PRD 14.1). Stored as JSON so it is
       // never affected by later edits to the underlying rows.

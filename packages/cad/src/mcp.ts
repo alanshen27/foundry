@@ -78,9 +78,11 @@ export class ZooMcpClient {
   private textFrom(result: McpToolResult): string {
     const parts = result.content ?? [];
     return parts
-      .map((block) => (block && typeof block === "object" && "type" in block && block.type === "text"
-        ? String((block as { text?: unknown }).text ?? "")
-        : ""))
+      .map((block) =>
+        block && typeof block === "object" && "type" in block && block.type === "text"
+          ? String((block as { text?: unknown }).text ?? "")
+          : "",
+      )
       .filter(Boolean)
       .join("\n")
       .trim();

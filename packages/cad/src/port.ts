@@ -86,7 +86,11 @@ export interface CadPort {
   /** Generate parametric KCL from a natural-language prompt (Zoo ML). */
   textToCad(prompt: string, opts?: CadGenOptions): Promise<CadResult<{ kcl: string; id: string }>>;
   /** Edit existing KCL with a natural-language prompt (Zoo ML). */
-  iterateCad(kcl: string, prompt: string, opts?: CadGenOptions): Promise<CadResult<{ kcl: string; id: string }>>;
+  iterateCad(
+    kcl: string,
+    prompt: string,
+    opts?: CadGenOptions,
+  ): Promise<CadResult<{ kcl: string; id: string }>>;
   /**
    * Iterate a multi-file KCL project with Zoo ML, keeping prior components as
    * file attachments (`POST /ml/text-to-cad/multi-file/iteration`).

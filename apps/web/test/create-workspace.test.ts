@@ -11,9 +11,7 @@ vi.mock("@foundry/db", () => ({
   },
 }));
 
-const { createWorkspaceForOwner, defaultWorkspaceName } = await import(
-  "@/server/create-workspace"
-);
+const { createWorkspaceForOwner, defaultWorkspaceName } = await import("@/server/create-workspace");
 
 beforeEach(() => {
   findUnique.mockReset();
@@ -42,9 +40,7 @@ describe("defaultWorkspaceName", () => {
 
 describe("createWorkspaceForOwner", () => {
   it("creates an OWNER membership and audit event with a unique slug", async () => {
-    findUnique
-      .mockResolvedValueOnce({ id: "taken" })
-      .mockResolvedValueOnce(null);
+    findUnique.mockResolvedValueOnce({ id: "taken" }).mockResolvedValueOnce(null);
     create.mockResolvedValueOnce({
       id: "ws1",
       name: "Ada's Workspace",

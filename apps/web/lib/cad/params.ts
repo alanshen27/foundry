@@ -28,7 +28,8 @@ export function parseCadParams(script: string): CadParam[] {
     if (!match) break;
     const [, name, literal] = match as unknown as [string, string, string];
     const litInLine = line.indexOf(literal);
-    const valueStart = offset + (litInLine >= 0 ? litInLine : line.indexOf(match[0]!) + match[0]!.indexOf(literal));
+    const valueStart =
+      offset + (litInLine >= 0 ? litInLine : line.indexOf(match[0]!) + match[0]!.indexOf(literal));
     let value: number | boolean | string;
     if (literal === "true" || literal === "false") value = literal === "true";
     else if (literal.startsWith('"')) value = JSON.parse(literal) as string;
@@ -47,7 +48,6 @@ export function setCadParam(
 ): string {
   const param = parseCadParams(script).find((p) => p.name === name);
   if (!param) return script;
-  const literal =
-    typeof value === "string" ? JSON.stringify(value) : String(value);
+  const literal = typeof value === "string" ? JSON.stringify(value) : String(value);
   return script.slice(0, param.start) + literal + script.slice(param.end);
 }

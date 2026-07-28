@@ -69,7 +69,7 @@ export function DotMatrixLoader({
       const maxR = Math.hypot(cx, cy) + 40;
       // Two soft rings sweeping out
       const wave1 = ((elapsed * 0.55) % 1) * maxR;
-      const wave2 = (((elapsed * 0.55) + 0.5) % 1) * maxR;
+      const wave2 = ((elapsed * 0.55 + 0.5) % 1) * maxR;
       const base = tone === "signal" ? 0.18 : 0.1;
       const hex = color();
 

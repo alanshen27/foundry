@@ -105,11 +105,7 @@ function checkClearance(doc: PcbDoc, graph: CopperGraph): DrcViolation[] {
   const trackNode = (id: string) => `t:${id}`;
   const viaNode = (id: string) => `v:${id}`;
 
-  const report = (
-    gap: number,
-    what: string,
-    at: { xMm: number; yMm: number },
-  ) => {
+  const report = (gap: number, what: string, at: { xMm: number; yMm: number }) => {
     out.push({
       rule: "clearance",
       severity: "error",
@@ -129,7 +125,8 @@ function checkClearance(doc: PcbDoc, graph: CopperGraph): DrcViolation[] {
       let at = { xMm: a.points[0]!.xMm, yMm: a.points[0]!.yMm };
       for (const [ax, ay, bx, by] of polylineSegments(a.points)) {
         for (const [cx, cy, dx, dy] of polylineSegments(b.points)) {
-          const d = segmentSegmentDistance(ax, ay, bx, by, cx, cy, dx, dy) - a.widthMm / 2 - b.widthMm / 2;
+          const d =
+            segmentSegmentDistance(ax, ay, bx, by, cx, cy, dx, dy) - a.widthMm / 2 - b.widthMm / 2;
           if (d < best) {
             best = d;
             at = midpoint(ax, ay, cx, cy);
@@ -166,7 +163,9 @@ function checkClearance(doc: PcbDoc, graph: CopperGraph): DrcViolation[] {
       for (const [ax, ay, bx, by] of polylineSegments(track.points)) {
         best = Math.min(
           best,
-          pointSegmentDistance(via.xMm, via.yMm, ax, ay, bx, by) - via.diameterMm / 2 - track.widthMm / 2,
+          pointSegmentDistance(via.xMm, via.yMm, ax, ay, bx, by) -
+            via.diameterMm / 2 -
+            track.widthMm / 2,
         );
       }
       if (best < min) {
@@ -177,7 +176,10 @@ function checkClearance(doc: PcbDoc, graph: CopperGraph): DrcViolation[] {
       if (graph.set.connected(viaNode(via.id), padKey(pad.footprintId, pad.pin))) continue;
       const d = segmentPadDistance(pad, via.xMm, via.yMm, via.xMm, via.yMm) - via.diameterMm / 2;
       if (d < min) {
-        report(Math.max(0, d), `Via to pad ${pad.refDes}.${pad.pin}`, { xMm: via.xMm, yMm: via.yMm });
+        report(Math.max(0, d), `Via to pad ${pad.refDes}.${pad.pin}`, {
+          xMm: via.xMm,
+          yMm: via.yMm,
+        });
       }
     }
   }
@@ -320,7 +322,9 @@ function checkDangling(doc: PcbDoc, graph: CopperGraph): DrcViolation[] {
       if (touchesPad) continue;
 
       const touchesVia = doc.vias.some(
-        (via) => Math.hypot(via.xMm - end.xMm, via.yMm - end.yMm) <= via.diameterMm / 2 + track.widthMm / 2 + 1e-6,
+        (via) =>
+          Math.hypot(via.xMm - end.xMm, via.yMm - end.yMm) <=
+          via.diameterMm / 2 + track.widthMm / 2 + 1e-6,
       );
       if (touchesVia) continue;
 

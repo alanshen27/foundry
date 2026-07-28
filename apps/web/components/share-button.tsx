@@ -114,9 +114,7 @@ export function ShareButton({
             <Mail className="size-3.5" /> Invite
           </Button>
         </form>
-        {invite.error ? (
-          <p className="text-destructive text-xs">{invite.error.message}</p>
-        ) : null}
+        {invite.error ? <p className="text-destructive text-xs">{invite.error.message}</p> : null}
         {inviteLink ? (
           <div className="bg-muted/40 flex items-center gap-2 rounded-none border p-2">
             <Link2 className="text-muted-foreground size-3.5 shrink-0" />

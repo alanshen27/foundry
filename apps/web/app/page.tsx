@@ -48,46 +48,54 @@ export default async function HomePage() {
     <main className="relative flex min-h-screen flex-col">
       <InteractiveDotField className="fixed inset-0" gap={16} radius={56} />
 
-      <header className="border-border relative z-10 flex items-center justify-between border-b bg-background/80 px-6 py-4 backdrop-blur-sm sm:px-10">
+      <header className="border-border relative z-10 flex items-center justify-between border-b bg-background/85 px-6 py-4 backdrop-blur-sm sm:px-10">
         <FoundryMark />
-        <Link
-          href="/auth/sign-in"
-          className="bg-foreground text-background hover:bg-foreground/90 px-4 py-2 font-mono text-[12px] tracking-[0.08em] uppercase transition-colors"
-        >
-          Sign in
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/auth/sign-up"
+            className="text-muted-foreground hover:text-foreground hidden px-3 py-2 font-mono text-[11px] tracking-[0.1em] uppercase transition-colors sm:inline"
+          >
+            Create account
+          </Link>
+          <Link
+            href="/auth/sign-in"
+            className="bg-foreground text-background hover:bg-foreground/90 px-4 py-2 font-mono text-[12px] tracking-[0.08em] uppercase transition-colors"
+          >
+            Sign in
+          </Link>
+        </div>
       </header>
 
-      <div className="relative z-10 mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 lg:grid-cols-12">
+      <div className="relative z-10 mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 lg:grid-cols-12 lg:border-x">
         <SignalHero />
 
-        <section className="border-border bg-background/70 flex flex-col justify-between px-6 py-12 backdrop-blur-[2px] sm:px-10 lg:col-span-7 lg:border-l lg:px-12 lg:py-16">
+        <section className="border-border bg-background/80 flex flex-col justify-between px-6 py-12 backdrop-blur-[2px] sm:px-10 lg:col-span-7 lg:border-l lg:px-12 lg:py-16">
           <div>
-            <p className="text-muted-foreground font-mono text-[11px] tracking-[0.16em] uppercase">
+            <p className="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
               Hardware OS
             </p>
-            <h1 className="mt-4 font-mono text-[clamp(1.75rem,3.5vw,2.75rem)] leading-[1.1] font-medium tracking-[-0.04em]">
+            <h1 className="mt-5 font-mono text-[clamp(1.85rem,3.8vw,2.85rem)] leading-[1.08] font-medium tracking-[-0.045em]">
               {PHASES.map((phase) => (
-                <span key={phase.stage} className="mr-2 inline-block whitespace-nowrap">
+                <span key={phase.stage} className="mr-2.5 inline-block whitespace-nowrap">
                   {phase.verb}
                 </span>
               ))}
             </h1>
-            <p className="text-muted-foreground mt-5 max-w-xl text-[15px] leading-relaxed">
+            <p className="text-muted-foreground mt-6 max-w-lg text-[15px] leading-relaxed">
               An AI-native workspace that carries one physical product from a sentence to a
               manufacturable release — without losing the thread between requirements, circuits,
               geometry, and firmware.
             </p>
           </div>
 
-          <ul className="mt-12 grid gap-0 border-t sm:grid-cols-2">
+          <ul className="mt-14 grid gap-0 border-t sm:grid-cols-2">
             {PHASES.map((phase, i) => {
               const theme = STAGE_THEME[phase.stage];
               return (
                 <li
                   key={phase.stage}
                   className={cn(
-                    "border-border bg-card flex flex-col gap-3 border-b p-5 transition-colors",
+                    "border-border bg-card/90 group flex flex-col gap-3 border-b p-5 transition-colors",
                     i % 2 === 0 && "sm:border-r",
                     theme.cardHover,
                   )}
@@ -134,10 +142,10 @@ export default async function HomePage() {
 /** Orange signal panel — client island so the cursor field can run on it. */
 function SignalHero() {
   return (
-    <section className="bg-primary text-primary-foreground relative flex min-h-[32rem] flex-col overflow-hidden px-6 py-8 sm:px-8 lg:col-span-5 lg:min-h-0 lg:px-8 lg:py-10">
+    <section className="bg-primary text-primary-foreground relative flex min-h-[34rem] flex-col overflow-hidden px-6 py-8 sm:px-8 lg:col-span-5 lg:min-h-0 lg:px-8 lg:py-10">
       <InteractiveDotField tone="signal" gap={10} radius={60} />
-      <div className="relative z-10 flex items-center gap-2 font-mono text-[12px] tracking-[0.16em] uppercase">
-        <span className="inline-grid grid-cols-3 gap-[2px]">
+      <div className="relative z-10 flex items-center gap-2.5 font-mono text-[12px] tracking-[0.18em] uppercase">
+        <span className="inline-grid grid-cols-3 gap-[2px]" aria-hidden>
           {Array.from({ length: 9 }, (_, i) => (
             <span key={i} className="size-[3px] bg-[#faf9f5]" />
           ))}
@@ -145,20 +153,25 @@ function SignalHero() {
         Foundry
       </div>
 
-      <div className="relative z-10 flex flex-1 items-center justify-center py-6">
+      <div className="relative z-10 flex flex-1 items-center justify-center py-8">
         <SignalGlyph
           seed="foundry-pulse"
-          rows={28}
-          cols={40}
-          className="max-w-full text-[#faf9f5]"
-          monoClassName="text-[clamp(9px,1.5vw,13px)] leading-[1.05] tracking-[0.14em]"
+          rows={30}
+          cols={42}
+          className="max-w-full text-[#faf9f5] opacity-95"
+          monoClassName="text-[clamp(9px,1.55vw,13px)] leading-[1.05] tracking-[0.14em]"
         />
       </div>
 
-      <p className="relative z-10 max-w-xs font-mono text-[11px] leading-relaxed tracking-[0.02em] opacity-90">
-        When form dissolves, the center holds.
-        <br />A silent pulse from sentence to ship.
-      </p>
+      <div className="relative z-10 space-y-3">
+        <p className="max-w-xs font-mono text-[11px] leading-relaxed tracking-[0.02em] opacity-90">
+          When form dissolves, the center holds.
+          <br />A silent pulse from sentence to ship.
+        </p>
+        <p className="font-mono text-[10px] tracking-[0.16em] uppercase opacity-60">
+          Ideate · Engineer · Verify · Launch
+        </p>
+      </div>
     </section>
   );
 }

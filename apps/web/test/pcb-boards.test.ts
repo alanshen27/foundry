@@ -161,7 +161,16 @@ describe("circuitForGroup", () => {
     const board = {
       board: { widthMm: 80, heightMm: 50 },
       footprints: [
-        { id: "f1", libraryId: "SOIC-8", refDes: "U1", xMm: 20, yMm: 20, rotationDeg: 0, side: "front", partId: "mcu" },
+        {
+          id: "f1",
+          libraryId: "SOIC-8",
+          refDes: "U1",
+          xMm: 20,
+          yMm: 20,
+          rotationDeg: 0,
+          side: "front",
+          partId: "mcu",
+        },
       ],
     };
     const { boards } = normalizePcbSet({ boards: [board] });
@@ -178,7 +187,15 @@ describe("normalizePcbSet", () => {
     const set = normalizePcbSet({
       board: { widthMm: 60, heightMm: 40 },
       footprints: [
-        { id: "f1", libraryId: "R_0603", refDes: "R1", xMm: 10, yMm: 10, rotationDeg: 0, side: "front" },
+        {
+          id: "f1",
+          libraryId: "R_0603",
+          refDes: "R1",
+          xMm: 10,
+          yMm: 10,
+          rotationDeg: 0,
+          side: "front",
+        },
       ],
     });
     expect(set.boards).toHaveLength(1);
@@ -243,9 +260,7 @@ describe("createBoard", () => {
   });
 
   it("does not reuse an id already taken", () => {
-    const made = createBoard([
-      { ...emptyPcbSet().boards[0]!, id: "board-2" },
-    ]);
+    const made = createBoard([{ ...emptyPcbSet().boards[0]!, id: "board-2" }]);
     expect(made.id).not.toBe("board-2");
   });
 });

@@ -30,8 +30,7 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 });
 
 const CollaborativeMonaco = dynamic(
-  () =>
-    import("@/components/engineer/collaborative-monaco").then((m) => m.CollaborativeMonaco),
+  () => import("@/components/engineer/collaborative-monaco").then((m) => m.CollaborativeMonaco),
   {
     ssr: false,
     loading: () => <DotMatrixLoader className="h-full" label="Connecting" />,
@@ -122,7 +121,13 @@ function TreeView({
             <span className="truncate">{child.name}</span>
           </button>
         ) : (
-          <DirNode key={child.path} node={child} depth={depth} activeId={activeId} onOpen={onOpen} />
+          <DirNode
+            key={child.path}
+            node={child}
+            depth={depth}
+            activeId={activeId}
+            onOpen={onOpen}
+          />
         ),
       )}
     </>
@@ -161,9 +166,7 @@ function DirNode({
         )}
         <span className="truncate font-medium">{node.name}</span>
       </button>
-      {open ? (
-        <TreeView node={node} depth={depth + 1} activeId={activeId} onOpen={onOpen} />
-      ) : null}
+      {open ? <TreeView node={node} depth={depth + 1} activeId={activeId} onOpen={onOpen} /> : null}
     </div>
   );
 }
@@ -276,10 +279,7 @@ export function CodeWorkspace({
     if (saveTimer.current) clearTimeout(saveTimer.current);
     const fileId = activeFileId;
     saveTimer.current = setTimeout(() => {
-      saveFile.mutate(
-        { id: fileId, content: v },
-        { onSuccess: () => (dirtyRef.current = false) },
-      );
+      saveFile.mutate({ id: fileId, content: v }, { onSuccess: () => (dirtyRef.current = false) });
     }, 900);
   }
 
@@ -294,7 +294,11 @@ export function CodeWorkspace({
 
   if (reposQuery.isLoading) {
     return (
-      <div className="flex h-full min-h-0 flex-col overflow-hidden" aria-busy="true" aria-label="Loading code workspace">
+      <div
+        className="flex h-full min-h-0 flex-col overflow-hidden"
+        aria-busy="true"
+        aria-label="Loading code workspace"
+      >
         <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
           <Skeleton className="size-3.5 rounded-none" />
           <Skeleton className="h-4 w-40" />
@@ -321,8 +325,8 @@ export function CodeWorkspace({
         <div>
           <p className="font-medium">Link a repository to codebase</p>
           <p className="text-muted-foreground mt-1 max-w-sm text-sm">
-            Connect a GitHub repository to open the code workspace — file tree, tabs, and an
-            in-app editor. The copilot can write starter firmware for you.
+            Connect a GitHub repository to open the code workspace — file tree, tabs, and an in-app
+            editor. The copilot can write starter firmware for you.
           </p>
         </div>
         {canEdit ? (
@@ -408,9 +412,7 @@ export function CodeWorkspace({
                 size="xs"
                 nativeButton={false}
                 render={
-                  <a
-                    href={`vscode://vscode.git/clone?url=${encodeURIComponent(activeRepo.url)}`}
-                  />
+                  <a href={`vscode://vscode.git/clone?url=${encodeURIComponent(activeRepo.url)}`} />
                 }
               >
                 Open in VS Code

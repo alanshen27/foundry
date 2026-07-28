@@ -8,14 +8,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import {
-  Boxes,
-  CircuitBoard,
-  Combine,
-  Plus,
-  Waypoints,
-  X,
-} from "lucide-react";
+import { Boxes, CircuitBoard, Combine, Plus, Waypoints, X } from "lucide-react";
 import {
   ASSEMBLY_TAB,
   labelForKind,
@@ -70,13 +63,7 @@ const CodeWorkspace = dynamic(
 
 /** Views the stage page may still pass (legacy deep links). */
 export type EngineerView =
-  | "sourcing"
-  | "schematic"
-  | "pcb"
-  | "model"
-  | "code"
-  | "design"
-  | "assembly";
+  "sourcing" | "schematic" | "pcb" | "model" | "code" | "design" | "assembly";
 
 type Props = {
   projectId: string;
@@ -342,9 +329,7 @@ function EngineerDocWorkspace({
               branchId={branchId}
               canEdit={canEdit}
               focusComponentId={modelFocusId}
-              onOpenComponent={({ id, name }) =>
-                openTab("model", { componentId: id, label: name })
-              }
+              onOpenComponent={({ id, name }) => openTab("model", { componentId: id, label: name })}
             />
           </div>
         ) : null}

@@ -13,9 +13,8 @@ vi.mock("@foundry/db", () => ({
   prisma: { chatMessage: { createMany, findMany, deleteMany } },
 }));
 
-const { CHAT_HISTORY_LIMIT, loadChannelHistory, saveNewMessages } = await import(
-  "@/server/chat-run/persist"
-);
+const { CHAT_HISTORY_LIMIT, loadChannelHistory, saveNewMessages } =
+  await import("@/server/chat-run/persist");
 
 const scope = { projectId: "p1", branchId: "b1", channelId: "c1" };
 

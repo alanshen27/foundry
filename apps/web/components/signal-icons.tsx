@@ -1,3 +1,4 @@
+import { MatrixScreen } from "@/components/matrix-cover";
 import { cn } from "@/lib/utils";
 
 /**
@@ -64,15 +65,8 @@ export function SignalIconTile({
         )}
         style={{ ["--glyph-void" as string]: "#ff5a00" }}
       >
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-0 opacity-[0.22]"
-          style={{
-            backgroundImage: "radial-gradient(circle, #faf9f5 0.55px, transparent 0.65px)",
-            backgroundSize: "3.5px 3.5px",
-          }}
-        />
-        <FolderGlyph className="relative size-[70%]" />
+        <MatrixScreen color="#faf9f5" opacity={0.4} />
+        <FolderGlyph className="relative z-[1] size-[70%]" />
       </span>
     );
   }
@@ -85,15 +79,9 @@ export function SignalIconTile({
       )}
       aria-hidden
     >
+      <MatrixScreen color="#faf9f5" opacity={0.42} />
       <span
-        className="pointer-events-none absolute inset-0 opacity-[0.28]"
-        style={{
-          backgroundImage: "radial-gradient(circle, #faf9f5 0.55px, transparent 0.65px)",
-          backgroundSize: "3.5px 3.5px",
-        }}
-      />
-      <span
-        className="signal-letter relative font-mono leading-none font-semibold tracking-[-0.08em] text-[#faf9f5]"
+        className="signal-letter relative z-[1] font-mono leading-none font-semibold tracking-[-0.08em] text-[#faf9f5]"
         style={{
           fontSize: "58cqi",
           animationDelay: `${delayMs}ms`,

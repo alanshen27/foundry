@@ -94,9 +94,7 @@ export default async function ProjectOverviewPage({
           <Combine className="size-4" strokeWidth={1.75} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="font-mono text-[13px] font-medium tracking-[-0.02em]">
-            Assembly workspace
-          </p>
+          <p className="font-mono text-[13px] font-medium tracking-[-0.02em]">Assembly workspace</p>
           <p className="text-muted-foreground mt-0.5 font-mono text-[11px]">
             Home viewport — CAD · Schematic · PCB as tabs
           </p>

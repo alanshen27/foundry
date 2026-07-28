@@ -4,10 +4,7 @@ import { getCurrentUser } from "@/server/session";
 import { requireProjectCapability } from "@/server/access";
 import { createRunEventStream } from "@/server/chat-run/stream";
 
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ runId: string }> },
-) {
+export async function GET(_request: Request, { params }: { params: Promise<{ runId: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 

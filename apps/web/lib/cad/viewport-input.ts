@@ -48,9 +48,15 @@ export function dragInteractionFor(button: number, mods: Modifiers): DragInterac
 }
 
 /** Normalize a wheel event to a `default_camera_zoom` magnitude. */
-export function wheelZoomMagnitude(e: Pick<WheelEvent, "deltaY" | "deltaMode" | "ctrlKey">): number {
+export function wheelZoomMagnitude(
+  e: Pick<WheelEvent, "deltaY" | "deltaMode" | "ctrlKey">,
+): number {
   const px =
-    e.deltaMode === 1 ? e.deltaY * LINE_TO_PX : e.deltaMode === 2 ? e.deltaY * PAGE_TO_PX : e.deltaY;
+    e.deltaMode === 1
+      ? e.deltaY * LINE_TO_PX
+      : e.deltaMode === 2
+        ? e.deltaY * PAGE_TO_PX
+        : e.deltaY;
   const magnitude = -px * (e.ctrlKey ? PINCH_GAIN : WHEEL_GAIN);
   return Math.max(-MAX_ZOOM_STEP, Math.min(MAX_ZOOM_STEP, magnitude));
 }
@@ -147,7 +153,12 @@ export function attachViewportInput({
       pendingMove = null;
       sequence += 1;
       if (dragging && drag?.started) {
-        send({ type: "camera_drag_move", interaction: drag.interaction, sequence, window: { x, y } });
+        send({
+          type: "camera_drag_move",
+          interaction: drag.interaction,
+          sequence,
+          window: { x, y },
+        });
       } else if (!dragging) {
         // `highlight_set_entity` is what makes the entity under the cursor light
         // up; `mouse_move` (what the SDK sends) only updates cursor position.

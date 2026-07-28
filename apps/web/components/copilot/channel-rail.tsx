@@ -129,9 +129,13 @@ export function ChannelRail({ className, compact, title, subtitle }: Props) {
       >
         <div className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
           <div className="flex min-w-0 flex-col">
-            <span className="truncate text-sm font-semibold">{title ?? "Channels"}</span>
+            <span className="truncate font-mono text-[12px] font-medium tracking-[0.06em] uppercase">
+              {title ?? "Channels"}
+            </span>
             {subtitle ? (
-              <span className="text-muted-foreground truncate text-[11px]">{subtitle}</span>
+              <span className="text-muted-foreground truncate font-mono text-[10px] tracking-[0.04em]">
+                {subtitle}
+              </span>
             ) : null}
           </div>
           <button
@@ -139,7 +143,7 @@ export function ChannelRail({ className, compact, title, subtitle }: Props) {
             title="Create category"
             aria-label="Create category"
             onClick={() => openModal({ kind: "create-category" })}
-            className="text-muted-foreground hover:bg-muted hover:text-foreground ml-auto shrink-0 rounded p-1"
+            className="text-muted-foreground hover:bg-muted hover:text-foreground ml-auto shrink-0 p-1"
           >
             <FolderPlus className="size-4" />
           </button>
@@ -154,9 +158,7 @@ export function ChannelRail({ className, compact, title, subtitle }: Props) {
                 <div className="group flex items-center gap-0.5 px-1">
                   <button
                     type="button"
-                    onClick={() =>
-                      setCollapsed((prev) => ({ ...prev, [cat.id]: !isCollapsed }))
-                    }
+                    onClick={() => setCollapsed((prev) => ({ ...prev, [cat.id]: !isCollapsed }))}
                     className="text-muted-foreground hover:text-foreground flex min-w-0 flex-1 items-center gap-0.5 py-1 text-left text-[11px] font-semibold tracking-wide uppercase"
                   >
                     <ChevronDown
@@ -305,9 +307,7 @@ export function ChannelRail({ className, compact, title, subtitle }: Props) {
                 autoFocus
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder={
-                  modal?.kind === "create-category" ? "Hardware" : "enclosure"
-                }
+                placeholder={modal?.kind === "create-category" ? "Hardware" : "enclosure"}
                 maxLength={40}
                 required
               />
@@ -344,9 +344,8 @@ export function ChannelRail({ className, compact, title, subtitle }: Props) {
                 </>
               ) : modal?.kind === "delete-channel" ? (
                 <>
-                  Delete{" "}
-                  <span className="text-foreground font-medium">#{modal.channelName}</span>? This
-                  removes the channel and its messages.
+                  Delete <span className="text-foreground font-medium">#{modal.channelName}</span>?
+                  This removes the channel and its messages.
                 </>
               ) : null}
             </DialogDescription>

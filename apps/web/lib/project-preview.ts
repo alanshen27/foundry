@@ -11,7 +11,7 @@
  * previews cached in the old format re-render instead of lingering forever —
  * nothing about the model changes, so the timestamp check alone can't catch it.
  */
-const PREVIEW_FORMAT = "v4";
+const PREVIEW_FORMAT = "v5";
 
 /** One key per project: the preview overwrites in place, so storage never grows. */
 export function projectThumbnailKey(projectId: string) {
@@ -47,9 +47,7 @@ export function previewModelDoc<T extends { branchId: string; updatedAt: Date }>
     ? designDocs.find((d) => d.branchId === activeBranchId)
     : undefined;
   if (onBranch) return onBranch;
-  return (
-    [...designDocs].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] ?? null
-  );
+  return [...designDocs].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] ?? null;
 }
 
 export function projectPreview(project: ProjectPreviewSource): ProjectPreview {

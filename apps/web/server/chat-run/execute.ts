@@ -13,11 +13,7 @@ import { buildProjectTools, withToolLogging } from "@/server/ai/tools";
 import { appOrigin } from "@/server/app-origin";
 import { COPILOT_SYSTEM_PROMPT } from "./prompt";
 import { saveNewMessages } from "./persist";
-import {
-  publishRunChunk,
-  publishRunFinished,
-  publishRunStarted,
-} from "./publish";
+import { publishRunChunk, publishRunFinished, publishRunStarted } from "./publish";
 import {
   sanitizeUiMessagesForModel,
   stripAllToolParts,
@@ -142,11 +138,8 @@ export async function executeChatRun(runId: string): Promise<void> {
   let finished = false;
   const abort = new AbortController();
 
-  const {
-    copilotBroadcastChannel,
-    createSupabaseBroadcastPort,
-    createOffBroadcastPort,
-  } = await import("@foundry/realtime");
+  const { copilotBroadcastChannel, createSupabaseBroadcastPort, createOffBroadcastPort } =
+    await import("@foundry/realtime");
   let port;
   if (
     env.NEXT_PUBLIC_REALTIME_MODE === "supabase" &&
@@ -181,9 +174,7 @@ export async function executeChatRun(runId: string): Promise<void> {
         stopWhen: stepCountIs(14),
         onStepFinish: ({ toolCalls, toolResults, finishReason }) => {
           if (toolCalls.length === 0 && toolResults.length === 0) {
-            console.log(
-              `[chat-run ${runId}] step finish reason=${finishReason} (no tools)`,
-            );
+            console.log(`[chat-run ${runId}] step finish reason=${finishReason} (no tools)`);
             return;
           }
           console.log(
@@ -239,11 +230,7 @@ export async function executeChatRun(runId: string): Promise<void> {
               error: cancelled ? "cancelled" : null,
             },
           });
-          await publishRunFinished(
-            runId,
-            run.channelId,
-            cancelled ? "cancelled" : "done",
-          );
+          await publishRunFinished(runId, run.channelId, cancelled ? "cancelled" : "done");
         },
       });
 
@@ -270,10 +257,7 @@ export async function executeChatRun(runId: string): Promise<void> {
       const missingItem = isMissingProviderItemError(err);
       const duplicateItem = isDuplicateProviderItemError(err);
       const recoverable =
-        missingItem ||
-        duplicateItem ||
-        isMissingToolResultsError(err) ||
-        isInvalidPromptError(err);
+        missingItem || duplicateItem || isMissingToolResultsError(err) || isInvalidPromptError(err);
       if (!recoverable || abort.signal.aborted) throw err;
       console.warn(
         duplicateItem

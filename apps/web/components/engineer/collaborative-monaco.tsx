@@ -31,9 +31,7 @@ export function CollaborativeMonaco({ session, language, theme, className }: Pro
   const ydocRef = useRef<Y.Doc | null>(null);
   const providerRef = useRef<HocuspocusProvider | null>(null);
   const bindingRef = useRef<MonacoBinding | null>(null);
-  const [status, setStatus] = useState<"connecting" | "connected" | "disconnected">(
-    "connecting",
-  );
+  const [status, setStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
 
   useEffect(() => {
     const ydoc = new Y.Doc();
@@ -110,11 +108,7 @@ export function CollaborativeMonaco({ session, language, theme, className }: Pro
         )}
         aria-live="polite"
       >
-        {status === "connected"
-          ? "Live"
-          : status === "connecting"
-            ? "Connecting…"
-            : "Disconnected"}
+        {status === "connected" ? "Live" : status === "connecting" ? "Connecting…" : "Disconnected"}
       </div>
     </div>
   );

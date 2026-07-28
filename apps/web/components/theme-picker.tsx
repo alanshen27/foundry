@@ -2,12 +2,7 @@
 
 import { Check, Moon, Sun } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
-import {
-  ACCENT_LABELS,
-  ACCENT_SWATCHES,
-  THEME_ACCENTS,
-  type ThemeAccent,
-} from "@/lib/theme";
+import { ACCENT_LABELS, ACCENT_SWATCHES, THEME_ACCENTS, type ThemeAccent } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 /** Inline appearance controls for Settings — not a floating chrome toggle. */

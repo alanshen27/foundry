@@ -107,7 +107,9 @@ export const engineerRouter = router({
       const { project } = await requireProjectCapability(
         ctx.user.id,
         existing.projectId,
-        disciplineCapability((input.discipline ?? existing.discipline) as z.infer<typeof discipline>),
+        disciplineCapability(
+          (input.discipline ?? existing.discipline) as z.infer<typeof discipline>,
+        ),
       );
       const { id, ...fields } = input;
       const component = await prisma.component.update({ where: { id }, data: fields });

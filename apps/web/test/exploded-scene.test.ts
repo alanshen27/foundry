@@ -29,13 +29,11 @@ describe("buildExplodedScene", () => {
     expect(out.entryPath).toBe(EXPLODED_SCENE_PATH);
     expect(out.script).toContain('import "parts/housing/main.kcl"');
     expect(out.script).toContain('import "parts/knob/main.kcl"');
-    const lastImport = out.script.lastIndexOf("import \"");
+    const lastImport = out.script.lastIndexOf('import "');
     const firstPlace = out.script.search(/^ex\d+_/m);
     expect(firstPlace).toBeGreaterThan(lastImport);
     expect(out.script).toContain(`translate(x = ${EXPLODED_SPACING_MM})`);
-    expect(out.parts.map((p) => p.name)).toEqual(
-      expect.arrayContaining(["housing", "knob"]),
-    );
+    expect(out.parts.map((p) => p.name)).toEqual(expect.arrayContaining(["housing", "knob"]));
   });
 
   it("lifts the focused part on Z for hover", () => {

@@ -40,10 +40,7 @@ export type TreeProject = {
 export type TreeFolder = FolderRef;
 
 type Creating =
-  | { kind: "folder"; parentId: string | null }
-  | { kind: "project"; parentId: string | null }
-  | null;
-
+  { kind: "folder"; parentId: string | null } | { kind: "project"; parentId: string | null } | null;
 
 function FolderRow({
   folder,
@@ -342,7 +339,10 @@ function NewFolderInline({
         if (name.trim()) onSubmit(name.trim());
       }}
     >
-      <Folder className="text-muted-foreground size-[15px] shrink-0 opacity-70" strokeWidth={1.75} />
+      <Folder
+        className="text-muted-foreground size-[15px] shrink-0 opacity-70"
+        strokeWidth={1.75}
+      />
       <Input
         autoFocus
         value={name}
@@ -395,7 +395,9 @@ export function WorkspaceFileTree({
 
   const createFolder = trpc.folder.create.useMutation({
     onSuccess: (folder) => {
-      setExpanded((prev) => new Set([...prev, folder.id, ...(folder.parentId ? [folder.parentId] : [])]));
+      setExpanded(
+        (prev) => new Set([...prev, folder.id, ...(folder.parentId ? [folder.parentId] : [])]),
+      );
       setCreating(null);
       router.refresh();
     },
@@ -509,9 +511,7 @@ export function WorkspaceFileTree({
           creating={creating}
           onStartCreate={startCreate}
           onCancelCreate={() => setCreating(null)}
-          onCreateFolder={(parentId, name) =>
-            createFolder.mutate({ workspaceId, name, parentId })
-          }
+          onCreateFolder={(parentId, name) => createFolder.mutate({ workspaceId, name, parentId })}
           createFolderPending={createFolder.isPending}
           menuFor={menuFor}
           onMenuFor={setMenuFor}
@@ -521,9 +521,7 @@ export function WorkspaceFileTree({
           }}
           onMove={setMoveFolder}
           onDelete={(f) => {
-            if (
-              confirm(`Delete “${f.name}”? Projects and subfolders move up one level.`)
-            ) {
+            if (confirm(`Delete “${f.name}”? Projects and subfolders move up one level.`)) {
               deleteMut.mutate({ folderId: f.id });
             }
           }}

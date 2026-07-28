@@ -5,7 +5,14 @@
  * and the readonly render page (used for copilot screenshots).
  */
 import { useEffect, useRef, useState } from "react";
-import { Handle, Position, useUpdateNodeInternals, type Edge, type Node, type NodeProps } from "@xyflow/react";
+import {
+  Handle,
+  Position,
+  useUpdateNodeInternals,
+  type Edge,
+  type Node,
+  type NodeProps,
+} from "@xyflow/react";
 // Registers all <wokwi-*> custom elements (client-only modules import this).
 import "@wokwi/elements";
 import { catalogEntry, type CircuitDoc } from "@/lib/circuit/catalog";
@@ -285,7 +292,10 @@ function GenericPartNode({ data, selected }: NodeProps<PartNode>) {
 
 export const circuitNodeTypes = { wokwi: WokwiPartNode, generic: GenericPartNode };
 
-export function docToGraph(doc: CircuitDoc, canEdit: boolean): { nodes: PartNode[]; edges: Edge[] } {
+export function docToGraph(
+  doc: CircuitDoc,
+  canEdit: boolean,
+): { nodes: PartNode[]; edges: Edge[] } {
   const wirePinsByPart = new Map<string, Set<string>>();
   for (const w of doc.wires) {
     for (const end of [w.from, w.to]) {

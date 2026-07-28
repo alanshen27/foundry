@@ -5,9 +5,7 @@ import { getServerEnv } from "@foundry/config";
 export function getZooEngineToken(): string {
   const token = getServerEnv().ZOO_API_TOKEN?.trim();
   if (!token) {
-    throw new Error(
-      "ZOO_API_TOKEN is not configured. Add it to the root .env (see .env.example).",
-    );
+    throw new Error("ZOO_API_TOKEN is not configured. Add it to the root .env (see .env.example).");
   }
   return token;
 }

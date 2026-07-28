@@ -120,11 +120,35 @@ export const siteRouter = router({
   get: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
     const site = await prisma.site.findUnique({
       where: { id: input.id },
-      include: { project: { select: { id: true, name: true, slug: true } } },
+      include: { project: { select: { id: true, name: true, slug: true, activeBranchId: true } } },
     });
     if (!site) throw new TRPCError({ code: "NOT_FOUND" });
     await requireWorkspaceCapability(ctx.user.id, site.workspaceId, "project.read");
-    return site;
+
+    // Product authenticity for storefront alerts (PRD 24.4 / AGENTS.md labeling).
+    let productVerified: boolean | null = null;
+    if (site.project?.activeBranchId) {
+      const verify = await prisma.stageState.findUnique({
+        where: {
+          projectId_branchId_stage: {
+            projectId: site.project.id,
+            branchId: site.project.activeBranchId,
+            stage: "VERIFY",
+          },
+        },
+        select: { status: true },
+      });
+      productVerified = verify?.status === "APPROVED";
+    }
+
+    return {
+      ...site,
+      project: site.project
+        ? { id: site.project.id, name: site.project.name, slug: site.project.slug }
+        : null,
+      /** null = no linked product; false = linked but Verify not approved. */
+      productVerified,
+    };
   }),
 
   workspace: protectedProcedure

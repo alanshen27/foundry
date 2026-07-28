@@ -14,10 +14,7 @@ export const trpc = createTRPCReact<AppRouter>();
  * Node/Next returns 431 with an empty body; then `response.json()` throws
  * "Unexpected end of JSON input". Always POST, and fail clearly on empty bodies.
  */
-async function trpcFetch(
-  input: RequestInfo | URL,
-  init?: RequestInit,
-): Promise<Response> {
+async function trpcFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const response = await fetch(input, init);
   if (response.status === 431) {
     throw new Error(

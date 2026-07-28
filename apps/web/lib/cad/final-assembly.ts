@@ -58,7 +58,10 @@ export function renderRoots(doc: CadDoc): CadComponent[] {
   );
 }
 
-function projectFilesForScene(cad: CadDoc, roots: CadComponent[]): {
+function projectFilesForScene(
+  cad: CadDoc,
+  roots: CadComponent[],
+): {
   files: Record<string, string>;
   meshAssets: CadViewportMesh[];
 } {

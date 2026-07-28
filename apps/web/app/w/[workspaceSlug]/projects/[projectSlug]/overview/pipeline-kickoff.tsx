@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InteractiveDotField } from "@/components/interactive-dot-field";
 import { useCopilot } from "@/components/copilot/copilot-provider";
+import { PROJECT_KICKOFF_KEY } from "@/components/project-create-bar";
 
 /**
  * Lovable-style creation box: one big prompt bootstraps the pipeline
@@ -13,17 +14,39 @@ import { useCopilot } from "@/components/copilot/copilot-provider";
 export function PipelineKickoff({ hasBrief }: { hasBrief: boolean }) {
   const { send, status } = useCopilot();
   const [prompt, setPrompt] = useState("");
+  const kickedOff = useRef(false);
   const busy = status === "submitted" || status === "streaming";
+
+  function bootstrap(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || busy) return;
+    send(
+      hasBrief
+        ? trimmed
+        : `Bootstrap this project end-to-end: ${trimmed}\n\nFill the brief, requirements, BOM, circuit, 3D model, and validation checks.`,
+    );
+    setPrompt("");
+  }
+
+  // After create-from-projects-page, auto-start the pipeline once.
+  useEffect(() => {
+    if (hasBrief || kickedOff.current || busy) return;
+    let pending: string | null = null;
+    try {
+      pending = sessionStorage.getItem(PROJECT_KICKOFF_KEY);
+      if (pending) sessionStorage.removeItem(PROJECT_KICKOFF_KEY);
+    } catch {
+      return;
+    }
+    if (!pending?.trim()) return;
+    kickedOff.current = true;
+    bootstrap(pending);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasBrief, busy]);
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!prompt.trim() || busy) return;
-    send(
-      hasBrief
-        ? prompt.trim()
-        : `Bootstrap this project end-to-end: ${prompt.trim()}\n\nFill the brief, requirements, BOM, circuit, 3D model, and validation checks.`,
-    );
-    setPrompt("");
+    bootstrap(prompt);
   }
 
   return (
@@ -79,7 +102,11 @@ export function PipelineKickoff({ hasBrief }: { hasBrief: boolean }) {
                   "Working…"
                 ) : (
                   <>
-                    {hasBrief ? <ArrowRight className="size-3.5" /> : <Sparkles className="size-3.5" />}
+                    {hasBrief ? (
+                      <ArrowRight className="size-3.5" />
+                    ) : (
+                      <Sparkles className="size-3.5" />
+                    )}
                     {hasBrief ? "Send" : "Build"}
                   </>
                 )}

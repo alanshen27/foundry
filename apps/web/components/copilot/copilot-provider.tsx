@@ -96,10 +96,7 @@ function ChatEngine({
   channelId: string;
   initialMessages: UIMessage[];
   onMessages: (channelId: string, messages: UIMessage[]) => void;
-  shell: Omit<
-    CopilotContextValue,
-    "messages" | "status" | "busy" | "error" | "send" | "stop"
-  >;
+  shell: Omit<CopilotContextValue, "messages" | "status" | "busy" | "error" | "send" | "stop">;
   children: ReactNode;
 }) {
   const utils = trpc.useUtils();
@@ -180,8 +177,7 @@ function ChatEngine({
   // Gate send on local stream state only. A stuck ChatRun row / hung resume
   // SSE used to set busy forever via activeRun, so Enter did nothing and the
   // composer never cleared (no POST /api/ai/chat).
-  const sending =
-    localBusy || status === "submitted" || status === "streaming";
+  const sending = localBusy || status === "submitted" || status === "streaming";
   busyRef.current = sending;
   // Stop button: local send OR a server-side run the user may want to cancel.
   const busy = sending || Boolean(activeRunQuery.data);
@@ -198,21 +194,12 @@ function ChatEngine({
     ) {
       setLocalBusy(false);
       if (status === "error") {
-        setMessages((prev) =>
-          markFailedAssistantMessages(prev, error?.message),
-        );
+        setMessages((prev) => markFailedAssistantMessages(prev, error?.message));
       } else {
         setMessages((prev) => pruneEmptyAssistantMessages(prev));
       }
     }
-  }, [
-    localBusy,
-    activeRunQuery.data,
-    activeRunQuery.isFetching,
-    status,
-    error,
-    setMessages,
-  ]);
+  }, [localBusy, activeRunQuery.data, activeRunQuery.isFetching, status, error, setMessages]);
 
   useEffect(() => {
     const broadcast = createBroadcastPort();
@@ -269,10 +256,7 @@ function ChatEngine({
         setLocalBusy(false);
         busyRef.current = false;
         setMessages((prev) =>
-          markFailedAssistantMessages(
-            prev,
-            err instanceof Error ? err.message : "request failed",
-          ),
+          markFailedAssistantMessages(prev, err instanceof Error ? err.message : "request failed"),
         );
       });
       void utils.chat.activeRun.invalidate({ projectId, channelId });
@@ -411,9 +395,7 @@ export function CopilotProvider({
       const fallbackId = categories.find((c) => c.id !== categoryId)?.id ?? null;
       setCategories((prev) => prev.filter((c) => c.id !== categoryId));
       setChannels((prev) =>
-        prev.map((ch) =>
-          ch.categoryId === categoryId ? { ...ch, categoryId: fallbackId } : ch,
-        ),
+        prev.map((ch) => (ch.categoryId === categoryId ? { ...ch, categoryId: fallbackId } : ch)),
       );
     },
     [deleteCategoryMutation, projectId, categories],

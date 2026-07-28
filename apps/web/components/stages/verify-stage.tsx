@@ -148,9 +148,7 @@ export function VerifyStage({ projectId, branchId, canRun, canApprove, verifySta
               </Button>
               {!canApproveNow && verifyStatus !== "APPROVED" ? (
                 <span className="text-muted-foreground text-xs">
-                  {checks.length === 0
-                    ? "Add checks first"
-                    : `${blocking} unresolved check(s)`}
+                  {checks.length === 0 ? "Add checks first" : `${blocking} unresolved check(s)`}
                 </span>
               ) : null}
               {approve.error ? (
@@ -217,7 +215,9 @@ export function VerifyStage({ projectId, branchId, canRun, canApprove, verifySta
                 <li key={c.id} className="flex flex-col gap-2 py-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className={c.waived ? "font-medium line-through opacity-70" : "font-medium"}>
+                      <p
+                        className={c.waived ? "font-medium line-through opacity-70" : "font-medium"}
+                      >
                         {c.title}
                       </p>
                       {c.detail ? (
@@ -299,7 +299,11 @@ export function VerifyStage({ projectId, branchId, canRun, canApprove, verifySta
                         aria-label="Waiver justification"
                         autoFocus
                       />
-                      <Button size="sm" onClick={() => submitWaiver(c.id)} disabled={waive.isPending}>
+                      <Button
+                        size="sm"
+                        onClick={() => submitWaiver(c.id)}
+                        disabled={waive.isPending}
+                      >
                         Confirm waiver
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => setWaivingId(null)}>

@@ -42,7 +42,11 @@ export function CreateWorkspaceForm() {
             required
             className="rounded-none"
           />
-          <Button type="submit" disabled={create.isPending} className="rounded-none font-mono uppercase tracking-[0.06em]">
+          <Button
+            type="submit"
+            disabled={create.isPending}
+            className="rounded-none font-mono uppercase tracking-[0.06em]"
+          >
             {create.isPending ? "Creating…" : "Create"}
           </Button>
         </form>
