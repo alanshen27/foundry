@@ -24,10 +24,16 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://foundry:foundry@localhost:5432/foundry
+      DIRECT_URL: postgresql://foundry:foundry@localhost:5432/foundry
       AUTH_MODE: local
       AUTH_SECRET: ci-secret
       STORAGE_MODE: local
       STORAGE_BUCKET: artifacts
+      # Placeholders: AUTH_MODE/STORAGE_MODE=local never contact Supabase,
+      # but packages/config requires these vars to be set.
+      NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: ci-placeholder
       NEXT_PUBLIC_REALTIME_MODE: "off"
     steps:
       - uses: actions/checkout@v4
