@@ -33,7 +33,8 @@
       "esbuild",
       "prisma",
       "sharp",
-      "unrs-resolver"
+      "unrs-resolver",
+      "y-monaco"
     ],
     "patchedDependencies": {
       "y-monaco@0.1.6": "patches/y-monaco@0.1.6.patch"
