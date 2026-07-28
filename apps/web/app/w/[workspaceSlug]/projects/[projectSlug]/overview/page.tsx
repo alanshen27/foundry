@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { ArrowRight, Combine, Cpu, Lightbulb, Rocket, ShieldCheck } from "lucide-react";
 import { prisma } from "@foundry/db";
 import { STAGE_LABELS, STAGES, type Stage } from "@foundry/domain";
+import { AnimatedSignalGlyph } from "@/components/animated-signal-glyph";
+import { MatrixScreen } from "@/components/matrix-cover";
 import { StatusBadge } from "@/components/status-badge";
 import { STAGE_THEME } from "@/lib/stage-theme";
 import { cn } from "@/lib/utils";
@@ -72,16 +74,20 @@ export default async function ProjectOverviewPage({
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-8 p-6 lg:p-8">
-      <div>
-        <p className="text-muted-foreground font-mono text-[11px] tracking-[0.14em] uppercase">
-          Project
-        </p>
-        <h1 className="mt-1 font-mono text-[28px] font-medium tracking-[-0.04em]">
-          {project.name}
-        </h1>
-        {project.description ? (
-          <p className="text-muted-foreground mt-1.5 text-[14px]">{project.description}</p>
-        ) : null}
+      <div className="bg-primary text-primary-foreground relative overflow-hidden">
+        <MatrixScreen color="#faf9f5" opacity={0.25} />
+        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 opacity-80">
+          <AnimatedSignalGlyph seed={project.id} rows={10} cols={30} fontSize={9} />
+        </div>
+        <div className="relative px-5 py-5">
+          <p className="font-mono text-[11px] tracking-[0.14em] uppercase opacity-80">Project</p>
+          <h1 className="mt-1 font-mono text-[28px] font-medium tracking-[-0.04em]">
+            {project.name}
+          </h1>
+          {project.description ? (
+            <p className="mt-1.5 max-w-xl text-[14px] opacity-85">{project.description}</p>
+          ) : null}
+        </div>
       </div>
 
       <PipelineKickoff hasBrief={Boolean(brief?.prompt || brief?.intendedUse)} />
@@ -90,8 +96,9 @@ export default async function ProjectOverviewPage({
         href={`${base}/engineer`}
         className="border-border bg-card hover:border-foreground/30 group flex items-center gap-4 border px-4 py-3.5 transition-colors"
       >
-        <span className="bg-primary text-primary-foreground flex size-10 shrink-0 items-center justify-center">
-          <Combine className="size-4" strokeWidth={1.75} />
+        <span className="bg-primary text-primary-foreground relative flex size-10 shrink-0 items-center justify-center overflow-hidden">
+          <MatrixScreen color="#faf9f5" opacity={0.35} />
+          <Combine className="relative size-4" strokeWidth={1.75} />
         </span>
         <div className="min-w-0 flex-1">
           <p className="font-mono text-[13px] font-medium tracking-[-0.02em]">Assembly workspace</p>
