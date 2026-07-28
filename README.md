@@ -65,6 +65,6 @@ pnpm dev                # http://localhost:3000
 - `packages/ui` — shared UI primitives
 - `packages/observability` — structured logging
 - `infra/local` — local Postgres compose file
-- `render.yaml` — Render Blueprint (web, chat worker, collab, Redis)
+- `render.yaml` — Render Blueprint (web, chat worker, collab; bring your own Redis)
 - `supabase/templates` — branded Auth email HTML (paste into Supabase)
 - `docs/` — architecture notes and runbooks (see `docs/runbooks/deploy-render.md`)

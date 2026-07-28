@@ -1,8 +1,8 @@
 # Runbook: deploy on Render
 
 FOUNDRY ships a Render Blueprint at the repo root (`render.yaml`). Postgres,
-Auth, and object storage stay on Supabase; Render runs the web app, chat
-worker, collaboration WebSocket service, and Redis.
+Auth, and object storage stay on Supabase; Redis is your own (e.g. Upstash).
+Render runs the web app, chat worker, and collaboration WebSocket service.
 
 ## One-shot setup
 
@@ -11,6 +11,7 @@ worker, collaboration WebSocket service, and Redis.
    point it at the repo (file: `render.yaml`).
 3. Fill every prompted (`sync: false`) secret:
    - `DATABASE_URL` / `DIRECT_URL` — Supabase Postgres (session/direct for DDL)
+   - `REDIS_URL` — external Redis (`rediss://…` for Upstash TLS)
    - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
      `SUPABASE_SERVICE_ROLE_KEY`
    - `NEXT_PUBLIC_COLLAB_URL` — `wss://<foundry-collab hostname>`
@@ -27,7 +28,6 @@ worker, collaboration WebSocket service, and Redis.
 | `foundry-web`         | Next.js App Router (`@foundry/web`)       |
 | `foundry-chat-worker` | BullMQ worker for AI chat runs            |
 | `foundry-collab`      | Hocuspocus Yjs WebSocket server           |
-| `foundry-redis`       | Render Key Value (Redis) for the job queue|
 
 `APP_ORIGIN` is wired from `RENDER_EXTERNAL_URL` on `foundry-web`. Auth email
 redirects and screenshot tools both use it.
