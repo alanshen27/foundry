@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Folder, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SignalGlowBackdrop } from "@/components/signal-glow-backdrop";
 import { folderBreadcrumbs, type FolderRef } from "@/lib/workspace-folders";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -95,7 +96,7 @@ export function ProjectCreateBar({
 
   return (
     <section className={cn("relative", className)}>
-      <div className="relative z-10 mx-auto flex max-w-3xl flex-col items-center px-2 py-8 text-center sm:py-12">
+      <div className="relative z-10 mx-auto flex max-w-3xl flex-col items-center px-2 pb-8 text-center sm:pb-10">
         <p className="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
           Projects
         </p>
@@ -117,13 +118,16 @@ export function ProjectCreateBar({
         ) : null}
 
         <form
-          className="mt-8 w-full"
+          className="relative mt-8 w-full"
           onSubmit={(event) => {
             event.preventDefault();
             submit();
           }}
         >
-          <div className="border-border bg-background focus-within:border-primary border transition-colors">
+          {/* Soft signal glow + orange dots behind the white card */}
+          <SignalGlowBackdrop />
+
+          <div className="border-border relative z-10 border bg-white transition-colors focus-within:border-primary dark:bg-card">
             <textarea
               id="project-create-prompt"
               value={prompt}
@@ -184,7 +188,7 @@ export function ProjectCreateBar({
           </div>
 
           {showOptions ? (
-            <div className="border-border bg-background/80 mt-3 border px-4 py-3 text-left">
+            <div className="border-border relative z-10 mt-3 border bg-white px-4 py-3 text-left dark:bg-card">
               <label
                 htmlFor="project-create-name"
                 className="text-muted-foreground font-mono text-[10px] tracking-[0.14em] uppercase"
@@ -199,7 +203,7 @@ export function ProjectCreateBar({
                 placeholder={prompt.trim() ? nameFromPrompt(prompt) : "Derived from prompt"}
                 maxLength={80}
                 disabled={create.isPending}
-                className="border-input bg-background placeholder:text-muted-foreground mt-1.5 h-9 w-full border px-3 text-sm outline-none"
+                className="border-input placeholder:text-muted-foreground mt-1.5 h-9 w-full border bg-white px-3 text-sm outline-none dark:bg-card"
               />
             </div>
           ) : null}

@@ -66,7 +66,7 @@ export default async function HomePage() {
     <main className="relative flex min-h-screen flex-col">
       <InteractiveDotField className="fixed inset-0" gap={16} radius={56} />
 
-      <header className="border-border relative z-10 flex items-center justify-between border-b bg-background/85 px-6 py-4 backdrop-blur-sm sm:px-10">
+      <header className="border-border relative z-10 mx-auto flex w-full max-w-6xl items-center justify-between border-b bg-background/85 px-6 py-4 backdrop-blur-sm sm:px-10 lg:border-x">
         <FoundryMark />
         <div className="flex items-center gap-2">
           <Link

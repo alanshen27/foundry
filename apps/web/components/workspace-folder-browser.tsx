@@ -307,13 +307,6 @@ export function WorkspaceFolderBrowser({
 
   return (
     <div>
-      <ProjectCreateBar
-        workspaceId={workspaceId}
-        workspaceSlug={workspaceSlug}
-        folders={folders}
-        defaultFolderId={folderId}
-      />
-
       <div className="mb-6 flex items-start justify-between gap-4">
         <div className="min-w-0">
           <nav
@@ -370,6 +363,13 @@ export function WorkspaceFolderBrowser({
           ) : null}
         </div>
       </div>
+
+      <ProjectCreateBar
+        workspaceId={workspaceId}
+        workspaceSlug={workspaceSlug}
+        folders={folders}
+        defaultFolderId={folderId}
+      />
 
       {empty ? (
         <div className="bg-primary text-primary-foreground relative flex flex-col items-center justify-center overflow-hidden px-6 py-16 text-center">
