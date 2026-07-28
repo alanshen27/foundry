@@ -57,6 +57,22 @@ export function cursorChannel(projectId: string, branchId: string): string {
   return `foundry:cursors:${projectId}:${branchId}`;
 }
 
+/** Each CAD component is its own cursor surface. */
+export function cadCursorSurface(componentId: string): string {
+  return `cad:${componentId}`;
+}
+
+/** Each PCB board is its own cursor surface. */
+export function pcbCursorSurface(boardId: string): string {
+  return `pcb:${boardId}`;
+}
+
+/** Clamp a viewport-relative cursor coordinate to the normalized 0…1 range. */
+export function normalizedCursorCoordinate(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
 /**
  * Colours picked to stay distinguishable on both light and dark canvases, and
  * to avoid the greens already used for wires and the reds/blues used for

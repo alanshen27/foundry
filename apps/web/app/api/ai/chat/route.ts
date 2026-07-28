@@ -6,6 +6,7 @@ import { getServerEnv } from "@foundry/config";
 import { getCurrentUser } from "@/server/session";
 import { requireProjectCapability } from "@/server/access";
 import { ensureDefaultChannel } from "@/server/chat";
+import { createExclusiveAiRun } from "@/server/ai-edit-lock";
 
 const bodySchema = z.object({
   projectId: z.string(),
@@ -52,39 +53,45 @@ export async function POST(request: Request) {
 
     const messages = await validateUIMessages({ messages: parsed.data.messages });
 
-    // One in-flight run per channel — client must Stop before sending again.
-    const { expireStaleChatRuns } = await import("@/server/chat-run/stale");
-    await expireStaleChatRuns(channelId);
-
-    const active = await prisma.chatRun.findFirst({
-      where: {
-        channelId,
-        status: { in: ["PENDING", "RUNNING"] },
-      },
-      select: { id: true },
+    // One in-flight AI editor per project branch, across every chat channel
+    // and app instance. This same run is the workspace lock human saves read.
+    const exclusive = await createExclusiveAiRun({
+      projectId,
+      branchId,
+      channelId,
+      actorId: user.id,
+      inputMessages: messages as object,
     });
-    if (active) {
+    if (!exclusive.created) {
       return NextResponse.json(
-        { error: "A reply is already in progress. Stop it before sending another message." },
+        {
+          error:
+            "This workspace is locked while another AI agent is editing it. Stop or finish that run before starting another.",
+          activeRunId: exclusive.active.id,
+        },
         { status: 409 },
       );
     }
+    const run = exclusive.run;
 
     // Store the turn before the model runs. If the run is cancelled, errors, or
     // the worker dies, the user's message is still in the history.
     const { saveNewMessages } = await import("@/server/chat-run/persist");
-    await saveNewMessages({ projectId, branchId, channelId }, messages);
-
-    const run = await prisma.chatRun.create({
-      data: {
-        projectId,
-        branchId,
-        channelId,
-        actorId: user.id,
-        inputMessages: messages as object,
-      },
-      select: { id: true },
-    });
+    try {
+      await saveNewMessages({ projectId, branchId, channelId }, messages);
+    } catch (error) {
+      // The run already owns the branch lock. Release it immediately instead
+      // of making everyone wait for stale-run cleanup when persistence fails.
+      await prisma.chatRun.update({
+        where: { id: run.id },
+        data: {
+          status: "ERROR",
+          error: "Failed to persist chat messages",
+          finishedAt: new Date(),
+        },
+      });
+      throw error;
+    }
 
     try {
       const { enqueueChatRun } = await import("@/server/chat-run/queue");

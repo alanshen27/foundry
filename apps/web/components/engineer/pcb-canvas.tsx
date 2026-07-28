@@ -19,6 +19,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import dynamic from "next/dynamic";
+import { pcbCursorSurface, type CursorState } from "@foundry/realtime";
 import {
   AlertTriangle,
   Box,
@@ -71,6 +72,7 @@ import { buildCopperGraph, padAt, trackAt, viaAt, zoneAt } from "@/lib/pcb/routi
 import { runDrc } from "@/lib/pcb/drc";
 import { fabricationFiles } from "@/lib/pcb/export";
 import { trpc } from "@/lib/trpc";
+import { useCursors } from "@/lib/use-cursors";
 
 const PcbPreview3d = dynamic(
   () => import("@/components/engineer/pcb-preview-3d").then((m) => m.PcbPreview3d),
@@ -95,6 +97,56 @@ type Tool = "select" | "route" | "via" | "zone";
 type LayerKey = "Edge.Cuts" | "F.Cu" | "B.Cu" | "F.SilkS" | "courtyard" | "ratsnest";
 
 const COPPER_COLOR: Record<PcbLayer, string> = { "F.Cu": "#c04040", "B.Cu": "#4040c0" };
+
+/**
+ * Collaborators' pointers are stored in board millimetres, then projected into
+ * this client's current pan/zoom. The glyph remains screen-sized while its tip
+ * stays anchored to the same copper, pad, or footprint for every collaborator.
+ */
+function PcbCursorLayer({
+  peers,
+  scale,
+  pan,
+}: {
+  peers: CursorState[];
+  scale: number;
+  pan: { x: number; y: number };
+}) {
+  return (
+    <g pointerEvents="none" aria-hidden="true">
+      {peers.map((peer) => {
+        const labelWidth = Math.max(42, peer.name.length * 6 + 12);
+        return (
+          <g
+            key={peer.userId}
+            transform={`translate(${pan.x + peer.x * scale} ${pan.y + peer.y * scale})`}
+          >
+            <path
+              d="M2 2 L2 14 L5.5 10.8 L7.8 15.6 L10.2 14.5 L7.9 9.8 L12.4 9.6 Z"
+              fill={peer.color}
+              stroke="#0b0b0b"
+              strokeWidth={1}
+              strokeLinejoin="round"
+            />
+            <rect
+              x={12}
+              y={16}
+              width={labelWidth}
+              height={18}
+              rx={5}
+              fill={peer.color}
+              stroke="#0b0b0b"
+              strokeWidth={0.5}
+            />
+            <text x={18} y={29} fill="#0b0b0b" fontSize={10} fontWeight={600}>
+              {peer.name}
+            </text>
+          </g>
+        );
+      })}
+    </g>
+  );
+}
 
 /**
  * Projects `to` onto the nearest 45-degree ray from `from` — the routing
@@ -375,6 +427,7 @@ export function PcbCanvas({
   const query = trpc.design.get.useQuery({ projectId, branchId, kind: "PCB" });
   // The schematic is the source of nets; the board only references it.
   const circuitQuery = trpc.design.get.useQuery({ projectId, branchId, kind: "CIRCUIT" });
+  const viewer = trpc.project.viewer.useQuery();
   const save = trpc.design.save.useMutation();
 
   /** Every board in the project; `doc` below is the one being edited. */
@@ -615,6 +668,16 @@ export function PcbCanvas({
   }, [selectedTrackId, pushHistory, scheduleSave]);
 
   const scale = PX_PER_MM * zoom;
+  const cursors = useCursors(
+    projectId,
+    branchId,
+    viewMode === "2d" ? pcbCursorSurface(activeBoardId) : `pcb-3d:${activeBoardId}`,
+    {
+      userId: viewer.data?.id ?? "anonymous",
+      name: viewer.data?.name ?? "Someone",
+    },
+  );
+  const reportCursor = cursors.report;
 
   const fullCircuit = useMemo(
     () => (circuitQuery.data ? normalizeCircuitDoc(circuitQuery.data.data) : EMPTY_CIRCUIT),
@@ -924,6 +987,9 @@ export function PcbCanvas({
 
   const onSvgPointerMove = useCallback(
     (e: ReactPointerEvent<SVGSVGElement>) => {
+      const pointerMm = clientToMm(e.clientX, e.clientY);
+      if (pointerMm) reportCursor(pointerMm.xMm, pointerMm.yMm);
+
       if (panDragRef.current) {
         const d = panDragRef.current;
         setPan({
@@ -934,7 +1000,7 @@ export function PcbCanvas({
       }
       // The routing preview needs the cursor even when nothing is being dragged.
       if (tool !== "select") {
-        const mm = clientToMm(e.clientX, e.clientY);
+        const mm = pointerMm;
         if (mm) {
           // A pour outline is not angle-constrained, so it only snaps to grid.
           if (tool === "zone") setCursorMm(quantize(mm));
@@ -958,7 +1024,7 @@ export function PcbCanvas({
         ),
       }));
     },
-    [canEdit, scale, tool, draft, clientToMm, routePoint],
+    [canEdit, scale, tool, draft, clientToMm, routePoint, reportCursor],
   );
 
   const onSvgPointerUp = useCallback(() => {
@@ -1522,6 +1588,7 @@ export function PcbCanvas({
                     )
                   : null}
               </g>
+              <PcbCursorLayer peers={cursors.peers} scale={scale} pan={pan} />
             </svg>
 
             <div className="absolute bottom-3 left-3 flex items-center gap-1">

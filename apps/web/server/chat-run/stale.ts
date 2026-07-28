@@ -1,6 +1,6 @@
 import "server-only";
 
-import { prisma } from "@foundry/db";
+import { prisma, type Prisma } from "@foundry/db";
 
 /** PENDING with no worker pickup — usually Redis/worker down. */
 const PENDING_STALE_MS = 45_000;
@@ -11,16 +11,17 @@ const PENDING_STALE_MS = 45_000;
  */
 const RUNNING_STALE_MS = 12 * 60_000;
 
-/**
- * Mark stuck chat runs as ERROR so the UI isn't permanently "busy"
- * and new messages can be sent.
- */
-export async function expireStaleChatRuns(channelId: string): Promise<number> {
+type ChatRunClient = Pick<Prisma.TransactionClient, "chatRun">;
+
+async function expireStaleRuns(
+  db: ChatRunClient,
+  scope: Prisma.ChatRunWhereInput,
+): Promise<number> {
   const now = Date.now();
   const [pending, running] = await Promise.all([
-    prisma.chatRun.updateMany({
+    db.chatRun.updateMany({
       where: {
-        channelId,
+        ...scope,
         status: "PENDING",
         createdAt: { lt: new Date(now - PENDING_STALE_MS) },
       },
@@ -30,9 +31,9 @@ export async function expireStaleChatRuns(channelId: string): Promise<number> {
         finishedAt: new Date(),
       },
     }),
-    prisma.chatRun.updateMany({
+    db.chatRun.updateMany({
       where: {
-        channelId,
+        ...scope,
         status: "RUNNING",
         // Measure from pickup, not enqueue, so queue wait doesn't count.
         OR: [
@@ -48,4 +49,21 @@ export async function expireStaleChatRuns(channelId: string): Promise<number> {
     }),
   ]);
   return pending.count + running.count;
+}
+
+/**
+ * Mark stuck chat runs as ERROR so the UI isn't permanently "busy"
+ * and new messages can be sent.
+ */
+export function expireStaleChatRuns(channelId: string): Promise<number> {
+  return expireStaleRuns(prisma, { channelId });
+}
+
+/** Clear stale runs before evaluating the branch-wide AI edit lock. */
+export function expireStaleProjectRuns(
+  projectId: string,
+  branchId: string,
+  db: ChatRunClient = prisma,
+): Promise<number> {
+  return expireStaleRuns(db, { projectId, branchId });
 }

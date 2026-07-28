@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import {
+  Bot,
   Boxes,
   ChevronDown,
   ChevronUp,
@@ -14,11 +15,13 @@ import {
   FilePlus,
   FileText,
   Layers,
+  Lock,
   PanelLeftClose,
   PanelLeftOpen,
   Puzzle,
   SlidersHorizontal,
 } from "lucide-react";
+import { cadCursorSurface, normalizedCursorCoordinate, type CursorState } from "@foundry/realtime";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -39,6 +42,7 @@ import { useTheme } from "@/components/theme-provider";
 import { monacoThemeFor } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
+import { useCursors } from "@/lib/use-cursors";
 
 function ParamsPanel({
   params,
@@ -110,14 +114,12 @@ function ParamsPanel({
   );
 }
 
-const KIND_META: Record<
-  CadComponentKind,
-  { label: string; icon: typeof Puzzle; folder: string }
-> = {
-  part: { label: "Parts", icon: Puzzle, folder: "parts/" },
-  assembly: { label: "Assembly", icon: Boxes, folder: "assembly/" },
-  instructions: { label: "Instructions", icon: FileText, folder: "docs/" },
-};
+const KIND_META: Record<CadComponentKind, { label: string; icon: typeof Puzzle; folder: string }> =
+  {
+    part: { label: "Parts", icon: Puzzle, folder: "parts/" },
+    assembly: { label: "Assembly", icon: Boxes, folder: "assembly/" },
+    instructions: { label: "Instructions", icon: FileText, folder: "docs/" },
+  };
 
 function ComponentTree({
   doc,
@@ -194,6 +196,39 @@ function InstructionsPreview({ content }: { content: string }) {
   );
 }
 
+function CadCursorLayer({ peers }: { peers: CursorState[] }) {
+  return (
+    <div className="pointer-events-none absolute inset-0 z-40 overflow-hidden" aria-hidden="true">
+      {peers.map((peer) => (
+        <div
+          key={peer.userId}
+          className="absolute"
+          style={{
+            left: `${normalizedCursorCoordinate(peer.x) * 100}%`,
+            top: `${normalizedCursorCoordinate(peer.y) * 100}%`,
+          }}
+        >
+          <svg width="20" height="20" viewBox="0 0 18 18" className="block drop-shadow">
+            <path
+              d="M2 2 L2 14 L5.5 10.8 L7.8 15.6 L10.2 14.5 L7.9 9.8 L12.4 9.6 Z"
+              fill={peer.color}
+              stroke="#0b0b0b"
+              strokeWidth={1}
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span
+            className="absolute top-4 left-3 rounded px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap text-[#0b0b0b] shadow"
+            style={{ background: peer.color }}
+          >
+            {peer.name}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ModelEditor({
   projectId,
   branchId,
@@ -205,8 +240,16 @@ export function ModelEditor({
 }) {
   const { theme } = useTheme();
   const monacoTheme = monacoThemeFor(theme.mode);
-  const query = trpc.design.get.useQuery({ projectId, branchId, kind: "MODEL3D" });
+  const query = trpc.design.get.useQuery(
+    { projectId, branchId, kind: "MODEL3D" },
+    { refetchInterval: 1_500 },
+  );
   const engine = trpc.cad.engineSession.useQuery({ projectId });
+  const aiLock = trpc.design.aiEditLock.useQuery(
+    { projectId, branchId },
+    { refetchInterval: 1_000 },
+  );
+  const viewer = trpc.project.viewer.useQuery();
   const save = trpc.design.save.useMutation();
 
   const [doc, setDoc] = useState<CadDoc | null>(null);
@@ -214,12 +257,16 @@ export function ModelEditor({
   const [showTree, setShowTree] = useState(true);
   const [showCode, setShowCode] = useState(false);
   const [execError, setExecError] = useState<string | null>(null);
+  const [syncingAfterLock, setSyncingAfterLock] = useState(false);
   const dirtyRef = useRef(false);
   const migratedRef = useRef(false);
+  const sawLockRef = useRef(false);
   const appliedUpdatedAtRef = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveRef = useRef(save);
   saveRef.current = save;
+  const locked = Boolean(aiLock.data);
+  const editable = canEdit && !locked && !syncingAfterLock;
 
   useEffect(() => {
     if (!query.isFetched) return;
@@ -240,13 +287,7 @@ export function ModelEditor({
     );
 
     const raw = query.data?.data as { version?: unknown } | null | undefined;
-    if (
-      canEdit &&
-      !migratedRef.current &&
-      raw &&
-      typeof raw === "object" &&
-      raw.version !== 5
-    ) {
+    if (editable && !migratedRef.current && raw && typeof raw === "object" && raw.version !== 5) {
       migratedRef.current = true;
       saveRef.current.mutate({
         projectId,
@@ -255,7 +296,22 @@ export function ModelEditor({
         data: next,
       });
     }
-  }, [query.data, query.isFetched, canEdit, projectId, branchId]);
+  }, [query.data, query.isFetched, editable, projectId, branchId]);
+
+  useEffect(() => {
+    if (locked) {
+      sawLockRef.current = true;
+      setSyncingAfterLock(true);
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      dirtyRef.current = false;
+      return;
+    }
+    if (!sawLockRef.current) return;
+    void query.refetch().finally(() => {
+      sawLockRef.current = false;
+      setSyncingAfterLock(false);
+    });
+  }, [locked, query.refetch]);
 
   function persist(next: CadDoc) {
     setDoc(next);
@@ -287,9 +343,8 @@ export function ModelEditor({
   }
 
   function onAdd(kind: CadComponentKind) {
-    if (!doc || !canEdit) return;
-    const base =
-      kind === "part" ? "part" : kind === "assembly" ? "assembly" : "instructions";
+    if (!doc || !editable) return;
+    const base = kind === "part" ? "part" : kind === "assembly" ? "assembly" : "instructions";
     const n = doc.components.filter((c) => c.kind === kind).length + 1;
     const next = addCadComponent(doc, { name: `${base}-${n}`, kind });
     setActiveId(next.activeId);
@@ -297,7 +352,7 @@ export function ModelEditor({
   }
 
   function onChangeContent(next: string | undefined) {
-    if (!canEdit || !doc || !activeId || next === undefined) return;
+    if (!editable || !doc || !activeId || next === undefined) return;
     const current = doc.components.find((c) => c.id === activeId);
     if (!current) return;
     if ((current.kind === "part" || current.kind === "assembly") && !next.trim()) return;
@@ -310,6 +365,11 @@ export function ModelEditor({
   );
   const active: CadComponent | null = viewDoc ? getActiveComponent(viewDoc) : null;
   const isKcl = active?.kind === "part" || active?.kind === "assembly";
+  const cursors = useCursors(projectId, branchId, cadCursorSurface(active?.id ?? "none"), {
+    userId: viewer.data?.id ?? "anonymous",
+    name: viewer.data?.name ?? "Someone",
+  });
+  const reportCursor = cursors.report;
 
   // Debounce the whole document rather than just the active script: an assembly
   // renders from every part it imports, so the engine needs one consistent
@@ -369,7 +429,7 @@ export function ModelEditor({
           <ComponentTree
             doc={doc}
             activeId={activeId ?? doc.activeId}
-            canEdit={canEdit}
+            canEdit={editable}
             onSelect={onSelect}
             onAdd={onAdd}
           />
@@ -394,7 +454,7 @@ export function ModelEditor({
               value={active?.content ?? ""}
               onChange={onChangeContent}
               options={{
-                readOnly: !canEdit,
+                readOnly: !editable,
                 minimap: { enabled: false },
                 fontSize: 12,
                 lineNumbers: "on",
@@ -412,7 +472,17 @@ export function ModelEditor({
         </div>
       ) : null}
 
-      <div className="bg-background relative min-w-0 flex-1">
+      <div
+        className="bg-background relative min-w-0 flex-1"
+        onPointerMove={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return;
+          reportCursor(
+            normalizedCursorCoordinate((event.clientX - rect.left) / rect.width),
+            normalizedCursorCoordinate((event.clientY - rect.top) / rect.height),
+          );
+        }}
+      >
         {active?.kind === "instructions" ? (
           <InstructionsPreview content={active.content} />
         ) : (
@@ -420,10 +490,8 @@ export function ModelEditor({
             {params.length > 0 && active ? (
               <ParamsPanel
                 params={params}
-                canEdit={canEdit}
-                onSet={(name, value) =>
-                  onChangeContent(setCadParam(active.content, name, value))
-                }
+                canEdit={editable}
+                onSet={(name, value) => onChangeContent(setCadParam(active.content, name, value))}
               />
             ) : null}
             {viewport ? (
@@ -440,14 +508,26 @@ export function ModelEditor({
               />
             ) : null}
             {active && isKcl ? (
-              <CadToolsPanel
-                script={active.content}
-                canEdit={canEdit}
-                onApply={onChangeContent}
-              />
+              <CadToolsPanel script={active.content} canEdit={editable} onApply={onChangeContent} />
             ) : null}
           </>
         )}
+        <CadCursorLayer peers={cursors.peers} />
+        {aiLock.data ? (
+          <div
+            className="bg-card/95 pointer-events-none absolute top-14 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg backdrop-blur-md"
+            role="status"
+          >
+            <span className="bg-primary/15 text-primary flex size-6 items-center justify-center rounded-md">
+              <Bot className="size-3.5" />
+            </span>
+            <span>
+              <span className="font-semibold">{aiLock.data.actorName}&apos;s AI is editing</span>
+              <span className="text-muted-foreground ml-1.5">CAD locked for everyone</span>
+            </span>
+            <Lock className="text-muted-foreground size-3.5" />
+          </div>
+        ) : null}
         <div className="absolute top-3 left-3 z-30 flex items-center gap-1">
           <Button
             variant="outline"
@@ -456,7 +536,11 @@ export function ModelEditor({
             aria-label={showTree ? "Hide component tree" : "Show component tree"}
             className="bg-card/90 shadow backdrop-blur-md"
           >
-            {showTree ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
+            {showTree ? (
+              <PanelLeftClose className="size-4" />
+            ) : (
+              <PanelLeftOpen className="size-4" />
+            )}
           </Button>
           <Button
             variant="outline"
