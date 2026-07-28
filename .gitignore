@@ -27,3 +27,6 @@ apps/web/public/kcl_wasm_lib_bg.wasm
 # misc
 .DS_Store
 .screens/
+
+# Local PCB fabrication output from scripts/pcb-demo.ts
+.pcb-demo/
