@@ -2,15 +2,51 @@
 # https://dashboard.render.com/blueprint/new
 #
 # Hosted Postgres / Auth / Storage stay on Supabase. Redis is external
-# (e.g. Upstash) — set REDIS_URL yourself. This Blueprint deploys the
-# Next.js app, BullMQ chat worker, and Yjs collab WebSocket service.
+# (e.g. Upstash) — set REDIS_URL in the foundry-shared env group.
+# This Blueprint deploys the Next.js app, BullMQ chat worker, and Yjs
+# collab WebSocket service.
 #
 # After the first sync:
-# 1. Fill every sync:false env var in the Render dashboard (incl. REDIS_URL).
+# 1. Fill every sync:false env var in the foundry-shared group (+ web-only).
 # 2. Set Supabase Auth Site URL + redirect allowlist to APP_ORIGIN
 #    (and APP_ORIGIN/auth/confirm, APP_ORIGIN/auth/callback).
 # 3. Paste supabase/templates/*.html into Supabase Auth email templates.
-# 4. Set NEXT_PUBLIC_COLLAB_URL to wss://<foundry-collab-host>
+# 4. Set NEXT_PUBLIC_COLLAB_URL (web) to wss://<foundry-collab-host>
+#
+# Build note: --prod=false keeps prisma/typescript (devDependencies) available
+# even when Render sets NODE_ENV=production during build.
+
+envVarGroups:
+  - name: foundry-shared
+    envVars:
+      - key: AUTH_MODE
+        value: supabase
+      - key: STORAGE_BUCKET
+        value: artifacts
+      - key: AI_MODEL
+        value: gpt-5.6
+      - key: AUTH_SECRET
+        generateValue: true
+      # Supabase Postgres (pooled + direct for DDL)
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      # External Redis (Upstash / etc). Use rediss:// for TLS.
+      - key: REDIS_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ZOO_API_TOKEN
+        sync: false
+      - key: V0_API_KEY
+        sync: false
 
 services:
   - type: web
@@ -18,7 +54,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile && pnpm --filter @foundry/db generate && pnpm --filter @foundry/web build
+    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate && pnpm --filter @foundry/web build
     startCommand: pnpm --filter @foundry/web start
     healthCheckPath: /
     buildFilter:
@@ -31,45 +67,17 @@ services:
         - turbo.json
         - render.yaml
     envVars:
+      - fromGroup: foundry-shared
       - key: NODE_VERSION
         value: "20"
-      - key: NODE_ENV
-        value: production
-      - key: AUTH_MODE
-        value: supabase
       - key: NEXT_PUBLIC_REALTIME_MODE
         value: supabase
-      - key: STORAGE_BUCKET
-        value: artifacts
-      - key: AI_MODEL
-        value: gpt-5.6
       - key: APP_ORIGIN
         fromService:
           name: foundry-web
           type: web
           envVarKey: RENDER_EXTERNAL_URL
-      # External Redis (Upstash / etc). Use rediss:// for TLS.
-      - key: REDIS_URL
-        sync: false
-      - key: DATABASE_URL
-        sync: false
-      - key: DIRECT_URL
-        sync: false
-      - key: AUTH_SECRET
-        generateValue: true
-      - key: NEXT_PUBLIC_SUPABASE_URL
-        sync: false
-      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
       - key: NEXT_PUBLIC_COLLAB_URL
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: ZOO_API_TOKEN
-        sync: false
-      - key: V0_API_KEY
         sync: false
       - key: FOUNDRY_DEFAULT_WORKSPACE_SLUG
         sync: false
@@ -79,7 +87,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile && pnpm --filter @foundry/db generate
+    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate
     startCommand: pnpm --filter @foundry/web worker:chat:prod
     buildFilter:
       paths:
@@ -91,41 +99,11 @@ services:
         - turbo.json
         - render.yaml
     envVars:
+      - fromGroup: foundry-shared
       - key: NODE_VERSION
         value: "20"
-      - key: NODE_ENV
-        value: production
-      - key: AUTH_MODE
-        value: supabase
       - key: NEXT_PUBLIC_REALTIME_MODE
         value: off
-      - key: STORAGE_BUCKET
-        value: artifacts
-      - key: AI_MODEL
-        value: gpt-5.6
-      - key: REDIS_URL
-        sync: false
-      - key: DATABASE_URL
-        sync: false
-      - key: DIRECT_URL
-        sync: false
-      - key: AUTH_SECRET
-        fromService:
-          name: foundry-web
-          type: web
-          envVarKey: AUTH_SECRET
-      - key: NEXT_PUBLIC_SUPABASE_URL
-        sync: false
-      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: ZOO_API_TOKEN
-        sync: false
-      - key: V0_API_KEY
-        sync: false
       - key: APP_ORIGIN
         fromService:
           name: foundry-web
@@ -137,7 +115,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile && pnpm --filter @foundry/db generate
+    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate
     startCommand: pnpm --filter @foundry/collab-server start:prod
     buildFilter:
       paths:
@@ -150,26 +128,8 @@ services:
         - pnpm-workspace.yaml
         - render.yaml
     envVars:
+      - fromGroup: foundry-shared
       - key: NODE_VERSION
         value: "20"
-      - key: NODE_ENV
-        value: production
-      - key: AUTH_MODE
-        value: supabase
-      - key: STORAGE_BUCKET
-        value: artifacts
       - key: NEXT_PUBLIC_REALTIME_MODE
         value: off
-      - key: DATABASE_URL
-        sync: false
-      - key: AUTH_SECRET
-        fromService:
-          name: foundry-web
-          type: web
-          envVarKey: AUTH_SECRET
-      - key: NEXT_PUBLIC_SUPABASE_URL
-        sync: false
-      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
