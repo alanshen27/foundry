@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev worker:chat --parallel --filter=@foundry/web",
+    "dev": "turbo run dev worker:chat --parallel --filter=@foundry/web --filter=@foundry/collab-server",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -34,6 +34,9 @@
       "prisma",
       "sharp",
       "unrs-resolver"
-    ]
+    ],
+    "patchedDependencies": {
+      "y-monaco@0.1.6": "patches/y-monaco@0.1.6.patch"
+    }
   }
 }

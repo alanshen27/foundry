@@ -8,115 +8,110 @@
 @source "../../../packages/ui/src";
 
 /*
-  Lilac-on-navy system: soft violet-tinted neutrals, generous radii, and one
-  lavender accent (#cab7f7) carried from the brand mark.
+  Neo-industrial / Nothing-inspired system: off-white, black, signal orange,
+  sharp corners (no soft SaaS radius), mono labels, Swiss grid rhythm.
 */
 
 :root {
-  --radius: 0.75rem;
-  --background: #f6f5fb;
-  --foreground: #1b1a24;
-  --card: #ffffff;
-  --card-foreground: #1b1a24;
-  --popover: #ffffff;
-  --popover-foreground: #1b1a24;
-  --secondary: #eeecf6;
-  --secondary-foreground: #1b1a24;
-  --muted: #eeecf6;
-  --muted-foreground: #726f85;
-  --accent: #f1eefa;
-  --accent-foreground: #1b1a24;
-  --destructive: #f24822;
-  --border: #e6e3f0;
-  --input: #e6e3f0;
-  --ring: #8b5cf6;
-  --chart-1: #8b5cf6;
-  --chart-2: #0d99ff;
-  --chart-3: #14b8a6;
-  --chart-4: #f59e0b;
-  --chart-5: #ec4899;
-  --sidebar: #ffffff;
-  --sidebar-foreground: #1b1a24;
-  --sidebar-primary: #7c3aed;
+  /* Sharp industrial corners — no soft SaaS radius mix. */
+  --radius: 0rem;
+  --background: #f4f2ec;
+  --foreground: #0c0c0c;
+  --card: #faf9f5;
+  --card-foreground: #0c0c0c;
+  --popover: #faf9f5;
+  --popover-foreground: #0c0c0c;
+  --secondary: #ebe8e0;
+  --secondary-foreground: #0c0c0c;
+  --muted: #ebe8e0;
+  --muted-foreground: #6b6860;
+  --accent: #ebe8e0;
+  --accent-foreground: #0c0c0c;
+  --destructive: #e11d48;
+  --border: #d6d3cb;
+  --input: #d6d3cb;
+  --ring: #ff5a00;
+  --chart-1: #ff5a00;
+  --chart-2: #0c0c0c;
+  --chart-3: #e11d48;
+  --chart-4: #0d9488;
+  --chart-5: #5b6cff;
+  --sidebar: #faf9f5;
+  --sidebar-foreground: #0c0c0c;
+  --sidebar-primary: #ff5a00;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #f1eefa;
-  --sidebar-accent-foreground: #1b1a24;
-  --sidebar-border: #e6e3f0;
-  --sidebar-ring: #8b5cf6;
-  --primary: #7c3aed;
+  --sidebar-accent: #ebe8e0;
+  --sidebar-accent-foreground: #0c0c0c;
+  --sidebar-border: #d6d3cb;
+  --sidebar-ring: #ff5a00;
+  --primary: #ff5a00;
   --primary-foreground: #ffffff;
-  --shadow-panel: 0 0 0 1px rgba(27, 26, 36, 0.04), 0 1px 2px rgba(27, 26, 36, 0.05);
+  --shadow-panel: 0 0 0 1px rgba(12, 12, 12, 0.06);
 
   /*
     Pipeline identity colors. These are wayfinding, not decoration: each phase
     of Ideate -> Engineer -> Verify -> Launch keeps one hue everywhere it
-    appears, and the set runs cool to warm so the order reads left to right.
-    Deliberately independent of --primary so the four stay distinguishable
-    under every accent, and kept clear of the status hues (amber = needs
-    review, red = blocked, orange = stale) that sit next to them. Ideate is
-    fuchsia rather than violet so it does not read as the lavender brand color.
+    appears. Kept clear of the status hues that sit next to them.
   */
-  --phase-ideate: #c026d3;
-  --phase-engineer: #0d99ff;
+  --phase-ideate: #e11d48;
+  --phase-engineer: #ff5a00;
   --phase-verify: #0d9488;
-  --phase-launch: #d97706;
+  --phase-launch: #0c0c0c;
 }
 
-/* Navy sampled from the brand mark (#1c222e) with lavender sitting on top. */
 .dark {
-  --background: #1c222e;
-  --foreground: #edeef6;
-  --card: #232a38;
-  --card-foreground: #edeef6;
-  --popover: #232a38;
-  --popover-foreground: #edeef6;
-  --secondary: #2d3546;
-  --secondary-foreground: #edeef6;
-  --muted: #2d3546;
-  --muted-foreground: #97a0b5;
-  --accent: #2d3546;
-  --accent-foreground: #edeef6;
-  --destructive: #f6674a;
-  --border: rgba(202, 183, 247, 0.12);
-  --input: rgba(202, 183, 247, 0.16);
-  --ring: #cab7f7;
-  --chart-1: #cab7f7;
-  --chart-2: #38bdf8;
-  --chart-3: #2dd4bf;
-  --chart-4: #fbbf24;
-  --chart-5: #f472b6;
-  --sidebar: #1f2634;
-  --sidebar-foreground: #edeef6;
-  --sidebar-primary: #cab7f7;
-  --sidebar-primary-foreground: #1c222e;
-  --sidebar-accent: #2d3546;
-  --sidebar-accent-foreground: #edeef6;
-  --sidebar-border: rgba(202, 183, 247, 0.12);
-  --sidebar-ring: #cab7f7;
-  --primary: #cab7f7;
-  --primary-foreground: #1c222e;
-  --shadow-panel: 0 0 0 1px rgba(202, 183, 247, 0.08), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --background: #0c0c0c;
+  --foreground: #f4f2ec;
+  --card: #141414;
+  --card-foreground: #f4f2ec;
+  --popover: #141414;
+  --popover-foreground: #f4f2ec;
+  --secondary: #1c1c1c;
+  --secondary-foreground: #f4f2ec;
+  --muted: #1c1c1c;
+  --muted-foreground: #9a968c;
+  --accent: #1c1c1c;
+  --accent-foreground: #f4f2ec;
+  --destructive: #fb7185;
+  --border: rgba(244, 242, 236, 0.12);
+  --input: rgba(244, 242, 236, 0.16);
+  --ring: #ff5a00;
+  --chart-1: #ff5a00;
+  --chart-2: #f4f2ec;
+  --chart-3: #fb7185;
+  --chart-4: #2dd4bf;
+  --chart-5: #7b87ff;
+  --sidebar: #111111;
+  --sidebar-foreground: #f4f2ec;
+  --sidebar-primary: #ff5a00;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1c1c1c;
+  --sidebar-accent-foreground: #f4f2ec;
+  --sidebar-border: rgba(244, 242, 236, 0.12);
+  --sidebar-ring: #ff5a00;
+  --primary: #ff5a00;
+  --primary-foreground: #ffffff;
+  --shadow-panel: 0 0 0 1px rgba(244, 242, 236, 0.08);
 
-  /* Lifted for contrast against the navy surfaces. */
-  --phase-ideate: #e879f9;
-  --phase-engineer: #38bdf8;
+  --phase-ideate: #fb7185;
+  --phase-engineer: #ff7a33;
   --phase-verify: #2dd4bf;
-  --phase-launch: #fbbf24;
+  --phase-launch: #f4f2ec;
 }
 
 /* Accents — light */
-:root[data-accent="lilac"] {
-  --primary: #7c3aed;
+:root[data-accent="signal"] {
+  --primary: #ff5a00;
   --primary-foreground: #ffffff;
-  --sidebar-primary: #7c3aed;
-  --ring: #8b5cf6;
+  --sidebar-primary: #ff5a00;
+  --ring: #ff5a00;
 }
 
-:root[data-accent="signal"] {
-  --primary: #0d99ff;
+:root[data-accent="ember"] {
+  --primary: #e11d48;
   --primary-foreground: #ffffff;
-  --sidebar-primary: #0d99ff;
-  --ring: #0d99ff;
+  --sidebar-primary: #e11d48;
+  --ring: #e11d48;
 }
 
 :root[data-accent="cobalt"] {
@@ -127,10 +122,10 @@
 }
 
 :root[data-accent="graphite"] {
-  --primary: #2c2c2c;
-  --primary-foreground: #ffffff;
-  --sidebar-primary: #2c2c2c;
-  --ring: #8c8c8c;
+  --primary: #0c0c0c;
+  --primary-foreground: #f4f2ec;
+  --sidebar-primary: #0c0c0c;
+  --ring: #6b6860;
 }
 
 :root[data-accent="jade"] {
@@ -140,28 +135,28 @@
   --ring: #14b8a6;
 }
 
-:root[data-accent="ember"] {
-  --primary: #b45309;
+:root[data-accent="lilac"] {
+  --primary: #7c3aed;
   --primary-foreground: #ffffff;
-  --sidebar-primary: #b45309;
-  --ring: #c97840;
+  --sidebar-primary: #7c3aed;
+  --ring: #8b5cf6;
 }
 
 /* Accents — dark */
-.dark[data-accent="lilac"] {
-  --primary: #cab7f7;
-  --primary-foreground: #1c222e;
-  --sidebar-primary: #cab7f7;
-  --sidebar-primary-foreground: #1c222e;
-  --ring: #cab7f7;
+.dark[data-accent="signal"] {
+  --primary: #ff5a00;
+  --primary-foreground: #ffffff;
+  --sidebar-primary: #ff5a00;
+  --sidebar-primary-foreground: #ffffff;
+  --ring: #ff5a00;
 }
 
-.dark[data-accent="signal"] {
-  --primary: #0d99ff;
-  --primary-foreground: #ffffff;
-  --sidebar-primary: #0d99ff;
-  --sidebar-primary-foreground: #ffffff;
-  --ring: #0d99ff;
+.dark[data-accent="ember"] {
+  --primary: #fb7185;
+  --primary-foreground: #1c0a0e;
+  --sidebar-primary: #fb7185;
+  --sidebar-primary-foreground: #1c0a0e;
+  --ring: #fb7185;
 }
 
 .dark[data-accent="cobalt"] {
@@ -173,11 +168,11 @@
 }
 
 .dark[data-accent="graphite"] {
-  --primary: #e6e6e6;
-  --primary-foreground: #1e1e1e;
-  --sidebar-primary: #e6e6e6;
-  --sidebar-primary-foreground: #1e1e1e;
-  --ring: #a3a3a3;
+  --primary: #f4f2ec;
+  --primary-foreground: #0c0c0c;
+  --sidebar-primary: #f4f2ec;
+  --sidebar-primary-foreground: #0c0c0c;
+  --ring: #9a968c;
 }
 
 .dark[data-accent="jade"] {
@@ -188,12 +183,12 @@
   --ring: #2dd4bf;
 }
 
-.dark[data-accent="ember"] {
-  --primary: #d4925a;
-  --primary-foreground: #1c1008;
-  --sidebar-primary: #d4925a;
-  --sidebar-primary-foreground: #1c1008;
-  --ring: #d4925a;
+.dark[data-accent="lilac"] {
+  --primary: #cab7f7;
+  --primary-foreground: #1c222e;
+  --sidebar-primary: #cab7f7;
+  --sidebar-primary-foreground: #1c222e;
+  --ring: #cab7f7;
 }
 
 @theme inline {
@@ -232,15 +227,16 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
-  --radius-sm: calc(var(--radius) - 2px);
-  --radius-md: calc(var(--radius) - 1px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 2px);
-  --font-heading: var(--font-sans);
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --font-heading: var(--font-mono);
   --font-sans: var(--font-sans);
-  --radius-2xl: calc(var(--radius) + 6px);
-  --radius-3xl: calc(var(--radius) + 10px);
-  --radius-4xl: calc(var(--radius) + 14px);
+  --font-mono: var(--font-mono);
+  --radius-2xl: 0;
+  --radius-3xl: 0;
+  --radius-4xl: 0;
 }
 
 @layer base {
@@ -253,4 +249,144 @@
   html {
     @apply font-sans;
   }
+  /* Kill soft radii globally. Circles (avatars / switches) keep .rounded-full. */
+  :where(
+    .rounded,
+    .rounded-xs,
+    .rounded-sm,
+    .rounded-md,
+    .rounded-lg,
+    .rounded-xl,
+    .rounded-2xl,
+    .rounded-3xl,
+    .rounded-4xl,
+    .rounded-t,
+    .rounded-b,
+    .rounded-l,
+    .rounded-r,
+    .rounded-t-sm,
+    .rounded-b-sm,
+    .rounded-t-md,
+    .rounded-b-md,
+    .rounded-t-lg,
+    .rounded-b-lg,
+    .rounded-t-xl,
+    .rounded-b-xl
+  ) {
+    border-radius: 0;
+  }
+}
+
+/* Lucide icons → signal orange (unlayered so it wins over muted text utilities).
+   Filled primary / destructive surfaces keep readable contrast. */
+svg.lucide {
+  color: var(--primary);
+}
+.bg-primary svg.lucide,
+.text-primary-foreground svg.lucide {
+  color: var(--primary-foreground);
+}
+.text-destructive svg.lucide,
+.bg-destructive svg.lucide {
+  color: var(--destructive);
+}
+
+/* Dot-matrix skeletons — pulsing grid instead of flat grey bars. */
+.skeleton-dots {
+  background-color: transparent;
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--foreground) 22%, transparent) 0.85px,
+    transparent 0.95px
+  );
+  background-size: 6px 6px;
+  animation: skeleton-dots-pulse 1.4s ease-in-out infinite;
+}
+
+.dark .skeleton-dots {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--foreground) 28%, transparent) 0.85px,
+    transparent 0.95px
+  );
+}
+
+@keyframes skeleton-dots-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    background-size: 6px 6px;
+  }
+  50% {
+    opacity: 0.9;
+    background-size: 5.5px 5.5px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-dots {
+    animation: none;
+    opacity: 0.55;
+  }
+}
+
+/* Workspace id tile — white letter blinks on orange like a signal display */
+.signal-letter {
+  animation: signal-letter-flash 2.8s steps(1, end) infinite;
+}
+@keyframes signal-letter-flash {
+  0%,
+  86% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 0.15;
+  }
+  90% {
+    opacity: 1;
+  }
+  94% {
+    opacity: 0.25;
+  }
+  96%,
+  100% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .signal-letter {
+    animation: none;
+  }
+}
+
+
+/* y-monaco remote cursors / selections (color comes from awareness user.color) */
+.yRemoteSelection {
+  opacity: 0.45;
+}
+.yRemoteSelectionHead {
+  position: absolute;
+  border-left-width: 2px;
+  border-left-style: solid;
+  border-top-width: 2px;
+  border-top-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-style: solid;
+  height: 100%;
+  box-sizing: border-box;
+}
+.yRemoteSelectionHead::after {
+  position: absolute;
+  content: attr(data-user);
+  border-radius: 0;
+  left: -2px;
+  top: -1.4em;
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 1px 4px;
+  white-space: nowrap;
+  color: #fff;
+  background: inherit;
+  border-color: inherit;
+  font-family: var(--font-mono), ui-monospace, monospace;
 }

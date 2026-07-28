@@ -114,7 +114,7 @@ function ImportDialog({ onImport }: { onImport: (doc: CircuitDoc) => void }) {
             onChange={(e) => setText(e.target.value)}
             placeholder='{"version": 1, "parts": [...], "connections": [...]}'
             rows={10}
-            className="bg-background focus-visible:border-ring rounded-lg border p-2.5 font-mono text-xs outline-none"
+            className="bg-background focus-visible:border-ring rounded-none border p-2.5 font-mono text-xs outline-none"
             aria-label="Wokwi diagram JSON"
           />
           {error ? <p className="text-destructive text-xs">{error}</p> : null}
@@ -279,14 +279,14 @@ export function CircuitCanvas({
           position="bottom-right"
           pannable
           zoomable
-          className="!bg-card/90 rounded-lg border"
+          className="!bg-card/90 rounded-none border"
           nodeColor="var(--color-primary)"
           maskColor={isDark ? "rgb(30 30 30 / 0.75)" : "rgb(245 245 245 / 0.75)"}
         />
 
         {canEdit ? (
           <Panel position="top-left" className="!m-3">
-            <div className="bg-card/90 flex w-64 flex-col rounded-xl border shadow-lg backdrop-blur-md">
+            <div className="bg-card/90 flex w-64 flex-col rounded-none border shadow-lg backdrop-blur-md">
               <div className="flex items-center gap-1.5 border-b p-2">
                 <Search className="text-muted-foreground ml-1 size-3.5 shrink-0" />
                 <Input
@@ -309,7 +309,7 @@ export function CircuitCanvas({
                       key={entry.type}
                       type="button"
                       onClick={() => addPart(entry.type)}
-                      className="hover:bg-muted/60 flex items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors"
+                      className="hover:bg-muted/60 flex items-center gap-2 rounded-none px-2 py-1 text-left text-xs transition-colors"
                     >
                       <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                       <span className="text-muted-foreground text-[10px]">{entry.category}</span>
@@ -323,7 +323,7 @@ export function CircuitCanvas({
 
         {selected && canEdit ? (
           <Panel position="top-right" className="!m-3">
-            <div className="bg-card/90 flex w-56 flex-col gap-2 rounded-xl border p-2.5 shadow-lg backdrop-blur-md">
+            <div className="bg-card/90 flex w-56 flex-col gap-2 rounded-none border p-2.5 shadow-lg backdrop-blur-md">
               <Input
                 value={selected.data.label ?? ""}
                 onChange={(e) => patchSelected({ label: e.target.value })}
@@ -375,7 +375,7 @@ export function CircuitCanvas({
         ) : null}
 
         <Panel position="bottom-center" className="!mb-3">
-          <span className="bg-card/85 text-muted-foreground rounded-lg border px-2.5 py-1 text-[11px] shadow backdrop-blur-md">
+          <span className="bg-card/85 text-muted-foreground rounded-none border px-2.5 py-1 text-[11px] shadow backdrop-blur-md">
             {save.isPending ? "Saving…" : "Autosaves · drag pins to wire · ⌫ deletes"}
           </span>
         </Panel>

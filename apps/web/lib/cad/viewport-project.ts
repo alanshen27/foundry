@@ -51,7 +51,8 @@ export function cadViewportInput(doc: CadDoc, activeId: string): CadViewportInpu
   if (parseKclModuleImports(entry.content).length > 0) {
     const project = buildKclProject(doc, entry.path);
     return {
-      script: entry.content,
+      // Prefer remapped entry source so import paths match projectFiles keys.
+      script: project.files[project.entryPath] ?? entry.content,
       projectFiles: project.files,
       entryPath: project.entryPath,
       meshAssets: project.meshAssets.map(toViewportMesh),

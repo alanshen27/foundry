@@ -98,7 +98,7 @@ function FolderRow({
     <div>
       <div
         className={cn(
-          "group flex w-full items-center gap-0.5 rounded-md py-[5px] pr-0.5 text-[13px] transition-colors",
+          "group flex w-full items-center gap-0.5 rounded-none py-[5px] pr-0.5 text-[13px] transition-colors",
           active
             ? "bg-sidebar-accent text-foreground font-medium"
             : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
@@ -157,7 +157,7 @@ function FolderRow({
                 aria-label="Close menu"
                 onClick={() => onMenuFor(null)}
               />
-              <div className="bg-popover text-popover-foreground absolute top-full right-0 z-50 mt-0.5 min-w-[168px] rounded-lg border py-1 text-[12px] shadow-md">
+              <div className="bg-popover text-popover-foreground absolute top-full right-0 z-50 mt-0.5 min-w-[168px] rounded-none border py-1 text-[12px] shadow-md">
                 <button
                   type="button"
                   className="hover:bg-muted w-full px-2.5 py-1.5 text-left"
@@ -257,7 +257,7 @@ function FolderRow({
               <div
                 key={project.id}
                 className={cn(
-                  "group flex items-center gap-1 rounded-md py-[5px] pr-0.5 text-[13px] transition-colors",
+                  "group flex items-center gap-1 rounded-none py-[5px] pr-0.5 text-[13px] transition-colors",
                   projectActive
                     ? "bg-sidebar-accent text-foreground font-medium"
                     : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
@@ -289,7 +289,7 @@ function FolderRow({
                         aria-label="Close menu"
                         onClick={() => onMenuFor(null)}
                       />
-                      <div className="bg-popover text-popover-foreground absolute top-full right-0 z-50 mt-0.5 min-w-[140px] rounded-lg border py-1 text-[12px] shadow-md">
+                      <div className="bg-popover text-popover-foreground absolute top-full right-0 z-50 mt-0.5 min-w-[140px] rounded-none border py-1 text-[12px] shadow-md">
                         <button
                           type="button"
                           className="hover:bg-muted w-full px-2.5 py-1.5 text-left"
@@ -540,7 +540,7 @@ export function WorkspaceFileTree({
           <div
             key={project.id}
             className={cn(
-              "group flex items-center gap-1 rounded-md px-2 py-[5px] text-[13px] transition-colors",
+              "group flex items-center gap-1 rounded-none px-2 py-[5px] text-[13px] transition-colors",
               active
                 ? "bg-sidebar-accent text-foreground font-medium"
                 : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
@@ -571,7 +571,7 @@ export function WorkspaceFileTree({
                     aria-label="Close menu"
                     onClick={() => setMenuFor(null)}
                   />
-                  <div className="bg-popover text-popover-foreground absolute top-full right-0 z-50 mt-0.5 min-w-[140px] rounded-lg border py-1 text-[12px] shadow-md">
+                  <div className="bg-popover text-popover-foreground absolute top-full right-0 z-50 mt-0.5 min-w-[140px] rounded-none border py-1 text-[12px] shadow-md">
                     <button
                       type="button"
                       className="hover:bg-muted w-full px-2.5 py-1.5 text-left"

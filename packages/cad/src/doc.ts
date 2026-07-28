@@ -30,12 +30,12 @@ body = extrude(profile001, length = height)
 /** Marker comment — insertPartIntoAssembly replaces the stock envelope when present. */
 export const ASSEMBLY_ENVELOPE_MARKER = "assemblyEnvelope = extrude";
 
-export const DEFAULT_ASSEMBLY_KCL = `// Product assembly (mm) — import parts from parts/*.kcl
+export const DEFAULT_ASSEMBLY_KCL = `// Product assembly (mm) — import parts as …/main.kcl (Zoo subdirectory rule).
 // Drag a part onto Assembly in the tree to place it here.
 // Example:
 //   import "parts/main.kcl" as main
 //   main
-//   import "parts/lid.kcl" as lid
+//   import "parts/lid/main.kcl" as lid
 //   lid |> translate(z = 25)
 
 assyWidth = 120
@@ -52,7 +52,7 @@ baseProfile = startProfile(baseSketch, at = [-assyWidth / 2, -assyDepth / 2])
 assemblyEnvelope = extrude(baseProfile, length = assyHeight)
 `;
 
-export const ASSEMBLY_STARTER_KCL = `// Product assembly (mm) — parts imported from parts/*.kcl
+export const ASSEMBLY_STARTER_KCL = `// Product assembly (mm) — parts imported as parts/<name>/main.kcl
 // Drag more parts onto Assembly to place them. Use translate/rotate to position.
 
 `;
@@ -106,9 +106,24 @@ export function slugifyCadName(name: string): string {
 
 function pathFor(kind: CadComponentKind, name: string): string {
   const slug = slugifyCadName(name);
-  if (kind === "part") return `parts/${slug}.kcl`;
+  // Zoo: subdirectory imports must target main.kcl. Store parts that way so
+  // assembly/product.kcl can import them without a rewrite pass failing execute.
+  if (kind === "part") {
+    if (slug === "main") return "parts/main.kcl";
+    return `parts/${slug}/main.kcl`;
+  }
   if (kind === "assembly") return `assembly/${slug}.kcl`;
   return `docs/${slug}.md`;
+}
+
+/** Folder (or file stem) used as the human/part name for a CadDoc path. */
+export function displayNameFromCadPath(path: string): string {
+  const segs = path.split("/").filter(Boolean);
+  const file = segs[segs.length - 1] ?? path;
+  if (file.toLowerCase() === "main.kcl" && segs.length >= 2) {
+    return segs[segs.length - 2]!;
+  }
+  return file.replace(/\.(kcl|md)$/i, "") || "part";
 }
 
 function mirrorScript(components: CadComponent[], activeId: string): string {
@@ -202,6 +217,49 @@ export function isForeignImportOnlyScript(kcl: string): boolean {
   return true;
 }
 
+/**
+ * Zoo KCL: imports from a subdirectory may only target `main.kcl`
+ * (https://zoo.dev/docs/kcl-lang/modules). Logical Foundry paths like
+ * `parts/lid.kcl` therefore become `parts/lid/main.kcl` at execute time.
+ * Same-directory / already-`main.kcl` paths are unchanged.
+ */
+export function toZooKclPath(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed.toLowerCase().endsWith(".kcl")) return trimmed;
+  const segs = trimmed.split("/");
+  const file = segs[segs.length - 1]!;
+  if (file.toLowerCase() === "main.kcl") return trimmed;
+  if (segs.length === 1) return trimmed;
+  const stem = file.replace(/\.kcl$/i, "");
+  return [...segs.slice(0, -1), stem, "main.kcl"].join("/");
+}
+
+/** Inverse of {@link toZooKclPath} for matching CadDoc component paths. */
+export function fromZooKclPath(path: string): string {
+  const trimmed = path.trim();
+  const m = /^(.+)\/([^/]+)\/main\.kcl$/i.exec(trimmed);
+  if (!m) return trimmed;
+  return `${m[1]}/${m[2]}.kcl`;
+}
+
+/** Rewrite `.kcl` module import paths on import lines (leaves STL/STEP alone). */
+export function rewriteKclModuleImportPaths(
+  kcl: string,
+  mapPath: (path: string) => string = toZooKclPath,
+): string {
+  return kcl
+    .split("\n")
+    .map((line) => {
+      if (!/^\s*(export\s+)?import\s+/i.test(line)) return line;
+      return line.replace(/(["'])([^"']+\.kcl)\1/g, (_m, q: string, p: string) => `${q}${mapPath(p)}${q}`);
+    })
+    .join("\n");
+}
+
+function modulePathsEqual(a: string, b: string): boolean {
+  return a === b || toZooKclPath(a) === toZooKclPath(b) || fromZooKclPath(a) === fromZooKclPath(b);
+}
+
 /** KCL module import: `import "parts/foo.kcl" as foo` (and bare import). */
 export function parseKclModuleImports(kcl: string): { path: string; alias: string }[] {
   const out: { path: string; alias: string }[] = [];
@@ -235,8 +293,9 @@ function isStockAssemblyEnvelope(kcl: string): boolean {
 }
 
 function ensureModuleImport(kcl: string, path: string, alias: string): string {
+  const importPath = toZooKclPath(path);
   const existing = parseKclModuleImports(kcl);
-  if (existing.some((i) => i.path === path || i.alias === alias)) return kcl;
+  if (existing.some((i) => modulePathsEqual(i.path, path) || i.alias === alias)) return kcl;
 
   const lines = kcl.split("\n");
   let insertAt = 0;
@@ -253,7 +312,7 @@ function ensureModuleImport(kcl: string, path: string, alias: string): string {
     break;
   }
   const next = [...lines];
-  next.splice(insertAt, 0, `import "${path}" as ${alias}`);
+  next.splice(insertAt, 0, `import "${importPath}" as ${alias}`);
   return next.join("\n");
 }
 
@@ -273,7 +332,9 @@ export function insertPartIntoAssembly(
   }
 
   const alias = partModuleAlias(part);
-  const already = parseKclModuleImports(assembly.content).find((i) => i.path === part.path);
+  const already = parseKclModuleImports(assembly.content).find((i) =>
+    modulePathsEqual(i.path, part.path),
+  );
   let content = assembly.content;
 
   if (isStockAssemblyEnvelope(content)) {
@@ -300,15 +361,19 @@ export type KclProjectBuild = {
 
 /**
  * Build a multi-file KCL project for the Zoo executor.
- * Parts that are imported by the entry and contain foreign mesh imports become
- * small proxy solids (browser KCL can't resolve STL inside modules).
+ * Remaps `parts/foo.kcl` → `parts/foo/main.kcl` so subdirectory imports satisfy
+ * Zoo's main.kcl-only rule. Mesh-only parts imported by the entry become small
+ * proxy solids (browser KCL can't resolve STL inside modules).
  */
 export function buildKclProject(doc: CadDoc, entryPath: string): KclProjectBuild {
   const files: Record<string, string> = {};
   const meshAssets: CadAsset[] = [];
   const assetsByPath = new Map((doc.assets ?? []).map((a) => [a.path, a]));
   const entry = doc.components.find((c) => c.path === entryPath);
-  const importedPaths = new Set(parseKclModuleImports(entry?.content ?? "").map((i) => i.path));
+  const zooEntry = toZooKclPath(entryPath);
+  const importedLogical = new Set(
+    parseKclModuleImports(entry?.content ?? "").map((i) => fromZooKclPath(i.path)),
+  );
 
   for (const c of doc.components) {
     if (c.kind === "instructions") continue;
@@ -319,17 +384,21 @@ export function buildKclProject(doc: CadDoc, entryPath: string): KclProjectBuild
     }
 
     let content = c.content;
-    if (c.kind === "part" && importedPaths.has(c.path) && foreign.length > 0) {
+    if (c.kind === "part" && importedLogical.has(c.path) && foreign.length > 0) {
       content = meshPartProxyKcl(c.name);
+    } else {
+      content = rewriteKclModuleImportPaths(content);
     }
-    files[c.path] = content;
+    // Empty modules deserialize as null Program and crash Zoo multi-file submit.
+    if (!content.trim() && c.path !== entryPath) continue;
+    files[toZooKclPath(c.path)] = content;
   }
 
-  if (!files[entryPath]) {
-    files[entryPath] = entry?.content ?? DEFAULT_KCL;
+  if (!files[zooEntry]) {
+    files[zooEntry] = rewriteKclModuleImportPaths(entry?.content ?? DEFAULT_KCL);
   }
 
-  return { files, entryPath, meshAssets };
+  return { files, entryPath: zooEntry, meshAssets };
 }
 
 export function addCadAsset(
@@ -508,9 +577,18 @@ function matchComponent(
   kind?: CadComponentKind,
 ): CadComponent | undefined {
   const key = pathOrName.trim();
+  const zooKey = toZooKclPath(key);
   return doc.components.find((c) => {
     if (kind && c.kind !== kind) return false;
-    return c.path === key || c.name === key || c.path.endsWith(`/${key}`) || c.path.endsWith(key);
+    return (
+      c.path === key ||
+      c.path === zooKey ||
+      c.name === key ||
+      toZooKclPath(c.path) === zooKey ||
+      fromZooKclPath(c.path) === key ||
+      c.path.endsWith(`/${key}`) ||
+      c.path.endsWith(key)
+    );
   });
 }
 
@@ -521,9 +599,7 @@ export function upsertPartScript(doc: CadDoc, pathOrName: string | undefined, sc
   if (byPath) {
     return setActiveComponent(updateComponentContent(doc, byPath.id, script), byPath.id);
   }
-  const name = key.includes("/")
-    ? (key.split("/").pop() ?? key).replace(/\.kcl$/, "")
-    : key.replace(/\.kcl$/, "");
+  const name = key.includes("/") ? displayNameFromCadPath(key) : key.replace(/\.kcl$/, "");
   return addCadComponent(doc, { name, kind: "part", content: script });
 }
 
@@ -564,7 +640,7 @@ export function upsertCadContent(
     return setActiveComponent(updateComponentContent(doc, existing.id, content), existing.id);
   }
   const name = key.includes("/")
-    ? (key.split("/").pop() ?? key).replace(/\.(kcl|md)$/, "")
+    ? displayNameFromCadPath(key)
     : key.replace(/\.(kcl|md)$/, "");
   return addCadComponent(doc, { name, kind, content });
 }
@@ -586,12 +662,22 @@ function normalizeComponent(raw: unknown): CadComponent | null {
   }
   if (c.kind !== "part" && c.kind !== "assembly" && c.kind !== "instructions") return null;
   if (typeof c.content !== "string") return null;
+  const kind = c.kind;
+  // Only parts need the …/main.kcl layout. Assemblies stay at assembly/*.kcl
+  // (MCP copies the entry to root main.kcl for execute).
+  const path = kind === "part" ? toZooKclPath(c.path) : c.path;
+  const content =
+    kind === "instructions" ? c.content : rewriteKclModuleImportPaths(c.content);
+  const name =
+    kind === "part" && path !== c.path && c.name === "main"
+      ? displayNameFromCadPath(path)
+      : c.name;
   return {
     id: c.id,
-    name: c.name,
-    path: c.path,
-    kind: c.kind,
-    content: c.content,
+    name,
+    path,
+    kind,
+    content,
   };
 }
 

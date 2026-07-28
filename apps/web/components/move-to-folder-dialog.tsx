@@ -59,12 +59,12 @@ export function MoveToFolderDialog({
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
 
-        <div className="max-h-64 overflow-y-auto rounded-lg border p-1">
+        <div className="max-h-64 overflow-y-auto rounded-none border p-1">
           <button
             type="button"
             onClick={() => setSelected(null)}
             className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px]",
+              "flex w-full items-center gap-2 rounded-none px-2.5 py-2 text-left text-[13px]",
               selected === null ? "bg-muted font-medium" : "hover:bg-muted/70",
             )}
           >
@@ -120,7 +120,7 @@ function FolderPickList({
               type="button"
               onClick={() => onSelect(node.id)}
               className={cn(
-                "flex w-full items-center gap-2 rounded-md py-2 pr-2.5 text-left text-[13px]",
+                "flex w-full items-center gap-2 rounded-none py-2 pr-2.5 text-left text-[13px]",
                 selected === node.id ? "bg-muted font-medium" : "hover:bg-muted/70",
               )}
               style={{ paddingLeft: 10 + depth * 12 }}

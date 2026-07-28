@@ -10,7 +10,7 @@ import {
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";
-import { getZooEngineToken } from "../cad";
+import { getZooEngineToken } from "../zoo-token";
 import { getObjectStorage } from "../storage";
 
 const FORMAT_MIME: Record<CadAssetFormat, string> = {

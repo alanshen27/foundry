@@ -85,8 +85,8 @@ function ToolIconButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "text-muted-foreground relative flex size-8 items-center justify-center rounded-lg transition-colors",
-        "hover:bg-muted hover:text-foreground",
+        "text-primary relative flex size-8 items-center justify-center rounded-none transition-colors",
+        "hover:bg-muted hover:text-primary",
         "disabled:pointer-events-none disabled:opacity-30",
         active && "bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary",
       )}
@@ -148,7 +148,7 @@ function FieldGrid({
                 value={String(values[field.key] ?? field.default)}
                 onChange={(e) => onChange(field.key, e.target.value)}
                 className={cn(
-                  "border-input bg-background h-8 w-full rounded-lg border px-2 text-xs outline-none",
+                  "border-input bg-background h-8 w-full rounded-none border px-2 text-xs outline-none",
                   "focus-visible:border-ring focus-visible:ring-ring/40 focus-visible:ring-3",
                 )}
               >
@@ -166,7 +166,7 @@ function FieldGrid({
                 aria-checked={Boolean(values[field.key] ?? field.default)}
                 onClick={() => onChange(field.key, !Boolean(values[field.key] ?? field.default))}
                 className={cn(
-                  "border-input flex h-8 items-center justify-between rounded-lg border px-2.5 text-xs",
+                  "border-input flex h-8 items-center justify-between rounded-none border px-2.5 text-xs",
                   "hover:bg-muted/50 transition-colors",
                 )}
               >
@@ -264,7 +264,7 @@ export function CadToolsPanel({
   return (
     <div className="pointer-events-none absolute top-14 left-3 z-30 flex items-start gap-2">
       {/* Icon rail */}
-      <div className="bg-card/95 pointer-events-auto flex flex-col overflow-hidden rounded-xl border shadow-lg backdrop-blur-md">
+      <div className="bg-card/95 pointer-events-auto flex flex-col overflow-hidden rounded-none border shadow-lg backdrop-blur-md">
         <div className="border-border/70 flex gap-0.5 border-b p-1">
           {CAD_TOOL_GROUPS.map((g) => {
             const count = byGroup.get(g.id)?.length ?? 0;
@@ -281,7 +281,7 @@ export function CadToolsPanel({
                   setError(null);
                 }}
                 className={cn(
-                  "rounded-md px-1.5 py-1 text-[10px] font-medium tracking-wide transition-colors",
+                  "rounded-none px-1.5 py-1 text-[10px] font-medium tracking-wide transition-colors",
                   selected
                     ? "bg-primary/15 text-primary"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -317,9 +317,9 @@ export function CadToolsPanel({
 
       {/* Inline inspector — no modal */}
       {active ? (
-        <div className="bg-card/95 pointer-events-auto w-64 animate-in fade-in-0 slide-in-from-left-1 zoom-in-95 overflow-hidden rounded-xl border shadow-lg backdrop-blur-md duration-150">
+        <div className="bg-card/95 pointer-events-auto w-64 animate-in fade-in-0 slide-in-from-left-1 zoom-in-95 overflow-hidden rounded-none border shadow-lg backdrop-blur-md duration-150">
           <div className="border-border/70 flex items-start gap-2.5 border-b px-3 py-2.5">
-            <div className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-lg">
+            <div className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-none">
               <ActiveIcon className="size-4" strokeWidth={1.75} />
             </div>
             <div className="min-w-0 flex-1 pt-0.5">
@@ -333,7 +333,7 @@ export function CadToolsPanel({
                 setActiveId(null);
                 setError(null);
               }}
-              className="text-muted-foreground hover:bg-muted hover:text-foreground -mr-1 -mt-0.5 flex size-7 items-center justify-center rounded-md"
+              className="text-muted-foreground hover:bg-muted hover:text-foreground -mr-1 -mt-0.5 flex size-7 items-center justify-center rounded-none"
             >
               <X className="size-3.5" />
             </button>
@@ -341,7 +341,7 @@ export function CadToolsPanel({
 
           <div className="space-y-3 px-3 py-3">
             {active.requiresSolid && lastSolid ? (
-              <div className="bg-muted/50 text-muted-foreground flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[11px]">
+              <div className="bg-muted/50 text-muted-foreground flex items-center gap-2 rounded-none px-2.5 py-1.5 text-[11px]">
                 <span className="shrink-0">Target</span>
                 <span className="text-foreground ml-auto truncate font-mono text-[11px]">{lastSolid}</span>
               </div>

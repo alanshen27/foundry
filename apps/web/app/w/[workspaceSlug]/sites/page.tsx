@@ -59,8 +59,8 @@ export default async function WorkspaceSitesPage({
         </p>
       </div>
 
-      <div className="bg-card flex flex-col items-center justify-center rounded-xl border border-dashed px-6 py-16 text-center">
-        <span className="bg-muted text-muted-foreground mb-3 flex size-10 items-center justify-center rounded-lg">
+      <div className="bg-card flex flex-col items-center justify-center rounded-none border border-dashed px-6 py-16 text-center">
+        <span className="bg-muted text-muted-foreground mb-3 flex size-10 items-center justify-center rounded-none">
           <Globe className="size-4" strokeWidth={1.75} />
         </span>
         <p className="text-[13px] font-medium">No sites yet</p>

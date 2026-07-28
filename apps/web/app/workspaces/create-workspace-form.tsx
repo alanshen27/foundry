@@ -23,9 +23,11 @@ export function CreateWorkspaceForm() {
   }
 
   return (
-    <Card className="gap-0 rounded-xl p-0">
+    <Card className="gap-0 rounded-none p-0">
       <CardHeader className="border-b px-4 py-3">
-        <CardTitle className="text-[13px] font-medium">New workspace</CardTitle>
+        <CardTitle className="font-mono text-[13px] font-medium tracking-[0.04em] uppercase">
+          New workspace
+        </CardTitle>
         <CardDescription className="text-[12px]">
           A shared home for your team and product projects.
         </CardDescription>
@@ -38,8 +40,9 @@ export function CreateWorkspaceForm() {
             placeholder="Workspace name"
             aria-label="Workspace name"
             required
+            className="rounded-none"
           />
-          <Button type="submit" disabled={create.isPending}>
+          <Button type="submit" disabled={create.isPending} className="rounded-none font-mono uppercase tracking-[0.06em]">
             {create.isPending ? "Creating…" : "Create"}
           </Button>
         </form>

@@ -125,7 +125,7 @@ export function LaunchStage({ projectId, branchId, canCreate, verifyApproved }: 
         </CardHeader>
         <CardContent>
           {!verifyApproved ? (
-            <div className="border-border rounded-lg border border-dashed p-4 text-sm">
+            <div className="border-border rounded-none border border-dashed p-4 text-sm">
               <p className="font-medium">Verification not approved</p>
               <p className="text-muted-foreground mt-1">
                 Approve the Verify stage before creating a release.
@@ -228,7 +228,7 @@ export function LaunchStage({ projectId, branchId, canCreate, verifyApproved }: 
 
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="border-border rounded-md border p-2">
+    <div className="border-border rounded-none border p-2">
       <p className="text-xs uppercase">{label}</p>
       <p className="text-foreground text-base font-semibold">{value}</p>
     </div>

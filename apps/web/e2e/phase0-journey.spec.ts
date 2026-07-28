@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 /**
  * Phase 0 acceptance journey (PRD 25):
- * sign in -> create workspace -> create project -> invite a collaborator ->
+ * sign in -> (workspace already exists) -> create project -> invite a collaborator ->
  * collaborator accepts -> both navigate the four stages.
  * Requires the seed users (pnpm db:seed) and AUTH_MODE=local.
  */
@@ -24,7 +24,7 @@ test("full Phase 0 journey", async ({ browser }) => {
 
   await signIn(builder, "builder@foundry.local");
 
-  // Create workspace (manage list — not the default home)
+  // Optional extra workspace via manage list
   await builder.goto("/workspaces?manage=1");
   const workspaceName = `E2E Workspace ${runId}`;
   await builder.getByLabel("Workspace name").fill(workspaceName);
@@ -43,9 +43,7 @@ test("full Phase 0 journey", async ({ browser }) => {
   // Clicks retry because dev-mode hydration can swallow the first one.
   const stageMarkers: [string, RegExp, string][] = [
     ["Ideation", /\/ideate$/, "Product brief"],
-    ["Sourcing", /\/engineer\?view=sourcing$/, "Est. unit cost"],
-    ["Schematic", /\/engineer\?view=schematic$/, "Resistor"],
-    ["Code", /\/engineer\?view=code$/, "Link a repository to codebase"],
+    ["Engineer", /\/engineer/, "In this scene"],
     ["Verify", /\/verify$/, "Validation checklist"],
     ["Launch", /\/launch$/, "Cut a release"],
   ];

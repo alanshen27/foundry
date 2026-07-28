@@ -1,0 +1,23 @@
+{
+  "name": "@foundry/collab-server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "dotenv -e ../../.env -- tsx watch src/server.ts",
+    "start": "dotenv -e ../../.env -- tsx src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@foundry/collaboration": "workspace:*",
+    "@foundry/config": "workspace:*",
+    "@foundry/db": "workspace:*",
+    "@hocuspocus/server": "^2.15.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "dotenv-cli": "^8.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

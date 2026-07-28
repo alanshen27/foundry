@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import { Suspense } from "react";
 import { prisma } from "@foundry/db";
 import {
   hasCapability,
@@ -65,7 +66,7 @@ export default async function StagePage({
   ] as const;
   const engineerView = engineerViews.includes(view as (typeof engineerViews)[number])
     ? (view as (typeof engineerViews)[number])
-    : "schematic";
+    : "assembly";
 
   // Engineer is a full-bleed editing surface (Figma-like); other stages are
   // centered documents.
@@ -78,17 +79,19 @@ export default async function StagePage({
         </>
       ) : null}
       {stage === "ENGINEER" ? (
-        <EngineerStage
-          projectId={project.id}
-          branchId={branchId}
-          view={engineerView}
-          canEdit={
-            can("electronics.edit") ||
-            can("mechanical.edit") ||
-            can("software.edit") ||
-            can("site.edit")
-          }
-        />
+        <Suspense fallback={<div className="bg-muted/30 h-full" />}>
+          <EngineerStage
+            projectId={project.id}
+            branchId={branchId}
+            view={engineerView}
+            canEdit={
+              can("electronics.edit") ||
+              can("mechanical.edit") ||
+              can("software.edit") ||
+              can("site.edit")
+            }
+          />
+        </Suspense>
       ) : null}
       {stage === "VERIFY" ? (
         <>

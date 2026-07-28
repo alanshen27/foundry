@@ -77,27 +77,32 @@ describe("buildFinalAssembly", () => {
     expect(out!.script).toContain('import "assembly/');
   });
 
-  it("imports mechanical roots and includes the PCB inline", () => {
+  it("imports the assembly module and includes the PCB inline", () => {
     const out = buildFinalAssembly(docWithPart(), pcbWithFootprint);
     expect(out).not.toBeNull();
     expect(out!.entryPath).toBe(FINAL_ASSEMBLY_PATH);
-    expect(out!.script).toContain('import "parts/housing.kcl" as fa0_housing');
+    // No assembly component → falls back to the standalone part.
+    expect(out!.script).toContain('import "parts/housing/main.kcl" as fa0_housing');
     expect(out!.script).toContain("fpcbBoard");
-    expect(out!.projectFiles["parts/housing.kcl"]).toContain("body = extrude");
+    expect(out!.projectFiles["parts/housing/main.kcl"]).toContain("body = extrude");
     expect(out!.projectFiles[FINAL_ASSEMBLY_PATH]).toBe(out!.script);
     expect(out!.mechanicalRoots).toEqual(["housing"]);
+    expect(out!.mechanicalRootIds).toHaveLength(1);
     expect(out!.hasPcb).toBe(true);
   });
 
-  it("prefers assemblies over standalone parts as roots", () => {
+  it("renders via the product assembly but lists every part for open-in-editor", () => {
     const base = upsertPartScript(cadDoc(""), "housing", PART_KCL);
-    const assembly = base.components.find((c) => c.kind === "assembly")!;
-    const part = base.components.find((c) => c.name === "housing")!;
-    const doc = insertPartIntoAssembly(base, assembly.id, part.id);
+    const withKnob = upsertPartScript(base, "knob", PART_KCL);
+    const assembly = withKnob.components.find((c) => c.kind === "assembly")!;
+    const housing = withKnob.components.find((c) => c.name === "housing")!;
+    const doc = insertPartIntoAssembly(withKnob, assembly.id, housing.id);
     const out = buildFinalAssembly(doc, null);
     expect(out).not.toBeNull();
     expect(out!.script).toContain('import "assembly/');
     expect(out!.script).not.toContain('import "parts/housing.kcl"');
+    expect(out!.mechanicalRoots).toEqual(expect.arrayContaining(["housing", "knob", "main"]));
+    expect(out!.mechanicalRootIds).toHaveLength(out!.mechanicalRoots.length);
     expect(out!.hasPcb).toBe(false);
   });
 

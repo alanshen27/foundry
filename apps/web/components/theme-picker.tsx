@@ -17,7 +17,7 @@ export function ThemeSettingsPanel({ className }: { className?: string }) {
   return (
     <div className={cn("space-y-5", className)}>
       <div>
-        <p className="text-muted-foreground mb-2 text-[11px] font-medium tracking-[0.04em] uppercase">
+        <p className="text-muted-foreground mb-2 font-mono text-[11px] font-medium tracking-[0.1em] uppercase">
           Appearance
         </p>
         <div className="grid grid-cols-2 gap-2">
@@ -32,9 +32,9 @@ export function ThemeSettingsPanel({ className }: { className?: string }) {
               type="button"
               onClick={() => setMode(value)}
               className={cn(
-                "flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-[13px] font-medium transition-colors",
+                "flex items-center justify-center gap-2 rounded-none border px-3 py-2.5 text-[13px] font-medium transition-colors",
                 theme.mode === value
-                  ? "border-foreground/15 bg-muted text-foreground"
+                  ? "border-foreground/20 bg-muted text-foreground"
                   : "border-border text-muted-foreground hover:bg-muted/60 hover:text-foreground",
               )}
             >
@@ -46,7 +46,7 @@ export function ThemeSettingsPanel({ className }: { className?: string }) {
       </div>
 
       <div>
-        <p className="text-muted-foreground mb-2 text-[11px] font-medium tracking-[0.04em] uppercase">
+        <p className="text-muted-foreground mb-2 font-mono text-[11px] font-medium tracking-[0.1em] uppercase">
           Accent
         </p>
         <div className="flex flex-wrap gap-2">
@@ -81,8 +81,8 @@ function AccentSwatch({
       aria-pressed={selected}
       onClick={onSelect}
       className={cn(
-        "relative flex size-8 items-center justify-center rounded-full border transition-transform hover:scale-105",
-        selected ? "border-foreground/25 outline outline-2 outline-offset-1" : "border-border",
+        "relative flex size-8 items-center justify-center rounded-none border transition-transform hover:scale-105",
+        selected ? "border-foreground/30 outline outline-2 outline-offset-1" : "border-border",
       )}
       style={{
         background: ACCENT_SWATCHES[accent],

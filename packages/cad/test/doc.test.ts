@@ -13,6 +13,8 @@ import {
   normalizeCadDoc,
   parseForeignImports,
   parseKclModuleImports,
+  toZooKclPath,
+  fromZooKclPath,
   upsertPartScript,
   upsertPartScripts,
 } from "../src/doc";
@@ -64,9 +66,10 @@ describe("upsertPartScript", () => {
     expect(doc.activeId).toBe(part?.id);
   });
 
-  it("creates a new named part", () => {
+  it("creates a new named part under parts/<name>/main.kcl", () => {
     const doc = upsertPartScript(cadDoc(DEFAULT_KCL), "lid", "width = 40\n");
-    expect(doc.components.some((c) => c.kind === "part" && c.name === "lid")).toBe(true);
+    const lid = doc.components.find((c) => c.kind === "part" && c.name === "lid");
+    expect(lid?.path).toBe("parts/lid/main.kcl");
   });
 });
 
@@ -124,6 +127,12 @@ describe("addCadComponents", () => {
       expect.arrayContaining(["main", "enclosure-shell", "front-lens", "reservoir"]),
     );
   });
+
+  it("stores non-main parts as parts/<name>/main.kcl for Zoo imports", () => {
+    const doc = upsertPartScript(cadDoc("x = 1\n"), "enclosure-shell", "width = 1\n");
+    const part = doc.components.find((c) => c.name === "enclosure-shell");
+    expect(part?.path).toBe("parts/enclosure-shell/main.kcl");
+  });
 });
 
 describe("assembly part imports", () => {
@@ -135,9 +144,9 @@ describe("assembly part imports", () => {
     const assy = next.components.find((c) => c.id === assembly.id)!;
     expect(assy.content).not.toContain("assemblyEnvelope = extrude");
     expect(parseKclModuleImports(assy.content)).toEqual(
-      expect.arrayContaining([{ path: part.path, alias: expect.any(String) }]),
+      expect.arrayContaining([{ path: toZooKclPath(part.path), alias: expect.any(String) }]),
     );
-    expect(assy.content).toMatch(new RegExp(`${part.path}`));
+    expect(assy.content).toContain(`import "${toZooKclPath(part.path)}"`);
   });
 
   it("builds a multi-file project for the assembly entrypoint", () => {
@@ -146,9 +155,15 @@ describe("assembly part imports", () => {
     const part = doc.components.find((c) => c.kind === "part")!;
     doc = insertPartIntoAssembly(doc, assembly.id, part.id);
     const project = buildKclProject(doc, assembly.path);
-    expect(project.entryPath).toBe(assembly.path);
-    expect(project.files[part.path]).toContain("width = 10");
-    expect(project.files[assembly.path]).toContain(`import "${part.path}"`);
+    expect(project.entryPath).toBe(toZooKclPath(assembly.path));
+    expect(project.files[toZooKclPath(part.path)]).toContain("width = 10");
+    expect(project.files[project.entryPath]).toContain(`import "${toZooKclPath(part.path)}"`);
+  });
+
+  it("remaps parts/foo.kcl into parts/foo/main.kcl for Zoo", () => {
+    expect(toZooKclPath("parts/enclosure-shell.kcl")).toBe("parts/enclosure-shell/main.kcl");
+    expect(toZooKclPath("parts/main.kcl")).toBe("parts/main.kcl");
+    expect(fromZooKclPath("parts/enclosure-shell/main.kcl")).toBe("parts/enclosure-shell.kcl");
   });
 });
 

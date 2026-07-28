@@ -27,8 +27,8 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   EMPTY_PCB,
@@ -47,7 +47,7 @@ const PcbPreview3d = dynamic(
   () => import("@/components/engineer/pcb-preview-3d").then((m) => m.PcbPreview3d),
   {
     ssr: false,
-    loading: () => <Skeleton className="absolute inset-0 rounded-none" />,
+    loading: () => <DotMatrixLoader className="absolute inset-0" label="Loading 3D" />,
   },
 );
 
@@ -404,13 +404,7 @@ export function PcbCanvas({
   }, [query.isSuccess, doc.board.widthMm, doc.board.heightMm]);
 
   if (query.isLoading) {
-    return (
-      <div className="absolute inset-0 flex">
-        <Skeleton className="hidden w-64 rounded-none border-r md:block" />
-        <Skeleton className="min-w-0 flex-1 rounded-none" />
-        <Skeleton className="hidden w-60 rounded-none border-l md:block" />
-      </div>
-    );
+    return <DotMatrixLoader className="absolute inset-0" label="Loading PCB" />;
   }
 
   const gridStep = zoom >= 1.5 ? 1 : zoom >= 0.75 ? 5 : 10;
@@ -437,7 +431,7 @@ export function PcbCanvas({
               type="button"
               disabled={!canEdit}
               onClick={() => addFootprint(entry.id)}
-              className="hover:bg-muted/60 flex flex-col items-start rounded-md px-2 py-1.5 text-left transition-colors disabled:opacity-50"
+              className="hover:bg-muted/60 flex flex-col items-start rounded-none px-2 py-1.5 text-left transition-colors disabled:opacity-50"
             >
               <span className="text-xs font-medium">{entry.name}</span>
               <span className="text-muted-foreground text-[10px]">
@@ -453,7 +447,7 @@ export function PcbCanvas({
 
       {/* Canvas */}
       <div className="relative min-w-0 flex-1">
-        <div className="absolute top-3 left-3 z-10 flex items-center gap-0.5 rounded-lg border bg-card/90 p-0.5 shadow-lg backdrop-blur-md">
+        <div className="absolute top-3 left-3 z-10 flex items-center gap-0.5 rounded-none border bg-card/90 p-0.5 shadow-lg backdrop-blur-md">
           <Button
             variant={viewMode === "2d" ? "secondary" : "ghost"}
             size="xs"
@@ -551,14 +545,14 @@ export function PcbCanvas({
               >
                 <ZoomOut className="size-3" />
               </Button>
-              <span className="bg-card/85 text-muted-foreground rounded-md border px-2 py-1 text-[11px] tabular-nums backdrop-blur-md">
+              <span className="bg-card/85 text-muted-foreground rounded-none border px-2 py-1 text-[11px] tabular-nums backdrop-blur-md">
                 {Math.round(zoom * 100)}% · {doc.board.widthMm}×{doc.board.heightMm} mm ·{" "}
                 {doc.board.thicknessMm} mm
               </span>
             </div>
 
             <div className="absolute bottom-3 left-1/2 -translate-x-1/2">
-              <span className="bg-card/85 text-muted-foreground rounded-lg border px-2.5 py-1 text-[11px] shadow backdrop-blur-md">
+              <span className="bg-card/85 text-muted-foreground rounded-none border px-2.5 py-1 text-[11px] shadow backdrop-blur-md">
                 {save.isPending
                   ? "Saving…"
                   : "Autosaves · drag to place · Alt-drag to pan · scroll to zoom"}
@@ -623,7 +617,7 @@ export function PcbCanvas({
                   className="accent-primary size-3.5"
                 />
                 <span
-                  className="size-2.5 rounded-sm"
+                  className="size-2.5 rounded-none"
                   style={{ background: layer.color }}
                   aria-hidden
                 />
@@ -719,7 +713,7 @@ export function PcbCanvas({
 
         <p
           className={cn(
-            "text-muted-foreground mt-auto rounded-md border px-2 py-1.5 text-[10px] leading-snug",
+            "text-muted-foreground mt-auto rounded-none border px-2 py-1.5 text-[10px] leading-snug",
           )}
         >
           {doc.footprints.length} footprint{doc.footprints.length === 1 ? "" : "s"} · grid{" "}

@@ -38,9 +38,12 @@ export default async function ModelRenderPage({
     ? (view as CadView)
     : "iso";
 
-  // Assemblies import their parts, so they only render as a multi-file submit.
-  // Screenshotting the flattened mirror script showed the agent an empty scene.
-  const active = getActiveComponent(cad);
+  // Prefer the product assembly for screenshots — activeId may still point at a
+  // part the agent last edited, which hides assembly import failures.
+  const assembly =
+    cad.components.find((c) => c.kind === "assembly" && c.path === "assembly/product.kcl") ??
+    cad.components.find((c) => c.kind === "assembly");
+  const active = assembly ?? getActiveComponent(cad);
   const project =
     active && parseKclModuleImports(active.content).length > 0
       ? buildKclProject(cad, active.path)

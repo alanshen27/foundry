@@ -10,6 +10,12 @@ const serverEnvSchema = z
     NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
     NEXT_PUBLIC_REALTIME_MODE: z.enum(["supabase", "off"]).default("off"),
+    // Yjs / Hocuspocus collaboration (Engineer > Code). Empty = single-player Monaco.
+    NEXT_PUBLIC_COLLAB_URL: z.preprocess((value) => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    }, z.string().url().optional()),
     REDIS_URL: z.preprocess((value) => {
       if (typeof value !== "string") return undefined;
       const trimmed = value.trim();

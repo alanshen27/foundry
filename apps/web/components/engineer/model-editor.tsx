@@ -20,7 +20,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import {
   addCadComponent,
   getActiveComponent,
@@ -52,7 +52,7 @@ function ParamsPanel({
   const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <div className="bg-card/85 absolute top-3 right-3 z-10 w-60 rounded-xl border shadow-lg backdrop-blur-md">
+    <div className="bg-card/85 absolute top-3 right-3 z-10 w-60 rounded-none border shadow-lg backdrop-blur-md">
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
@@ -89,7 +89,7 @@ function ParamsPanel({
                     if (Number.isFinite(n)) onSet(param.name, n);
                   }}
                   className={cn(
-                    "bg-background w-20 rounded-md border px-1.5 py-0.5 text-right font-mono text-xs outline-none",
+                    "bg-background w-20 rounded-none border px-1.5 py-0.5 text-right font-mono text-xs outline-none",
                     "focus:border-ring",
                   )}
                 />
@@ -99,7 +99,7 @@ function ParamsPanel({
                   value={param.value}
                   disabled={!canEdit}
                   onChange={(e) => onSet(param.name, e.target.value)}
-                  className="bg-background w-24 rounded-md border px-1.5 py-0.5 font-mono text-xs outline-none focus:border-ring"
+                  className="bg-background w-24 rounded-none border px-1.5 py-0.5 font-mono text-xs outline-none focus:border-ring"
                 />
               )}
             </label>
@@ -198,10 +198,20 @@ export function ModelEditor({
   projectId,
   branchId,
   canEdit,
+  focusComponentId,
+  onOpenComponent,
 }: {
   projectId: string;
   branchId: string;
   canEdit: boolean;
+  /** When set (e.g. opened from Assembly / a model tab), select that CadDoc component. */
+  focusComponentId?: string;
+  /**
+   * Tree click → open a document tab (Chrome-style) instead of only swapping
+   * the in-editor selection. Parent keeps one ModelEditor mounted so the Zoo
+   * viewport session is reused across part tabs.
+   */
+  onOpenComponent?: (component: { id: string; name: string }) => void;
 }) {
   const { theme } = useTheme();
   const monacoTheme = monacoThemeFor(theme.mode);
@@ -235,9 +245,12 @@ export function ModelEditor({
     appliedUpdatedAtRef.current = serverUpdatedAt;
     dirtyRef.current = false;
     setDoc(next);
-    setActiveId((prev) =>
-      prev && next.components.some((c) => c.id === prev) ? prev : next.activeId,
-    );
+    setActiveId((prev) => {
+      if (focusComponentId && next.components.some((c) => c.id === focusComponentId)) {
+        return focusComponentId;
+      }
+      return prev && next.components.some((c) => c.id === prev) ? prev : next.activeId;
+    });
 
     const raw = query.data?.data as { version?: unknown } | null | undefined;
     if (
@@ -255,7 +268,14 @@ export function ModelEditor({
         data: next,
       });
     }
-  }, [query.data, query.isFetched, canEdit, projectId, branchId]);
+  }, [query.data, query.isFetched, canEdit, projectId, branchId, focusComponentId]);
+
+  useEffect(() => {
+    if (!doc || !focusComponentId) return;
+    if (doc.components.some((c) => c.id === focusComponentId)) {
+      setActiveId(focusComponentId);
+    }
+  }, [focusComponentId, doc]);
 
   function persist(next: CadDoc) {
     setDoc(next);
@@ -283,6 +303,11 @@ export function ModelEditor({
   }
 
   function onSelect(id: string) {
+    const c = doc?.components.find((x) => x.id === id);
+    if (onOpenComponent && c) {
+      onOpenComponent({ id: c.id, name: c.name });
+      return;
+    }
     setActiveId(id);
   }
 
@@ -337,16 +362,7 @@ export function ModelEditor({
   );
 
   if (doc === null || engine.isLoading) {
-    return (
-      <div className="absolute inset-0 flex" aria-busy="true" aria-label="Loading CAD workspace">
-        <div className="hidden w-56 shrink-0 flex-col border-r md:flex">
-          <Skeleton className="h-9 rounded-none border-b" />
-          <Skeleton className="min-h-0 flex-1 rounded-none" />
-        </div>
-        <Skeleton className="hidden w-[380px] shrink-0 rounded-none border-r md:block" />
-        <Skeleton className="min-w-0 flex-1 rounded-none" />
-      </div>
-    );
+    return <DotMatrixLoader className="absolute inset-0" label="Loading CAD" />;
   }
 
   if (engine.error || !engine.data) {

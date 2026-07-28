@@ -3,7 +3,6 @@ import { notFound } from "next/navigation";
 import { ArrowRight, Combine, Cpu, Lightbulb, Rocket, ShieldCheck } from "lucide-react";
 import { prisma } from "@foundry/db";
 import { STAGE_LABELS, STAGES, type Stage } from "@foundry/domain";
-import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
 import { STAGE_THEME } from "@/lib/stage-theme";
 import { cn } from "@/lib/utils";
@@ -18,9 +17,16 @@ const STAGE_ICONS: Record<Stage, typeof Lightbulb> = {
 
 const STAGE_BLURBS: Record<Stage, string> = {
   IDEATE: "Brief & requirements",
-  ENGINEER: "Circuit, model, code, BOM",
+  ENGINEER: "Assembly, CAD, circuit, PCB",
   VERIFY: "Validation checklist",
   LAUNCH: "Immutable releases",
+};
+
+const STAGE_CODES: Record<Stage, string> = {
+  IDEATE: "01",
+  ENGINEER: "02",
+  VERIFY: "03",
+  LAUNCH: "04",
 };
 
 export default async function ProjectOverviewPage({
@@ -67,35 +73,42 @@ export default async function ProjectOverviewPage({
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-8 p-6 lg:p-8">
       <div>
-        <h1 className="text-3xl font-semibold tracking-tight">{project.name}</h1>
+        <p className="text-muted-foreground font-mono text-[11px] tracking-[0.14em] uppercase">
+          Project
+        </p>
+        <h1 className="mt-1 font-mono text-[28px] font-medium tracking-[-0.04em]">
+          {project.name}
+        </h1>
         {project.description ? (
-          <p className="text-muted-foreground mt-1.5">{project.description}</p>
+          <p className="text-muted-foreground mt-1.5 text-[14px]">{project.description}</p>
         ) : null}
       </div>
 
       <PipelineKickoff hasBrief={Boolean(brief?.prompt || brief?.intendedUse)} />
 
-      <Link href={`${base}/engineer?view=assembly`}>
-        <Card className="group flex-row items-center gap-4 p-5 transition-colors hover:border-primary/40">
-          <span className="bg-primary/10 text-primary flex size-11 shrink-0 items-center justify-center rounded-xl">
-            <Combine className="size-5" strokeWidth={1.75} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="font-medium">Final assembly</p>
-            <p className="text-muted-foreground text-sm">
-              The whole product in one scene — enclosure, parts and PCB together, with links into
-              every editor.
-            </p>
-          </div>
-          <ArrowRight className="text-muted-foreground size-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
-        </Card>
+      <Link
+        href={`${base}/engineer`}
+        className="border-border bg-card hover:border-foreground/30 group flex items-center gap-4 border px-4 py-3.5 transition-colors"
+      >
+        <span className="bg-primary text-primary-foreground flex size-10 shrink-0 items-center justify-center">
+          <Combine className="size-4" strokeWidth={1.75} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-[13px] font-medium tracking-[-0.02em]">
+            Assembly workspace
+          </p>
+          <p className="text-muted-foreground mt-0.5 font-mono text-[11px]">
+            Home viewport — CAD · Schematic · PCB as tabs
+          </p>
+        </div>
+        <ArrowRight className="text-muted-foreground size-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
       </Link>
 
       <div>
-        <p className="text-muted-foreground mb-2 text-xs">
-          Work in any order — every surface feeds the final assembly.
+        <p className="text-muted-foreground mb-2 font-mono text-[11px] tracking-[0.14em] uppercase">
+          Process — Engineer opens assembly
         </p>
-        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <div className="border-border bg-border grid grid-cols-2 gap-px border xl:grid-cols-4">
           {STAGES.map((stage) => {
             const state = project.stageStates.find(
               (s) => s.stage === stage && s.branchId === project.activeBranchId,
@@ -103,44 +116,55 @@ export default async function ProjectOverviewPage({
             const Icon = STAGE_ICONS[stage];
             const phase = STAGE_THEME[stage];
             return (
-              <Link key={stage} href={`${base}/${stage.toLowerCase()}`}>
-                <Card className={cn("group h-full gap-3 p-4 transition-colors", phase.cardHover)}>
-                  <div className="flex items-center justify-between">
-                    <span
-                      className={cn(
-                        "flex size-8 items-center justify-center rounded-lg",
-                        phase.tile,
-                      )}
-                    >
-                      <Icon className="size-4" />
-                    </span>
-                    <StatusBadge status={state?.status ?? "NOT_STARTED"} />
-                  </div>
-                  <div>
-                    <p className="font-medium">{STAGE_LABELS[stage]}</p>
-                    <p className="text-muted-foreground text-xs">
-                      {stageCounts[stage] > 0
-                        ? `${stageCounts[stage]} item${stageCounts[stage] === 1 ? "" : "s"}`
-                        : STAGE_BLURBS[stage]}
-                    </p>
-                  </div>
-                </Card>
+              <Link
+                key={stage}
+                href={`${base}/${stage.toLowerCase()}`}
+                className={cn(
+                  "bg-card group flex flex-col gap-3 p-4 transition-colors",
+                  phase.cardHover,
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-muted-foreground font-mono text-[10px] tracking-[0.12em]">
+                    {STAGE_CODES[stage]}
+                  </span>
+                  <StatusBadge
+                    status={state?.status ?? "NOT_STARTED"}
+                    className="rounded-none font-mono text-[10px] tracking-[0.04em]"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Icon className={cn("size-3.5", phase.text)} strokeWidth={1.75} />
+                  <p className="font-mono text-[13px] font-medium tracking-[-0.02em]">
+                    {STAGE_LABELS[stage]}
+                  </p>
+                </div>
+                <p className="text-muted-foreground font-mono text-[11px]">
+                  {stageCounts[stage] > 0
+                    ? `${stageCounts[stage]} item${stageCounts[stage] === 1 ? "" : "s"}`
+                    : STAGE_BLURBS[stage]}
+                </p>
               </Link>
             );
           })}
         </div>
       </div>
 
-      <Card className="p-5">
-        <h2 className="text-muted-foreground mb-3 text-xs font-semibold tracking-widest uppercase">
-          Activity
-        </h2>
+      <div className="border-border bg-card border">
+        <div className="border-border border-b px-4 py-2.5">
+          <h2 className="text-muted-foreground font-mono text-[11px] font-medium tracking-[0.14em] uppercase">
+            Activity
+          </h2>
+        </div>
         {recentEvents.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No activity yet.</p>
+          <p className="text-muted-foreground px-4 py-6 font-mono text-[12px]">No activity yet.</p>
         ) : (
-          <ul className="divide-border/60 divide-y">
+          <ul className="divide-border divide-y">
             {recentEvents.map((event) => (
-              <li key={event.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+              <li
+                key={event.id}
+                className="flex items-center justify-between gap-3 px-4 py-2.5 text-[13px]"
+              >
                 <span className="min-w-0 truncate">
                   <span className="text-muted-foreground">
                     {event.actorType === "AGENT"
@@ -149,14 +173,14 @@ export default async function ProjectOverviewPage({
                   </span>{" "}
                   · {event.type.replace(/([a-z])([A-Z])/g, "$1 $2")}
                 </span>
-                <span className="text-muted-foreground shrink-0 text-xs">
+                <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
                   {event.createdAt.toLocaleString()}
                 </span>
               </li>
             ))}
           </ul>
         )}
-      </Card>
+      </div>
     </div>
   );
 }

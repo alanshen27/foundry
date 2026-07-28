@@ -241,7 +241,7 @@ export function PcbPreview3d({ doc }: { doc: PcbDoc }) {
     <div className="absolute inset-0">
       <div ref={hostRef} className="absolute inset-0" aria-label="PCB 3D preview" />
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2">
-        <span className="bg-card/85 text-muted-foreground rounded-lg border px-2.5 py-1 text-[11px] shadow backdrop-blur-md">
+        <span className="bg-card/85 text-muted-foreground rounded-none border px-2.5 py-1 text-[11px] shadow backdrop-blur-md">
           3D preview · drag to orbit · scroll to zoom · approximate packages
         </span>
       </div>

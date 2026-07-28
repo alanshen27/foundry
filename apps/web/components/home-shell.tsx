@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { FolderKanban, Globe, LogOut, Settings, Waypoints } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FoundryMark } from "@/components/foundry-mark";
+import { InteractiveDotField } from "@/components/interactive-dot-field";
 import { UserAvatar } from "@/components/user-avatar";
 import { WorkspaceSwitcher, type ShellWorkspace } from "@/components/project-shell";
 import {
@@ -21,7 +22,7 @@ export type ShellFolder = TreeFolder;
 /** Sidebar link; the selected one carries the accent so the sidebar has a focal point. */
 function navItemClass(active: boolean) {
   return cn(
-    "group flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] transition-colors",
+    "group flex items-center gap-2.5 rounded-none px-2.5 py-[7px] text-[13px] transition-colors",
     active
       ? "bg-primary/10 text-primary font-medium"
       : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
@@ -87,37 +88,33 @@ export function HomeShell({
         </div>
 
         <div className="px-2 pt-3">
-          {current ? (
-            <WorkspaceSwitcher workspaces={workspaces} current={current} />
-          ) : (
-            <p className="text-muted-foreground px-2 text-xs">Create a workspace to continue</p>
-          )}
+          {current ? <WorkspaceSwitcher workspaces={workspaces} current={current} /> : null}
         </div>
 
         <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
           {current ? (
-            <div className="flex flex-col gap-0.5">
-              <Link href={`/w/${current.slug}`} className={navItemClass(onProjectsRoot)}>
-                <FolderKanban className={navIconClass(onProjectsRoot)} strokeWidth={1.75} />
-                Projects
-              </Link>
-
-              {sitesHref ? (
-                <Link href={sitesHref} className={navItemClass(onSites)}>
-                  <Globe className={navIconClass(onSites)} strokeWidth={1.75} />
-                  Sites
+            <>
+              <div className="flex flex-col gap-0.5">
+                <Link href={`/w/${current.slug}`} className={navItemClass(onProjectsRoot)}>
+                  <FolderKanban className={navIconClass(onProjectsRoot)} strokeWidth={1.75} />
+                  Projects
                 </Link>
-              ) : null}
-            </div>
-          ) : null}
 
-          {current ? (
-            <WorkspaceFileTree
-              workspaceId={current.id}
-              workspaceSlug={current.slug}
-              projects={projects}
-              folders={folders}
-            />
+                {sitesHref ? (
+                  <Link href={sitesHref} className={navItemClass(onSites)}>
+                    <Globe className={navIconClass(onSites)} strokeWidth={1.75} />
+                    Sites
+                  </Link>
+                ) : null}
+              </div>
+
+              <WorkspaceFileTree
+                workspaceId={current.id}
+                workspaceSlug={current.slug}
+                projects={projects}
+                folders={folders}
+              />
+            </>
           ) : null}
         </div>
 
@@ -152,7 +149,12 @@ export function HomeShell({
         </div>
       </nav>
 
-      <main className="min-w-0 flex-1 overflow-y-auto p-8">{children}</main>
+      <main className="relative min-w-0 flex-1 overflow-y-auto">
+        <div className="pointer-events-none sticky top-0 -mb-[100dvh] h-[100dvh] w-full">
+          <InteractiveDotField gap={16} radius={52} />
+        </div>
+        <div className="relative z-10 p-8">{children}</div>
+      </main>
     </div>
   );
 }

@@ -20,7 +20,7 @@ import {
 } from "@foundry/realtime";
 import { BackgroundChatTransport } from "@/lib/copilot/background-chat-transport";
 import { mentionsAi } from "@/lib/copilot/mentions";
-import { pruneEmptyAssistantMessages } from "@/lib/copilot/messages";
+import { markFailedAssistantMessages, pruneEmptyAssistantMessages } from "@/lib/copilot/messages";
 import { trpc } from "@/lib/trpc";
 
 export type ChatChannel = {
@@ -166,11 +166,13 @@ function ChatEngine({
       setMessages((prev) => pruneEmptyAssistantMessages(prev));
       refreshProjectData();
     },
-    onError: () => {
+    onError: (err) => {
       selfRunRef.current = false;
       setLocalBusy(false);
       void utils.chat.activeRun.invalidate({ projectId, channelId });
-      setMessages((prev) => pruneEmptyAssistantMessages(prev));
+      setMessages((prev) =>
+        markFailedAssistantMessages(prev, err instanceof Error ? err.message : String(err)),
+      );
     },
   });
 
@@ -195,9 +197,22 @@ function ChatEngine({
       !activeRunQuery.isFetching
     ) {
       setLocalBusy(false);
-      setMessages((prev) => pruneEmptyAssistantMessages(prev));
+      if (status === "error") {
+        setMessages((prev) =>
+          markFailedAssistantMessages(prev, error?.message),
+        );
+      } else {
+        setMessages((prev) => pruneEmptyAssistantMessages(prev));
+      }
     }
-  }, [localBusy, activeRunQuery.data, activeRunQuery.isFetching, status, setMessages]);
+  }, [
+    localBusy,
+    activeRunQuery.data,
+    activeRunQuery.isFetching,
+    status,
+    error,
+    setMessages,
+  ]);
 
   useEffect(() => {
     const broadcast = createBroadcastPort();
@@ -218,7 +233,12 @@ function ChatEngine({
         selfRunRef.current = false;
         setLocalBusy(false);
         void utils.chat.activeRun.invalidate({ projectId, channelId });
-        setMessages((prev) => pruneEmptyAssistantMessages(prev));
+        const payload = message.payload as { status?: string } | undefined;
+        if (payload?.status === "error") {
+          setMessages((prev) => markFailedAssistantMessages(prev));
+        } else {
+          setMessages((prev) => pruneEmptyAssistantMessages(prev));
+        }
         if (statusRef.current === "ready") {
           refreshProjectData();
         }
@@ -244,11 +264,16 @@ function ChatEngine({
       selfRunRef.current = true;
       setLocalBusy(true);
       busyRef.current = true;
-      void sendMessage({ text: trimmed }).catch(() => {
+      void sendMessage({ text: trimmed }).catch((err) => {
         selfRunRef.current = false;
         setLocalBusy(false);
         busyRef.current = false;
-        setMessages((prev) => pruneEmptyAssistantMessages(prev));
+        setMessages((prev) =>
+          markFailedAssistantMessages(
+            prev,
+            err instanceof Error ? err.message : "request failed",
+          ),
+        );
       });
       void utils.chat.activeRun.invalidate({ projectId, channelId });
     },

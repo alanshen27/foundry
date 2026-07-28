@@ -118,7 +118,7 @@ export function ShareButton({
           <p className="text-destructive text-xs">{invite.error.message}</p>
         ) : null}
         {inviteLink ? (
-          <div className="bg-muted/40 flex items-center gap-2 rounded-lg border p-2">
+          <div className="bg-muted/40 flex items-center gap-2 rounded-none border p-2">
             <Link2 className="text-muted-foreground size-3.5 shrink-0" />
             <span className="min-w-0 flex-1 truncate text-xs">{inviteLink}</span>
             <Button

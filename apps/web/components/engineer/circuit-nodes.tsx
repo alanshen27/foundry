@@ -83,7 +83,7 @@ function WokwiPartNode({ id, data, selected }: NodeProps<PartNode>) {
 
   return (
     <div
-      className={cn("relative", selected && "rounded-sm ring-2 ring-emerald-400/80")}
+      className={cn("relative", selected && "rounded-none ring-2 ring-emerald-400/80")}
       style={{
         transform: data.rotation ? `rotate(${data.rotation}deg)` : undefined,
       }}
@@ -144,7 +144,7 @@ function GenericPartNode({ data, selected }: NodeProps<PartNode>) {
   } as const;
 
   return (
-    <div className={cn("relative", selected && "rounded-md ring-2 ring-emerald-400/80")}>
+    <div className={cn("relative", selected && "rounded-none ring-2 ring-emerald-400/80")}>
       {/* Epoxy body */}
       <div
         className="relative rounded-[5px] px-3 text-center shadow-[0_2px_6px_rgba(0,0,0,0.55)]"

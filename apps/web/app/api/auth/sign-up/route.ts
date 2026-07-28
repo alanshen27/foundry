@@ -9,6 +9,7 @@ import {
   hashPassword,
   LOCAL_SESSION_COOKIE,
 } from "@foundry/auth";
+import { createWorkspaceForOwner, defaultWorkspaceName } from "@/server/create-workspace";
 import { upsertSupabaseUser } from "@/server/session";
 
 const bodySchema = z.object({
@@ -38,6 +39,10 @@ export async function POST(request: Request) {
     }
     const user = await prisma.user.create({
       data: { email, name, localPasswordHash: hashPassword(password) },
+    });
+    await createWorkspaceForOwner({
+      userId: user.id,
+      name: defaultWorkspaceName(name),
     });
     const response = NextResponse.json({ ok: true, signedIn: true });
     response.cookies.set(LOCAL_SESSION_COOKIE, createSessionToken(user.id, email, env.AUTH_SECRET), {

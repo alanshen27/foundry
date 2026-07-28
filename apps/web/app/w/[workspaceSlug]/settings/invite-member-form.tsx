@@ -52,7 +52,7 @@ export function InviteMemberForm({
             value={role}
             onChange={(e) => setRole(e.target.value as WorkspaceRole)}
             aria-label="Role"
-            className="border-input bg-transparent dark:bg-input/30 h-9 rounded-md border px-2 text-sm"
+            className="border-input bg-transparent dark:bg-input/30 h-9 rounded-none border px-2 text-sm"
           >
             {roles.map((r) => (
               <option key={r} value={r}>
