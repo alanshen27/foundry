@@ -25,10 +25,42 @@ export type CircuitWire = {
   to: { part: string; pin: string };
 };
 
+/**
+ * A rectangular region of the schematic canvas that becomes one physical board.
+ *
+ * Membership is spatial rather than a `groupId` on each part: the canvas is
+ * infinite and people already lay out related circuitry together, so the
+ * boundary is drawn around work that exists instead of being tagged onto every
+ * part. Dragging a part between regions re-assigns it with no extra bookkeeping.
+ *
+ * The cost is that overlapping regions are ambiguous. First match in document
+ * order wins, and the overlap is reported rather than silently resolved.
+ */
+export type CircuitGroup = {
+  id: string;
+  /** Shown on the border, and used as the default board name. */
+  label: string;
+  /** Top-left corner and size, in schematic canvas units. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color?: string;
+};
+
 export type CircuitDoc = {
   version: 2;
   parts: CircuitPart[];
   wires: CircuitWire[];
+  /** Board regions. Empty means the whole schematic is one board. */
+  groups: CircuitGroup[];
+  /**
+   * Code file (Engineer > Code) the simulator runs against this schematic.
+   * Only the reference is stored: the file itself belongs to the Code stage,
+   * which already has an editor, history and repo structure. Duplicating the
+   * source here would immediately create two copies that drift.
+   */
+  sketchFileId?: string;
 };
 
 export type CatalogEntry = {
@@ -135,7 +167,35 @@ export function searchCatalog(query: string): CatalogEntry[] {
   );
 }
 
-export const EMPTY_CIRCUIT: CircuitDoc = { version: 2, parts: [], wires: [] };
+export const EMPTY_CIRCUIT: CircuitDoc = { version: 2, parts: [], wires: [], groups: [] };
+
+/** Board regions from stored data, dropping anything without a real extent. */
+function normalizeGroups(raw: unknown): CircuitGroup[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CircuitGroup[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const g = item as Record<string, unknown>;
+    const nums = ["x", "y", "w", "h"].map((k) => (typeof g[k] === "number" ? (g[k] as number) : NaN));
+    if (nums.some((n) => !Number.isFinite(n))) continue;
+    const [x, y, w, h] = nums as [number, number, number, number];
+    // A zero-width or negative region encloses nothing.
+    if (w <= 0 || h <= 0) continue;
+    out.push({
+      id: typeof g.id === "string" && g.id ? g.id : `grp_${out.length + 1}`,
+      label:
+        typeof g.label === "string" && g.label.trim()
+          ? g.label.trim().slice(0, 60)
+          : `Board ${out.length + 1}`,
+      x,
+      y,
+      w,
+      h,
+      color: typeof g.color === "string" ? g.color.slice(0, 32) : undefined,
+    });
+  }
+  return out;
+}
 
 /**
  * Accepts any previously persisted circuit document (legacy v1 glyph format
@@ -151,6 +211,11 @@ export function normalizeCircuitDoc(raw: unknown): CircuitDoc {
       version: 2,
       parts: (doc.parts as CircuitPart[]).filter((p) => p && p.id && p.type),
       wires: Array.isArray(doc.wires) ? (doc.wires as CircuitWire[]) : [],
+      groups: normalizeGroups(doc.groups),
+      sketchFileId:
+        typeof doc.sketchFileId === "string" && doc.sketchFileId
+          ? doc.sketchFileId.slice(0, 60)
+          : undefined,
     };
   }
 
@@ -185,6 +250,7 @@ export function normalizeCircuitDoc(raw: unknown): CircuitDoc {
         from: { part: w.from.component, pin: String(w.from.pin) },
         to: { part: w.to.component, pin: String(w.to.pin) },
       })),
+      groups: [],
     };
   }
 
@@ -241,5 +307,5 @@ export function wokwiDiagramToDoc(diagram: WokwiDiagram): CircuitDoc {
     });
   }
 
-  return { version: 2, parts, wires };
+  return { version: 2, parts, wires, groups: [] };
 }

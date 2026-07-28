@@ -31,6 +31,62 @@ describe("normalizePcbDoc", () => {
     expect(doc.footprints[0]?.libraryId).toBe("R_0603");
     expect(doc.footprints[0]?.rotationDeg).toBe(90);
   });
+
+  it("keeps a schematic link and a pin map that names real pads", () => {
+    const doc = normalizePcbDoc({
+      footprints: [
+        {
+          id: "a",
+          libraryId: "LED_0805",
+          refDes: "D1",
+          xMm: 10,
+          yMm: 10,
+          rotationDeg: 0,
+          side: "front",
+          partId: "led1",
+          pinMap: { A: "1", C: "2" },
+        },
+      ],
+    });
+    expect(doc.footprints[0]?.partId).toBe("led1");
+    expect(doc.footprints[0]?.pinMap).toEqual({ A: "1", C: "2" });
+  });
+
+  it("strips pin map entries pointing at pads the footprint does not have", () => {
+    const doc = normalizePcbDoc({
+      footprints: [
+        {
+          id: "a",
+          libraryId: "R_0603",
+          refDes: "R1",
+          xMm: 10,
+          yMm: 10,
+          rotationDeg: 0,
+          side: "front",
+          pinMap: { "1": "1", bogus: "47" },
+        },
+      ],
+    });
+    expect(doc.footprints[0]?.pinMap).toEqual({ "1": "1" });
+  });
+
+  it("drops a non-string schematic link", () => {
+    const doc = normalizePcbDoc({
+      footprints: [
+        {
+          id: "a",
+          libraryId: "R_0603",
+          refDes: "R1",
+          xMm: 10,
+          yMm: 10,
+          rotationDeg: 0,
+          side: "front",
+          partId: 42,
+        },
+      ],
+    });
+    expect(doc.footprints[0]?.partId).toBeUndefined();
+  });
 });
 
 describe("createFootprint", () => {

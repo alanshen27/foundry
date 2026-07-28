@@ -1,12 +1,13 @@
 import { notFound, redirect } from "next/navigation";
-import { Globe } from "lucide-react";
 import { prisma } from "@foundry/db";
+import { hasCapability, type Capability, type WorkspaceRole } from "@foundry/domain";
 import { HomeShell } from "@/components/home-shell";
+import { SitesPanel } from "@/components/sites/sites-panel";
 import { getCurrentUser } from "@/server/session";
 
 /**
- * Workspace storefront sites. Launch/commerce is not implemented yet —
- * this route exists so the sidebar Sites tab has a real destination.
+ * Workspace storefront sites. Generation, preview hosting, and deployment
+ * are owned by the site builder behind SiteBuilderPort.
  */
 export default async function WorkspaceSitesPage({
   params,
@@ -40,6 +41,16 @@ export default async function WorkspaceSitesPage({
   ]);
   if (!workspace) notFound();
 
+  const membership = await prisma.workspaceMembership.findUnique({
+    where: { workspaceId_userId: { workspaceId: workspace.id, userId: user.id } },
+    include: { grants: true },
+  });
+  if (!membership) notFound();
+  const role = membership.role as WorkspaceRole;
+  const grants = membership.grants
+    .filter((g) => g.projectId === null)
+    .map((g) => g.capability as Capability);
+
   return (
     <HomeShell
       workspaces={memberships.map((m) => ({
@@ -59,16 +70,13 @@ export default async function WorkspaceSitesPage({
         </p>
       </div>
 
-      <div className="bg-card flex flex-col items-center justify-center rounded-none border border-dashed px-6 py-16 text-center">
-        <span className="bg-muted text-muted-foreground mb-3 flex size-10 items-center justify-center rounded-none">
-          <Globe className="size-4" strokeWidth={1.75} />
-        </span>
-        <p className="text-[13px] font-medium">No sites yet</p>
-        <p className="text-muted-foreground mt-1 max-w-sm text-[13px]">
-          Storefront builder ships with Launch. This tab is ready — site creation is not
-          implemented yet.
-        </p>
-      </div>
+      <SitesPanel
+        workspaceId={workspace.id}
+        projects={workspace.projects.map((p) => ({ id: p.id, name: p.name, slug: p.slug }))}
+        canEdit={hasCapability(role, grants, "site.edit")}
+        canPublish={hasCapability(role, grants, "site.publish")}
+        canManageCommerce={hasCapability(role, grants, "commerce.manage")}
+      />
     </HomeShell>
   );
 }

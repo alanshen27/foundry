@@ -1,9 +1,22 @@
 /**
- * PCB board document model (Engineer > PCB). Outline, stackup metadata, and
- * footprint placement — a KiCad-style layout baseline, not a full router.
+ * PCB board document model (Engineer > PCB). Outline, stackup metadata,
+ * footprint placement, and two-layer copper routing — a KiCad-style layout
+ * baseline with manual routing, DRC, and Gerber output.
  */
 
 export type PcbSide = "front" | "back";
+
+/** The two copper layers. Routing is two-sided; inner layers are not modelled. */
+export type PcbLayer = "F.Cu" | "B.Cu";
+
+export const PCB_LAYERS: PcbLayer[] = ["F.Cu", "B.Cu"];
+
+/** The copper layer a footprint's SMD pads live on. */
+export function sideLayer(side: PcbSide): PcbLayer {
+  return side === "front" ? "F.Cu" : "B.Cu";
+}
+
+export type PcbPoint = { xMm: number; yMm: number };
 
 export type PcbBoard = {
   /** Board outline width in millimetres (Edge.Cuts). */
@@ -17,6 +30,11 @@ export type PcbBoard = {
 };
 
 export type PcbPadDef = {
+  /**
+   * Pad identity within the footprint, e.g. "1", "2", "A", "EP". Empty for
+   * mechanical pads (mounting holes) that never carry a net.
+   */
+  pin: string;
   /** Offset from footprint origin (centre). */
   xMm: number;
   yMm: number;
@@ -50,12 +68,128 @@ export type PcbFootprint = {
   /** Rotation clockwise in degrees (0 / 90 / 180 / 270 typical). */
   rotationDeg: number;
   side: PcbSide;
+  /**
+   * Id of the CircuitPart this footprint physically realises. Set it to pull
+   * the schematic's nets onto the board (see lib/pcb/netlist.ts); unset means
+   * the footprint is board-only (mounting holes, test points).
+   */
+  partId?: string;
+  /**
+   * Schematic pin name -> pad pin, for parts whose symbol pins don't match the
+   * footprint's pad names (a Wokwi LED's A/C vs. an LED_0805's 1/2). Only
+   * needed where the names differ.
+   */
+  pinMap?: Record<string, string>;
+};
+
+/**
+ * A routed copper polyline. Stored as a vertex list rather than one segment per
+ * record because that is how a track is drawn (click, click, click) and how it
+ * is edited — splitting a corner off into its own row would make an undo of a
+ * single route touch many records.
+ *
+ * `net` is the net name the track was started from. It is a claim, not a
+ * guarantee: dragging a footprint afterwards can leave the copper touching a
+ * different net, which is exactly the short DRC looks for.
+ */
+export type PcbTrack = {
+  id: string;
+  net?: string;
+  layer: PcbLayer;
+  widthMm: number;
+  /** At least two points; collinear duplicates are removed on normalize. */
+  points: PcbPoint[];
+};
+
+/**
+ * A plated through-hole joining F.Cu and B.Cu. Blind/buried vias would need a
+ * real stackup, so every via spans the whole board.
+ */
+export type PcbVia = {
+  id: string;
+  net?: string;
+  xMm: number;
+  yMm: number;
+  drillMm: number;
+  diameterMm: number;
+};
+
+/**
+ * A copper pour: a filled polygon tied to one net, almost always GND.
+ *
+ * The filled shape is never computed as a polygon. A pour is the outline minus
+ * every foreign-net feature grown by the clearance, and doing that as a boolean
+ * operation needs a clipping library and a lot of edge cases. Both renderers
+ * subtract instead — SVG through a mask, Gerber through clear polarity — which
+ * is exactly how Gerber expects a pour to be expressed anyway.
+ *
+ * The consequence worth knowing: `points` is the *requested* outline, not the
+ * copper that results. Islands cut off by routing still count as part of the
+ * zone, so the pour cannot be trusted as a connection of last resort.
+ */
+export type PcbZone = {
+  id: string;
+  /** Net to pour. A zone with no net is inert — it connects nothing. */
+  net?: string;
+  layer: PcbLayer;
+  /** Outline in board millimetres; at least three points. */
+  points: PcbPoint[];
+  /** Gap to foreign copper. Falls back to the board clearance rule. */
+  clearanceMm?: number;
+};
+
+/**
+ * Manufacturing constraints. Defaults are a conservative 2-layer spec that
+ * every low-cost fab (JLCPCB, PCBWay, OSH Park) accepts without review.
+ */
+export type PcbRules = {
+  /** Minimum copper-to-copper gap between different nets. */
+  clearanceMm: number;
+  /** Default width for newly drawn tracks. */
+  trackWidthMm: number;
+  viaDiameterMm: number;
+  viaDrillMm: number;
+  /** Minimum copper-to-board-edge gap. */
+  edgeClearanceMm: number;
+};
+
+export const DEFAULT_RULES: PcbRules = {
+  clearanceMm: 0.2,
+  trackWidthMm: 0.25,
+  viaDiameterMm: 0.6,
+  viaDrillMm: 0.3,
+  edgeClearanceMm: 0.3,
 };
 
 export type PcbDoc = {
   version: 1;
+  /** Stable id within a PcbSet. Legacy single-board documents get "board-1". */
+  id?: string;
+  /** Shown in the board switcher; defaults to the bound group's label. */
+  name?: string;
+  /** Schematic group this board realises, if the schematic is partitioned. */
+  groupId?: string;
   board: PcbBoard;
   footprints: PcbFootprint[];
+  tracks: PcbTrack[];
+  vias: PcbVia[];
+  zones: PcbZone[];
+  rules: PcbRules;
+};
+
+/**
+ * Every board in a project. One schematic can be split across several physical
+ * boards (see lib/circuit/groups.ts), so the PCB document is a set rather than
+ * a single layout.
+ *
+ * Stored in the same DesignDoc row as before. `normalizePcbSet` accepts a bare
+ * legacy PcbDoc and lifts it into a one-board set, so no migration is needed
+ * and an existing project keeps its layout.
+ */
+export type PcbSet = {
+  version: 2;
+  boards: PcbDoc[];
+  activeBoardId?: string;
 };
 
 export const EMPTY_PCB: PcbDoc = {
@@ -67,7 +201,24 @@ export const EMPTY_PCB: PcbDoc = {
     cornerRadiusMm: 1,
   },
   footprints: [],
+  tracks: [],
+  vias: [],
+  zones: [],
+  rules: DEFAULT_RULES,
 };
+
+/** A fresh EMPTY_PCB whose nested objects/arrays are safe to mutate. */
+export function emptyPcbDoc(): PcbDoc {
+  return {
+    version: 1,
+    board: { ...EMPTY_PCB.board },
+    footprints: [],
+    tracks: [],
+    vias: [],
+    zones: [],
+    rules: { ...DEFAULT_RULES },
+  };
+}
 
 /** Small built-in library — enough for placement practice, not a full KiCad lib. */
 export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
@@ -79,8 +230,8 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     bodyWMm: 1.6,
     bodyHMm: 0.8,
     pads: [
-      { xMm: -0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
-      { xMm: 0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
+      { pin: "1", xMm: -0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
+      { pin: "2", xMm: 0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
     ],
   },
   {
@@ -91,8 +242,8 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     bodyWMm: 2.0,
     bodyHMm: 1.25,
     pads: [
-      { xMm: -0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
-      { xMm: 0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
+      { pin: "1", xMm: -0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
+      { pin: "2", xMm: 0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
     ],
   },
   {
@@ -103,8 +254,8 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     bodyWMm: 1.6,
     bodyHMm: 0.8,
     pads: [
-      { xMm: -0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
-      { xMm: 0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
+      { pin: "1", xMm: -0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
+      { pin: "2", xMm: 0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
     ],
   },
   {
@@ -114,9 +265,11 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "led 0805 smd diode",
     bodyWMm: 2.0,
     bodyHMm: 1.25,
+    // Pad 1 is the anode, pad 2 the cathode — Wokwi LED symbols use A/C, so
+    // those parts need a pinMap.
     pads: [
-      { xMm: -0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
-      { xMm: 0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
+      { pin: "1", xMm: -0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
+      { pin: "2", xMm: 0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
     ],
   },
   {
@@ -126,10 +279,13 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "soic 8 ic package",
     bodyWMm: 5.0,
     bodyHMm: 4.0,
+    // Pins 1-4 run left-to-right along the top row, 5-8 right-to-left along the
+    // bottom — the standard counter-clockwise SOIC numbering.
     pads: Array.from({ length: 8 }, (_, i) => {
       const row = i < 4 ? -1 : 1;
       const col = i < 4 ? i : 7 - i;
       return {
+        pin: String(i + 1),
         xMm: -1.905 + col * 1.27,
         yMm: row * 2.6,
         wMm: 0.6,
@@ -145,8 +301,11 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "qfn 16 3x3 ic",
     bodyWMm: 3.0,
     bodyHMm: 3.0,
+    // 1-16 run around the package in placement order (top edge left-to-right,
+    // then right, bottom, left), with "EP" for the centre exposed pad.
     pads: [
       ...Array.from({ length: 4 }, (_, i) => ({
+        pin: String(i + 1),
         xMm: -1.05 + i * 0.5,
         yMm: -1.45,
         wMm: 0.25,
@@ -154,6 +313,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
         shape: "rect" as const,
       })),
       ...Array.from({ length: 4 }, (_, i) => ({
+        pin: String(i + 5),
         xMm: 1.45,
         yMm: -1.05 + i * 0.5,
         wMm: 0.55,
@@ -161,6 +321,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
         shape: "rect" as const,
       })),
       ...Array.from({ length: 4 }, (_, i) => ({
+        pin: String(i + 9),
         xMm: 1.05 - i * 0.5,
         yMm: 1.45,
         wMm: 0.25,
@@ -168,13 +329,14 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
         shape: "rect" as const,
       })),
       ...Array.from({ length: 4 }, (_, i) => ({
+        pin: String(i + 13),
         xMm: -1.45,
         yMm: 1.05 - i * 0.5,
         wMm: 0.55,
         hMm: 0.25,
         shape: "rect" as const,
       })),
-      { xMm: 0, yMm: 0, wMm: 1.6, hMm: 1.6, shape: "rect" as const },
+      { pin: "EP", xMm: 0, yMm: 0, wMm: 1.6, hMm: 1.6, shape: "rect" as const },
     ],
   },
   {
@@ -185,6 +347,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     bodyWMm: 2.54 * 4,
     bodyHMm: 2.54,
     pads: Array.from({ length: 4 }, (_, i) => ({
+      pin: String(i + 1),
       xMm: -1.5 * 2.54 + i * 2.54,
       yMm: 0,
       wMm: 1.6,
@@ -200,10 +363,12 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "usb type-c connector",
     bodyWMm: 9.0,
     bodyHMm: 7.5,
+    // S1/S2 are the through-hole shield tabs; A1-A12 the signal row.
     pads: [
-      { xMm: -4.2, yMm: 0, wMm: 1.2, hMm: 2.2, shape: "rect", plated: true },
-      { xMm: 4.2, yMm: 0, wMm: 1.2, hMm: 2.2, shape: "rect", plated: true },
+      { pin: "S1", xMm: -4.2, yMm: 0, wMm: 1.2, hMm: 2.2, shape: "rect", plated: true },
+      { pin: "S2", xMm: 4.2, yMm: 0, wMm: 1.2, hMm: 2.2, shape: "rect", plated: true },
       ...Array.from({ length: 12 }, (_, i) => ({
+        pin: `A${i + 1}`,
         xMm: -2.75 + i * 0.5,
         yMm: 2.8,
         wMm: 0.3,
@@ -219,7 +384,8 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "mounting hole m3 3.2mm",
     bodyWMm: 6.0,
     bodyHMm: 6.0,
-    pads: [{ xMm: 0, yMm: 0, wMm: 3.2, hMm: 3.2, shape: "oval" }],
+    // Mechanical only — no pin, so it never joins a net.
+    pads: [{ pin: "", xMm: 0, yMm: 0, wMm: 3.2, hMm: 3.2, shape: "oval" }],
   },
 ];
 
@@ -238,6 +404,16 @@ export function unsupportedFootprintIds(
     if (!footprintDef(f.libraryId)) unknown.add(f.libraryId);
   }
   return [...unknown];
+}
+
+/** Pad on `libraryId` whose pin matches `pin` (exact, then case-insensitive). */
+export function padByPin(libraryId: string, pin: string): PcbPadDef | undefined {
+  const def = footprintDef(libraryId);
+  if (!def || !pin) return undefined;
+  return (
+    def.pads.find((p) => p.pin === pin) ??
+    def.pads.find((p) => p.pin.toLowerCase() === pin.toLowerCase())
+  );
 }
 
 export function searchFootprints(query: string): PcbFootprintDef[] {
@@ -260,6 +436,22 @@ function num(raw: unknown, fallback: number, min: number, max: number): number {
   const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
   if (!Number.isFinite(n)) return fallback;
   return clamp(n, min, max);
+}
+
+/**
+ * Keeps only entries whose target names a real pad on `libraryId` — a map into
+ * a pad that doesn't exist would silently drop the pin from the ratsnest, so
+ * it's better reported as unmapped.
+ */
+function cleanPinMap(raw: unknown, libraryId: string): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [schematicPin, padPin] of Object.entries(raw as Record<string, unknown>)) {
+    if (!schematicPin || typeof padPin !== "string") continue;
+    const pad = padByPin(libraryId, padPin);
+    if (pad) out[schematicPin.slice(0, 40)] = pad.pin;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function nextRefDes(libraryId: string, existing: PcbFootprint[]): string {
@@ -285,6 +477,11 @@ function nextRefDes(libraryId: string, existing: PcbFootprint[]): string {
   return `${prefix}${i}`;
 }
 
+/** Collision-resistant enough for client-side ids on a single document. */
+export function pcbId(prefix: string): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
 export function createFootprint(
   libraryId: string,
   existing: PcbFootprint[],
@@ -292,7 +489,7 @@ export function createFootprint(
 ): PcbFootprint | null {
   if (!footprintDef(libraryId)) return null;
   return {
-    id: `fp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    id: pcbId("fp"),
     libraryId,
     refDes: nextRefDes(libraryId, existing),
     xMm: at.xMm,
@@ -302,8 +499,104 @@ export function createFootprint(
   };
 }
 
+/**
+ * Drops consecutive duplicate vertices. A click that lands on the previous
+ * point would otherwise store a zero-length segment, which has no direction and
+ * so breaks both the DRC segment distance and the Gerber writer.
+ */
+function cleanPoints(raw: unknown, board: PcbBoard): PcbPoint[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PcbPoint[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const p = item as Record<string, unknown>;
+    const xMm = num(p.xMm, NaN, -500, board.widthMm + 500);
+    const yMm = num(p.yMm, NaN, -500, board.heightMm + 500);
+    if (!Number.isFinite(xMm) || !Number.isFinite(yMm)) continue;
+    const prev = out[out.length - 1];
+    if (prev && Math.abs(prev.xMm - xMm) < 1e-6 && Math.abs(prev.yMm - yMm) < 1e-6) continue;
+    out.push({ xMm, yMm });
+  }
+  return out;
+}
+
+function normalizeTracks(raw: unknown, board: PcbBoard): PcbTrack[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PcbTrack[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const t = item as Record<string, unknown>;
+    const points = cleanPoints(t.points, board);
+    // A one-point track is not copper; it is a click that never went anywhere.
+    if (points.length < 2) continue;
+    out.push({
+      id: typeof t.id === "string" && t.id ? t.id : pcbId("tr"),
+      net: typeof t.net === "string" && t.net.trim() ? t.net.trim().slice(0, 60) : undefined,
+      layer: t.layer === "B.Cu" ? "B.Cu" : "F.Cu",
+      widthMm: num(t.widthMm, DEFAULT_RULES.trackWidthMm, 0.05, 10),
+      points,
+    });
+  }
+  return out;
+}
+
+function normalizeVias(raw: unknown, board: PcbBoard): PcbVia[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PcbVia[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const v = item as Record<string, unknown>;
+    const diameterMm = num(v.diameterMm, DEFAULT_RULES.viaDiameterMm, 0.1, 10);
+    // Drill can never reach the annular ring's outer edge or there is no ring.
+    const drillMm = num(v.drillMm, DEFAULT_RULES.viaDrillMm, 0.05, Math.max(0.05, diameterMm - 0.05));
+    out.push({
+      id: typeof v.id === "string" && v.id ? v.id : pcbId("via"),
+      net: typeof v.net === "string" && v.net.trim() ? v.net.trim().slice(0, 60) : undefined,
+      xMm: num(v.xMm, board.widthMm / 2, -500, board.widthMm + 500),
+      yMm: num(v.yMm, board.heightMm / 2, -500, board.heightMm + 500),
+      diameterMm,
+      drillMm,
+    });
+  }
+  return out;
+}
+
+function normalizeZones(raw: unknown, board: PcbBoard): PcbZone[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PcbZone[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const z = item as Record<string, unknown>;
+    const points = cleanPoints(z.points, board);
+    // Fewer than three points encloses no area, so there is nothing to pour.
+    if (points.length < 3) continue;
+    out.push({
+      id: typeof z.id === "string" && z.id ? z.id : pcbId("zone"),
+      net: typeof z.net === "string" && z.net.trim() ? z.net.trim().slice(0, 60) : undefined,
+      layer: z.layer === "B.Cu" ? "B.Cu" : "F.Cu",
+      points,
+      clearanceMm:
+        typeof z.clearanceMm === "number" && Number.isFinite(z.clearanceMm)
+          ? clamp(z.clearanceMm, 0.02, 5)
+          : undefined,
+    });
+  }
+  return out;
+}
+
+function normalizeRules(raw: unknown): PcbRules {
+  const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return {
+    clearanceMm: num(r.clearanceMm, DEFAULT_RULES.clearanceMm, 0.02, 5),
+    trackWidthMm: num(r.trackWidthMm, DEFAULT_RULES.trackWidthMm, 0.05, 10),
+    viaDiameterMm: num(r.viaDiameterMm, DEFAULT_RULES.viaDiameterMm, 0.1, 10),
+    viaDrillMm: num(r.viaDrillMm, DEFAULT_RULES.viaDrillMm, 0.05, 9),
+    edgeClearanceMm: num(r.edgeClearanceMm, DEFAULT_RULES.edgeClearanceMm, 0, 10),
+  };
+}
+
 export function normalizePcbDoc(raw: unknown): PcbDoc {
-  if (!raw || typeof raw !== "object") return { ...EMPTY_PCB, board: { ...EMPTY_PCB.board } };
+  if (!raw || typeof raw !== "object") return emptyPcbDoc();
 
   const obj = raw as Record<string, unknown>;
   const boardRaw =
@@ -336,8 +629,88 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
       yMm: num(f.yMm, board.heightMm / 2, -50, board.heightMm + 50),
       rotationDeg: num(f.rotationDeg, 0, 0, 359),
       side,
+      partId:
+        typeof f.partId === "string" && f.partId.trim()
+          ? f.partId.trim().slice(0, 60)
+          : undefined,
+      pinMap: cleanPinMap(f.pinMap, libraryId),
     });
   }
 
-  return { version: 1, board, footprints };
+  return {
+    version: 1,
+    id: typeof obj.id === "string" && obj.id ? obj.id.slice(0, 60) : undefined,
+    name: typeof obj.name === "string" && obj.name.trim() ? obj.name.trim().slice(0, 60) : undefined,
+    groupId:
+      typeof obj.groupId === "string" && obj.groupId.trim()
+        ? obj.groupId.trim().slice(0, 60)
+        : undefined,
+    board,
+    footprints,
+    tracks: normalizeTracks(obj.tracks, board),
+    vias: normalizeVias(obj.vias, board),
+    zones: normalizeZones(obj.zones, board),
+    rules: normalizeRules(obj.rules),
+  };
+}
+
+/**
+ * Accepts either a PcbSet or a single legacy PcbDoc and always returns a set
+ * with at least one board, so callers never special-case the old shape.
+ */
+export function normalizePcbSet(raw: unknown): PcbSet {
+  const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+
+  const rawBoards = Array.isArray(obj.boards)
+    ? obj.boards
+    : // A legacy document is the board itself.
+      [obj];
+
+  const boards = rawBoards.map((b, i) => {
+    const doc = normalizePcbDoc(b);
+    return { ...doc, id: doc.id ?? `board-${i + 1}`, name: doc.name ?? `Board ${i + 1}` };
+  });
+
+  if (boards.length === 0) {
+    boards.push({ ...emptyPcbDoc(), id: "board-1", name: "Board 1" });
+  }
+
+  // Ids must be unique or the switcher and the save path address the wrong one.
+  const seen = new Set<string>();
+  for (const b of boards) {
+    let id = b.id!;
+    let n = 2;
+    while (seen.has(id)) id = `${b.id}-${n++}`;
+    b.id = id;
+    seen.add(id);
+  }
+
+  const activeBoardId =
+    typeof obj.activeBoardId === "string" && boards.some((b) => b.id === obj.activeBoardId)
+      ? obj.activeBoardId
+      : boards[0]!.id;
+
+  return { version: 2, boards, activeBoardId };
+}
+
+export function emptyPcbSet(): PcbSet {
+  return {
+    version: 2,
+    boards: [{ ...emptyPcbDoc(), id: "board-1", name: "Board 1" }],
+    activeBoardId: "board-1",
+  };
+}
+
+/** A new board, named after the group it realises when there is one. */
+export function createBoard(existing: PcbDoc[], groupId?: string, label?: string): PcbDoc {
+  const used = new Set(existing.map((b) => b.id));
+  let i = existing.length + 1;
+  let id = `board-${i}`;
+  while (used.has(id)) id = `board-${++i}`;
+  return {
+    ...emptyPcbDoc(),
+    id,
+    name: label ?? `Board ${i}`,
+    groupId,
+  };
 }

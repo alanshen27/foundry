@@ -1,6 +1,6 @@
 # FOUNDRY
 
-Describe it. Engineer it. Build it. Sell it.
+Describe it. Code it. Engineer it. Build it. Sell it.
 
 FOUNDRY is a collaborative, AI-native environment for creating complete physical
 products. See `Foundry_PRD_Cursor.md` for the full product specification and

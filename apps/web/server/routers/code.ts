@@ -26,6 +26,30 @@ export const codeRouter = router({
       });
     }),
 
+  /**
+   * Every code file in a project, across all its repos. listFiles is scoped to
+   * one repo, which is right for the file tree but wrong for anything that
+   * needs to offer a choice across repos — the simulator picking which sketch
+   * to run would otherwise need one query per repo.
+   */
+  listProjectFiles: protectedProcedure
+    .input(z.object({ projectId: z.string(), branchId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
+      const repos = await prisma.repoLink.findMany({
+        where: { projectId: input.projectId, branchId: input.branchId },
+        select: { id: true, role: true },
+      });
+      if (repos.length === 0) return [];
+      const files = await prisma.codeFile.findMany({
+        where: { repoId: { in: repos.map((r) => r.id) } },
+        select: { id: true, path: true, repoId: true, updatedAt: true },
+        orderBy: { path: "asc" },
+      });
+      const roleOf = new Map(repos.map((r) => [r.id, r.role]));
+      return files.map((f) => ({ ...f, repoRole: roleOf.get(f.repoId) ?? "" }));
+    }),
+
   getFile: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
     const file = await prisma.codeFile.findUnique({ where: { id: input.id } });
     if (!file) throw new TRPCError({ code: "NOT_FOUND" });

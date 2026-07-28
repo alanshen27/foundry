@@ -21,6 +21,14 @@ export type PartData = {
   canEdit: boolean;
   /** For generic (unknown/legacy) parts: pin names referenced by wires. */
   wirePins: string[];
+  /**
+   * Live simulation output, 0..1 — an LED's brightness, a buzzer's signal.
+   * Undefined when the simulator is not running, which leaves the element in
+   * its static appearance rather than forcing it off.
+   */
+  simValue?: number;
+  /** Set when this part can be pressed or toggled during a simulation. */
+  onInteract?: (partId: string) => void;
 };
 
 export type PartNode = Node<PartData, "wokwi" | "generic">;
@@ -42,6 +50,7 @@ function handleSide(pin: ElementPin, width: number, height: number): Position {
 /** A realistic Wokwi element with pin-accurate connection handles. */
 function WokwiPartNode({ id, data, selected }: NodeProps<PartNode>) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const elRef = useRef<HTMLElement | null>(null);
   const [pins, setPins] = useState<ElementPin[]>([]);
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 48, h: 48 });
   const updateNodeInternals = useUpdateNodeInternals();
@@ -64,6 +73,7 @@ function WokwiPartNode({ id, data, selected }: NodeProps<PartNode>) {
       el.setAttribute(key, value);
     }
     host.appendChild(el);
+    elRef.current = el;
 
     let cancelled = false;
     void customElements.whenDefined(data.partType).then(() => {
@@ -81,12 +91,34 @@ function WokwiPartNode({ id, data, selected }: NodeProps<PartNode>) {
     // rebuild the element (and flicker) on every unrelated node update.
   }, [data.partType, attrsKey]);
 
+  /**
+   * Push simulation state onto the live element. Wokwi elements expose their
+   * lit/active state as properties (`value`, `hasSignal`, `pressed`), so the
+   * real component does the rendering and there is no second set of visuals to
+   * keep in step with it.
+   */
+  useEffect(() => {
+    const el = elRef.current as (HTMLElement & Record<string, unknown>) | null;
+    if (!el || data.simValue === undefined) return;
+    const on = data.simValue > 0;
+    if ("value" in el) el.value = on;
+    if ("hasSignal" in el) el.hasSignal = on;
+    if ("pressed" in el) el.pressed = on;
+  }, [data.simValue, pins]);
+
+  const interactive = data.onInteract;
+
   return (
     <div
-      className={cn("relative", selected && "rounded-none ring-2 ring-emerald-400/80")}
+      className={cn(
+        "relative",
+        selected && "rounded-none ring-2 ring-emerald-400/80",
+        interactive && "cursor-pointer",
+      )}
       style={{
         transform: data.rotation ? `rotate(${data.rotation}deg)` : undefined,
       }}
+      onPointerDown={interactive ? () => interactive(id) : undefined}
     >
       {data.label ? (
         <div className="text-foreground/70 absolute -top-4.5 left-1/2 -translate-x-1/2 text-[10px] font-medium whitespace-nowrap">
