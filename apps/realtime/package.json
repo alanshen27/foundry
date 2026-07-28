@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "dotenv -e ../../.env -- tsx watch src/server.ts",
     "start": "dotenv -e ../../.env -- tsx src/server.ts",
+    "start:prod": "tsx src/server.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

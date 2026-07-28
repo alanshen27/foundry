@@ -9,6 +9,7 @@ import {
   hashPassword,
   LOCAL_SESSION_COOKIE,
 } from "@foundry/auth";
+import { authCallbackUrl } from "@/server/auth-redirect";
 import { createWorkspaceForOwner, defaultWorkspaceName } from "@/server/create-workspace";
 import { upsertSupabaseUser } from "@/server/session";
 
@@ -72,7 +73,10 @@ export async function POST(request: Request) {
     },
   });
 
-  const result = await auth.signUpWithPassword(email, password, name);
+  const origin = env.APP_ORIGIN?.replace(/\/$/, "") || new URL(request.url).origin;
+  const result = await auth.signUpWithPassword(email, password, name, {
+    emailRedirectTo: authCallbackUrl(origin),
+  });
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }

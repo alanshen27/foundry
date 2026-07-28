@@ -41,7 +41,8 @@ function resourceMatchesRoom(claims: CollabClaims, documentName: string): boolea
   return false;
 }
 
-const port = Number(process.env.COLLAB_PORT ?? "1234");
+// Render injects PORT; local/dev can override with COLLAB_PORT.
+const port = Number(process.env.PORT ?? process.env.COLLAB_PORT ?? "1234");
 
 const server = Server.configure({
   port,

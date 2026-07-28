@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@foundry/db";
-import { FoundryMark } from "@/components/foundry-mark";
+import { AuthShell } from "@/components/auth-shell";
 import { getCurrentUser } from "@/server/session";
 import { AcceptInviteButton } from "./accept-invite-button";
 
@@ -15,42 +15,34 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   });
 
   return (
-    <main className="bg-dot-grid flex min-h-screen items-center justify-center p-6">
-      <div className="border-border bg-card w-full max-w-md border text-center">
-        <div className="border-border flex items-center justify-between border-b px-5 py-4 text-left">
-          <FoundryMark />
-          <span className="text-muted-foreground font-mono text-[10px] tracking-[0.16em] uppercase">
-            Invite
-          </span>
-        </div>
-        <div className="px-5 py-6">
-          {!invitation || invitation.status !== "PENDING" ? (
-            <p className="text-muted-foreground text-sm">
-              This invitation does not exist or has already been used.
+    <AuthShell code="Invite" title="Workspace invite" glyphSeed={`invite-${token.slice(0, 8)}`}>
+      <div className="mt-6 text-left">
+        {!invitation || invitation.status !== "PENDING" ? (
+          <p className="text-muted-foreground text-sm">
+            This invitation does not exist or has already been used.
+          </p>
+        ) : invitation.expiresAt < new Date() ? (
+          <p className="text-muted-foreground text-sm">This invitation has expired.</p>
+        ) : (
+          <>
+            <h2 className="mb-2 font-mono text-lg font-medium tracking-[-0.03em]">
+              Join {invitation.workspace.name}
+            </h2>
+            <p className="text-muted-foreground mb-6 text-sm">
+              {invitation.invitedBy.name} invited {invitation.email} as a workspace{" "}
+              {invitation.role.toLowerCase()}
+              {invitation.project ? (
+                <>
+                  {" "}
+                  (via <span className="text-foreground">{invitation.project.name}</span>)
+                </>
+              ) : null}
+              .
             </p>
-          ) : invitation.expiresAt < new Date() ? (
-            <p className="text-muted-foreground text-sm">This invitation has expired.</p>
-          ) : (
-            <>
-              <h1 className="mb-2 font-mono text-lg font-medium tracking-[-0.03em]">
-                Join {invitation.workspace.name}
-              </h1>
-              <p className="text-muted-foreground mb-6 text-sm">
-                {invitation.invitedBy.name} invited {invitation.email} as a workspace{" "}
-                {invitation.role.toLowerCase()}
-                {invitation.project ? (
-                  <>
-                    {" "}
-                    (via <span className="text-foreground">{invitation.project.name}</span>)
-                  </>
-                ) : null}
-                .
-              </p>
-              <AcceptInviteButton token={token} />
-            </>
-          )}
-        </div>
+            <AcceptInviteButton token={token} />
+          </>
+        )}
       </div>
-    </main>
+    </AuthShell>
   );
 }
