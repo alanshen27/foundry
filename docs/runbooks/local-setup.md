@@ -16,6 +16,9 @@
 6. `pnpm dev` and open http://localhost:3000.
 7. Sign in with `builder@foundry.local` / `demo-password` (LOCAL mode).
 
+Production deploy + branded confirmation email: see `deploy-render.md` and
+`auth-email.md`.
+
 ## Troubleshooting
 
 - "Invalid environment configuration" on boot: the zod validator in

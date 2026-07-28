@@ -291,6 +291,20 @@ svg.lucide {
   color: var(--destructive);
 }
 
+/* Static page-level dot field (auth fallback when canvas is unavailable). */
+.bg-dot-grid {
+  background-color: var(--background);
+  background-image:
+    radial-gradient(circle, color-mix(in srgb, var(--foreground) 18%, transparent) 0.7px, transparent 0.8px),
+    radial-gradient(circle, color-mix(in srgb, var(--foreground) 10%, transparent) 1.1px, transparent 1.2px);
+  background-size:
+    14px 14px,
+    28px 28px;
+  background-position:
+    0 0,
+    7px 7px;
+}
+
 /* Dot-matrix skeletons — pulsing grid instead of flat grey bars. */
 .skeleton-dots {
   background-color: transparent;

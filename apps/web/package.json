@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "playwright test",
-    "worker:chat": "dotenv -e ../../.env -- tsx watch --conditions=react-server worker/chat-run-worker.ts"
+    "worker:chat": "dotenv -e ../../.env -- tsx watch --conditions=react-server worker/chat-run-worker.ts",
+    "worker:chat:prod": "tsx --conditions=react-server worker/chat-run-worker.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.17",

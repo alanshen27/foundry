@@ -3,7 +3,14 @@
  * The web app supplies cookie accessors so this package stays framework-thin.
  */
 import { createServerClient } from "@supabase/ssr";
-import type { AuthenticatedIdentity, AuthPort, SignUpResult } from "./port";
+import type {
+  AuthenticatedIdentity,
+  AuthPort,
+  ConfirmEmailResult,
+  EmailOtpKind,
+  SignUpOptions,
+  SignUpResult,
+} from "./port";
 
 export type CookieAccessor = {
   getAll(): { name: string; value: string }[];
@@ -38,6 +45,12 @@ function identityFromUser(user: UserLike): AuthenticatedIdentity | null {
       undefined,
     provider: "supabase",
   };
+}
+
+function confirmFromUser(user: UserLike | null | undefined, errorMessage: string): ConfirmEmailResult {
+  const identity = user ? identityFromUser(user) : null;
+  if (!identity) return { ok: false, error: errorMessage };
+  return { ok: true, identity };
 }
 
 export function createSupabaseAuthAdapter(config: SupabaseAuthConfig): AuthPort {
@@ -81,11 +94,19 @@ export function createSupabaseAuthAdapter(config: SupabaseAuthConfig): AuthPort 
       return { subject: data.user.id, email: data.user.email, provider: "supabase" };
     },
 
-    async signUpWithPassword(email, password, name): Promise<SignUpResult> {
+    async signUpWithPassword(
+      email,
+      password,
+      name?,
+      options?: SignUpOptions,
+    ): Promise<SignUpResult> {
       const { data, error } = await client.auth.signUp({
         email,
         password,
-        options: name ? { data: { name } } : undefined,
+        options: {
+          ...(name ? { data: { name } } : {}),
+          ...(options?.emailRedirectTo ? { emailRedirectTo: options.emailRedirectTo } : {}),
+        },
       });
       if (error || !data.user?.email) {
         return { ok: false, error: error?.message ?? "Sign-up failed" };
@@ -101,6 +122,24 @@ export function createSupabaseAuthAdapter(config: SupabaseAuthConfig): AuthPort 
         // Supabase omits a session when email confirmation is required.
         hasSession: Boolean(data.session),
       };
+    },
+
+    async confirmEmailWithToken(input: {
+      tokenHash: string;
+      type: EmailOtpKind;
+    }): Promise<ConfirmEmailResult> {
+      const { data, error } = await client.auth.verifyOtp({
+        token_hash: input.tokenHash,
+        type: input.type,
+      });
+      if (error) return { ok: false, error: error.message };
+      return confirmFromUser(data.user, "Confirmation succeeded but no user was returned");
+    },
+
+    async exchangeAuthCode(code: string): Promise<ConfirmEmailResult> {
+      const { data, error } = await client.auth.exchangeCodeForSession(code);
+      if (error) return { ok: false, error: error.message };
+      return confirmFromUser(data.user, "Code exchange succeeded but no user was returned");
     },
 
     async signOut(): Promise<void> {

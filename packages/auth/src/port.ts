@@ -18,7 +18,26 @@ export type AuthenticatedIdentity = {
  * requires email confirmation before a session is issued (Supabase).
  */
 export type SignUpResult =
-  { ok: true; identity: AuthenticatedIdentity; hasSession: boolean } | { ok: false; error: string };
+  | { ok: true; identity: AuthenticatedIdentity; hasSession: boolean }
+  | { ok: false; error: string };
+
+/** Supabase email OTP kinds we handle in custom confirmation routes. */
+export type EmailOtpKind =
+  | "signup"
+  | "email"
+  | "invite"
+  | "magiclink"
+  | "recovery"
+  | "email_change";
+
+export type ConfirmEmailResult =
+  | { ok: true; identity: AuthenticatedIdentity }
+  | { ok: false; error: string };
+
+export type SignUpOptions = {
+  /** Where Supabase should send the user after they click the email link. */
+  emailRedirectTo?: string;
+};
 
 export interface AuthPort {
   /** Resolve the identity for the current request, if signed in. */
@@ -26,6 +45,23 @@ export interface AuthPort {
   /** Password sign-in. Returns identity or null on bad credentials. */
   signInWithPassword(email: string, password: string): Promise<AuthenticatedIdentity | null>;
   /** Register a new account with email + password. */
-  signUpWithPassword(email: string, password: string, name?: string): Promise<SignUpResult>;
+  signUpWithPassword(
+    email: string,
+    password: string,
+    name?: string,
+    options?: SignUpOptions,
+  ): Promise<SignUpResult>;
+  /**
+   * Exchange a confirmation / magic-link token hash for a session.
+   * Used by `/auth/confirm` with custom Supabase email templates.
+   */
+  confirmEmailWithToken(input: {
+    tokenHash: string;
+    type: EmailOtpKind;
+  }): Promise<ConfirmEmailResult>;
+  /**
+   * PKCE code exchange after Supabase redirects to `/auth/callback`.
+   */
+  exchangeAuthCode(code: string): Promise<ConfirmEmailResult>;
   signOut(): Promise<void>;
 }

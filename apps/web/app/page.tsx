@@ -40,6 +40,24 @@ const PHASES: { stage: Stage; verb: string; label: string; blurb: string; code: 
   },
 ];
 
+const SIGNALS = [
+  {
+    code: "SIG.01",
+    title: "One thread",
+    body: "Requirements, circuits, geometry, and firmware stay linked — no more losing the product in a pile of tools.",
+  },
+  {
+    code: "SIG.02",
+    title: "Human + agent",
+    body: "Copilots draft and check, but publishing, checkout, and merges stay behind explicit human approval.",
+  },
+  {
+    code: "SIG.03",
+    title: "Ship-shaped",
+    body: "From sentence to manufacturable release with the same industrial chrome the whole way down.",
+  },
+];
+
 export default async function HomePage() {
   const user = await getCurrentUser();
   if (user) redirect(await resolveWorkspaceHomePath(user.id));
@@ -135,11 +153,100 @@ export default async function HomePage() {
           </div>
         </section>
       </div>
+
+      <section className="border-border relative z-10 mx-auto w-full max-w-6xl border-t lg:border-x">
+        <div className="border-border grid gap-0 lg:grid-cols-12 lg:border-b">
+          <div className="border-border bg-background/85 px-6 py-12 sm:px-10 lg:col-span-4 lg:border-r lg:px-12">
+            <p className="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
+              Field notes
+            </p>
+            <h2 className="mt-4 font-mono text-[clamp(1.4rem,2.4vw,1.85rem)] leading-[1.15] font-medium tracking-[-0.04em]">
+              Built like a signal display, not a soft SaaS dashboard.
+            </h2>
+            <p className="text-muted-foreground mt-4 text-[14px] leading-relaxed">
+              Dot matrix. Sharp edges. Orange where it matters. The same industrial language from
+              the landing page into the workspace.
+            </p>
+          </div>
+          <ul className="lg:col-span-8">
+            {SIGNALS.map((signal, i) => (
+              <li
+                key={signal.code}
+                className={cn(
+                  "border-border bg-card/80 flex flex-col gap-2 border-b px-6 py-8 sm:px-10 lg:px-12",
+                  i === SIGNALS.length - 1 && "border-b-0 lg:border-b-0",
+                )}
+              >
+                <div className="flex items-baseline justify-between gap-4">
+                  <span className="text-primary font-mono text-[11px] tracking-[0.16em]">
+                    {signal.code}
+                  </span>
+                  <span className="signal-letter text-primary font-mono text-[18px] font-medium">
+                    {signal.title.charAt(0)}
+                  </span>
+                </div>
+                <h3 className="font-mono text-[15px] font-medium tracking-[-0.02em]">
+                  {signal.title}
+                </h3>
+                <p className="text-muted-foreground max-w-xl text-[13px] leading-relaxed">
+                  {signal.body}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section className="relative z-10 mx-auto w-full max-w-6xl lg:border-x">
+        <div className="bg-primary text-primary-foreground relative overflow-hidden">
+          <InteractiveDotField tone="signal" gap={11} radius={64} />
+          <div className="relative z-10 grid gap-10 px-6 py-14 sm:px-10 lg:grid-cols-12 lg:px-12 lg:py-16">
+            <div className="lg:col-span-5">
+              <p className="font-mono text-[11px] tracking-[0.18em] uppercase opacity-80">
+                Ready when you are
+              </p>
+              <h2 className="mt-4 font-mono text-[clamp(1.6rem,3vw,2.2rem)] leading-[1.1] font-medium tracking-[-0.04em]">
+                Open a workspace.
+                <br />
+                Keep the pulse.
+              </h2>
+              <div className="mt-8 flex flex-wrap gap-3">
+                <Link
+                  href="/auth/sign-up"
+                  className="bg-[#faf9f5] text-[#0c0c0c] hover:bg-[#faf9f5]/90 px-5 py-2.5 font-mono text-[12px] tracking-[0.1em] uppercase transition-colors"
+                >
+                  Create account
+                </Link>
+                <Link
+                  href="/auth/sign-in"
+                  className="border border-[#faf9f5]/40 hover:border-[#faf9f5]/80 px-5 py-2.5 font-mono text-[12px] tracking-[0.1em] uppercase transition-colors"
+                >
+                  Sign in
+                </Link>
+              </div>
+            </div>
+            <div className="flex items-center justify-center lg:col-span-7">
+              <SignalGlyph
+                seed="foundry-close"
+                rows={18}
+                cols={40}
+                className="max-w-full text-[#faf9f5] opacity-95"
+                monoClassName="text-[clamp(8px,1.3vw,12px)] leading-[1.05] tracking-[0.14em]"
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer className="border-border relative z-10 mx-auto flex w-full max-w-6xl items-center justify-between border-t px-6 py-5 font-mono text-[10px] tracking-[0.14em] uppercase lg:border-x sm:px-10">
+        <span className="text-muted-foreground">Foundry</span>
+        <span className="text-muted-foreground">Ideate · Engineer · Verify · Launch</span>
+      </footer>
     </main>
   );
 }
 
-/** Orange signal panel — client island so the cursor field can run on it. */
+/** Orange signal panel with cursor-reactive dots + ASCII dissolve. */
 function SignalHero() {
   return (
     <section className="bg-primary text-primary-foreground relative flex min-h-[34rem] flex-col overflow-hidden px-6 py-8 sm:px-8 lg:col-span-5 lg:min-h-0 lg:px-8 lg:py-10">

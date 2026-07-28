@@ -1,0 +1,186 @@
+# FOUNDRY — Render Blueprint (IaC)
+# https://dashboard.render.com/blueprint/new
+#
+# Hosted Postgres / Auth / Storage stay on Supabase. This Blueprint deploys
+# the Next.js app, BullMQ chat worker, Yjs collab WebSocket service, and Redis.
+#
+# After the first sync:
+# 1. Fill every sync:false env var in the Render dashboard.
+# 2. Set Supabase Auth Site URL + redirect allowlist to APP_ORIGIN
+#    (and APP_ORIGIN/auth/confirm, APP_ORIGIN/auth/callback).
+# 3. Paste supabase/templates/*.html into Supabase Auth email templates.
+# 4. Set NEXT_PUBLIC_COLLAB_URL to wss://<foundry-collab-host>
+
+services:
+  - type: web
+    name: foundry-web
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile && pnpm --filter @foundry/db generate && pnpm --filter @foundry/web build
+    startCommand: pnpm --filter @foundry/web start
+    healthCheckPath: /
+    buildFilter:
+      paths:
+        - apps/web/**
+        - packages/**
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
+        - turbo.json
+        - render.yaml
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_MODE
+        value: supabase
+      - key: NEXT_PUBLIC_REALTIME_MODE
+        value: supabase
+      - key: STORAGE_BUCKET
+        value: artifacts
+      - key: AI_MODEL
+        value: gpt-5.6
+      - key: APP_ORIGIN
+        fromService:
+          name: foundry-web
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: REDIS_URL
+        fromService:
+          name: foundry-redis
+          type: keyvalue
+          property: connectionString
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: NEXT_PUBLIC_COLLAB_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ZOO_API_TOKEN
+        sync: false
+      - key: V0_API_KEY
+        sync: false
+      - key: FOUNDRY_DEFAULT_WORKSPACE_SLUG
+        sync: false
+
+  - type: worker
+    name: foundry-chat-worker
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile && pnpm --filter @foundry/db generate
+    startCommand: pnpm --filter @foundry/web worker:chat:prod
+    buildFilter:
+      paths:
+        - apps/web/**
+        - packages/**
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
+        - turbo.json
+        - render.yaml
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_MODE
+        value: supabase
+      - key: NEXT_PUBLIC_REALTIME_MODE
+        value: off
+      - key: STORAGE_BUCKET
+        value: artifacts
+      - key: AI_MODEL
+        value: gpt-5.6
+      - key: REDIS_URL
+        fromService:
+          name: foundry-redis
+          type: keyvalue
+          property: connectionString
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: AUTH_SECRET
+        fromService:
+          name: foundry-web
+          type: web
+          envVarKey: AUTH_SECRET
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ZOO_API_TOKEN
+        sync: false
+      - key: V0_API_KEY
+        sync: false
+      - key: APP_ORIGIN
+        fromService:
+          name: foundry-web
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+
+  - type: web
+    name: foundry-collab
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile && pnpm --filter @foundry/db generate
+    startCommand: pnpm --filter @foundry/collab-server start:prod
+    buildFilter:
+      paths:
+        - apps/realtime/**
+        - packages/collaboration/**
+        - packages/config/**
+        - packages/db/**
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
+        - render.yaml
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_MODE
+        value: supabase
+      - key: STORAGE_BUCKET
+        value: artifacts
+      - key: NEXT_PUBLIC_REALTIME_MODE
+        value: off
+      - key: DATABASE_URL
+        sync: false
+      - key: AUTH_SECRET
+        fromService:
+          name: foundry-web
+          type: web
+          envVarKey: AUTH_SECRET
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+  - type: keyvalue
+    name: foundry-redis
+    plan: starter
+    region: oregon
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
