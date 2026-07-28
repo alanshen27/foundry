@@ -373,6 +373,28 @@ svg.lucide {
   }
 }
 
+/* Soft orange wash behind create-bar — breathes without competing with the card. */
+.signal-glow-pulse {
+  animation: signal-glow-pulse 4.5s ease-in-out infinite;
+}
+@keyframes signal-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .signal-glow-pulse {
+    animation: none;
+    opacity: 0.85;
+  }
+}
+
 /* y-monaco remote cursors / selections (color comes from awareness user.color) */
 .yRemoteSelection {
   opacity: 0.45;

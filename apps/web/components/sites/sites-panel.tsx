@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SignalGlowBackdrop } from "@/components/signal-glow-backdrop";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 
@@ -124,13 +125,15 @@ export function SitesPanel({
           ) : null}
 
           <form
-            className="mt-8 w-full"
+            className="relative mt-8 w-full"
             onSubmit={(event) => {
               event.preventDefault();
               submit();
             }}
           >
-            <div className="border-border bg-background focus-within:border-primary border transition-colors">
+            <SignalGlowBackdrop />
+
+            <div className="border-border relative z-10 border bg-white transition-colors focus-within:border-primary dark:bg-card">
               <textarea
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
@@ -171,7 +174,7 @@ export function SitesPanel({
             </div>
 
             {showOptions ? (
-              <div className="border-border bg-background/80 mt-3 border px-4 py-3 text-left">
+              <div className="border-border relative z-10 mt-3 border bg-white px-4 py-3 text-left dark:bg-card">
                 <label
                   htmlFor="site-project"
                   className="text-muted-foreground font-mono text-[10px] tracking-[0.14em] uppercase"
@@ -180,7 +183,7 @@ export function SitesPanel({
                 </label>
                 <select
                   id="site-project"
-                  className="border-input bg-background mt-1.5 h-9 w-full border px-3 text-sm outline-none"
+                  className="border-input mt-1.5 h-9 w-full border bg-white px-3 text-sm outline-none dark:bg-card"
                   value={projectId}
                   onChange={(event) => setProjectId(event.target.value)}
                   disabled={!canEdit}
