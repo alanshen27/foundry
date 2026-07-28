@@ -7,6 +7,19 @@ import { recordAudit } from "../audit";
 import { requireWorkspaceCapability } from "../access";
 
 export const projectRouter = router({
+  /**
+   * The signed-in user's own identity. Client components deep in the tree
+   * (live cursors, for one) need to label themselves, and a query is far less
+   * invasive than threading the viewer through every stage component.
+   */
+  viewer: protectedProcedure.query(async ({ ctx }) => {
+    const user = await prisma.user.findUnique({
+      where: { id: ctx.user.id },
+      select: { id: true, name: true, avatarUrl: true },
+    });
+    return user ?? { id: ctx.user.id, name: "You", avatarUrl: null };
+  }),
+
   create: protectedProcedure
     .input(
       z.object({

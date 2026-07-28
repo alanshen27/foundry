@@ -63,6 +63,8 @@ import { partitionBoards, type BoardPartition } from "@/lib/circuit/groups";
 import { Simulator } from "@/lib/sim/engine";
 import { MCU_TYPES, partModel } from "@/lib/sim/parts";
 import { runSketch, type SketchHandle } from "@/lib/sim/sketch";
+import { useCursors } from "@/lib/use-cursors";
+import type { CursorState } from "@foundry/realtime";
 import { trpc } from "@/lib/trpc";
 
 let seq = 1;
@@ -135,6 +137,57 @@ function GroupLayer({
           </div>
         );
       })}
+    </ViewportPortal>
+  );
+}
+
+/**
+ * Collaborators' pointers, drawn in flow coordinates so they sit over the same
+ * part for everyone regardless of how each person has panned or zoomed —
+ * sharing screen coordinates would put a peer's cursor somewhere meaningless.
+ */
+function CursorLayer({ peers }: { peers: CursorState[] }) {
+  return (
+    <ViewportPortal>
+      {peers.map((peer) => (
+        <div
+          key={peer.userId}
+          style={{
+            position: "absolute",
+            transform: `translate(${peer.x}px, ${peer.y}px)`,
+            pointerEvents: "none",
+            zIndex: 1000,
+            // No transition: a moving cursor is already smoothed by the send
+            // rate, and easing would make it lag behind the person's real one.
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" style={{ display: "block" }}>
+            <path
+              d="M2 2 L2 14 L5.5 10.8 L7.8 15.6 L10.2 14.5 L7.9 9.8 L12.4 9.6 Z"
+              fill={peer.color}
+              stroke="#0b0b0b"
+              strokeWidth={1}
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span
+            style={{
+              position: "absolute",
+              top: 16,
+              left: 12,
+              background: peer.color,
+              color: "#0b0b0b",
+              fontSize: 10,
+              fontWeight: 600,
+              padding: "1px 6px",
+              borderRadius: 5,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {peer.name}
+          </span>
+        </div>
+      ))}
     </ViewportPortal>
   );
 }
@@ -474,6 +527,23 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
   );
 
   const { screenToFlowPosition } = useReactFlow();
+
+  // Live cursors. Positions are published in flow coordinates so a peer's
+  // pointer lands on the same part for everyone, whatever their pan and zoom.
+  const viewer = trpc.project.viewer.useQuery();
+  const cursors = useCursors(projectId, branchId, "schematic", {
+    userId: viewer.data?.id ?? "anonymous",
+    name: viewer.data?.name ?? "Someone",
+  });
+  const reportCursor = cursors.report;
+
+  const onCanvasPointerMove = useCallback(
+    (e: React.MouseEvent) => {
+      const at = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      reportCursor(at.x, at.y);
+    },
+    [screenToFlowPosition, reportCursor],
+  );
   /** Anchor of the region drag, in flow coordinates. */
   const groupAnchorRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -607,7 +677,10 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
       // React Flow exposes no pane mouse-down, so the region drag is handled on
       // the container. Every handler no-ops unless the region tool is active.
       onMouseDown={onPaneMouseDown}
-      onMouseMove={onPaneMouseMove}
+      onMouseMove={(e) => {
+        onPaneMouseMove(e);
+        onCanvasPointerMove(e);
+      }}
       onMouseUp={onPaneMouseUp}
       onMouseLeave={onPaneMouseUp}
     >
@@ -638,6 +711,8 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
         className="!bg-transparent"
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--color-border)" />
+
+        <CursorLayer peers={cursors.peers} />
 
         <GroupLayer
           groups={groups}
