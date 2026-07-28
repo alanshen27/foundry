@@ -21,6 +21,7 @@ import type { UIMessage } from "ai";
 import type { Stage } from "@foundry/domain";
 import { Button } from "@/components/ui/button";
 import { FoundryMark } from "@/components/foundry-mark";
+import { InteractiveDotField } from "@/components/interactive-dot-field";
 import { PresenceBar } from "@/components/presence-bar";
 import { ShareButton } from "@/components/share-button";
 import { SignalIconTile } from "@/components/signal-icons";
@@ -317,7 +318,12 @@ function ShellInner({
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <main className="relative min-w-0 flex-1 overflow-auto">{children}</main>
+        <main className="relative min-w-0 flex-1 overflow-auto">
+          <div className="pointer-events-none sticky top-0 -mb-[100dvh] h-[100dvh] w-full">
+            <InteractiveDotField gap={16} radius={52} />
+          </div>
+          <div className="relative z-10 h-full">{children}</div>
+        </main>
         <ChatSidebar />
       </div>
 

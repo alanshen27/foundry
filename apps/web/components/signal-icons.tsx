@@ -6,8 +6,6 @@ import { cn } from "@/lib/utils";
  * Sharp corners only (Nothing / digital display vibe).
  */
 
-const U = 3;
-
 function hashSeed(seed: string): number {
   let h = 2166136261;
   for (let i = 0; i < seed.length; i += 1) {
@@ -17,23 +15,29 @@ function hashSeed(seed: string): number {
   return h >>> 0;
 }
 
-/** Folder mark drawn in white on an orange tile. */
+/**
+ * Folder mark drawn in white on an orange tile: crisp pixel folder — tab,
+ * body, two document lines — dissolving into the matrix on its right edge.
+ */
 export function FolderGlyph({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 32 32" fill="currentColor" className={className} aria-hidden>
-      <rect x={1} y={15} width={U} height={U} opacity={0.22} />
-      <rect x={4} y={12} width={U} height={U} opacity={0.45} />
-      <rect x={4} y={16} width={U} height={U} opacity={0.8} />
-      <rect x={4} y={20} width={U} height={U} opacity={0.35} />
-      <rect x={7} y={10} width={U} height={U} opacity={0.6} />
-      <rect x={7} y={14} width={U} height={U} />
-      <rect x={7} y={18} width={U} height={U} />
-      <rect x={7} y={22} width={U} height={U} opacity={0.55} />
-
-      <rect x={10} y={9} width={9} height={4} />
-      <rect x={19} y={9} width={U} height={4} opacity={0.4} />
-      <rect x={10} y={13} width={17} height={14} />
-      <rect x={14} y={17} width={8} height={5} className="fill-[var(--glyph-void,#ff5a00)]" />
+      {/* Tab */}
+      <rect x={5} y={7} width={10} height={3} />
+      <rect x={15} y={8} width={2} height={2} opacity={0.7} />
+      {/* Body */}
+      <rect x={5} y={11} width={21} height={15} />
+      {/* Document lines carved out of the body */}
+      <rect x={9} y={15} width={13} height={2} className="fill-[var(--glyph-void,#ff5a00)]" />
+      <rect x={9} y={19} width={9} height={2} className="fill-[var(--glyph-void,#ff5a00)]" />
+      {/* Right-edge dissolve */}
+      <rect x={26} y={11} width={2} height={2} opacity={0.75} />
+      <rect x={26} y={15} width={2} height={2} opacity={0.45} />
+      <rect x={26} y={19} width={2} height={2} opacity={0.75} />
+      <rect x={26} y={23} width={2} height={2} opacity={0.35} />
+      <rect x={28.5} y={13} width={2} height={2} opacity={0.3} />
+      <rect x={28.5} y={17} width={2} height={2} opacity={0.5} />
+      <rect x={28.5} y={21} width={2} height={2} opacity={0.22} />
     </svg>
   );
 }

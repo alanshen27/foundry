@@ -119,7 +119,10 @@ function FolderRow({
           {open ? (
             <FolderOpen className={cn("size-[15px] shrink-0", color.icon)} strokeWidth={1.75} />
           ) : (
-            <Folder className={cn("size-[15px] shrink-0", color.icon)} strokeWidth={1.75} />
+            <Folder
+              className={cn("size-[15px] shrink-0 fill-current", color.icon)}
+              strokeWidth={1.5}
+            />
           )}
           <span className="min-w-0 flex-1 truncate">{folder.name}</span>
         </Link>
