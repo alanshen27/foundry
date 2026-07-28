@@ -10,7 +10,7 @@ import {
 } from "@/lib/pcb/netlist";
 
 function circuit(partial: Partial<CircuitDoc> = {}): CircuitDoc {
-  return { version: 2, parts: [], wires: [], ...partial };
+  return { version: 2, parts: [], wires: [], groups: [], ...partial };
 }
 
 /** Two resistors in series off a 5V rail — the smallest useful netlist. */

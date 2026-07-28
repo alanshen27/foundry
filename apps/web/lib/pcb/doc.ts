@@ -163,12 +163,33 @@ export const DEFAULT_RULES: PcbRules = {
 
 export type PcbDoc = {
   version: 1;
+  /** Stable id within a PcbSet. Legacy single-board documents get "board-1". */
+  id?: string;
+  /** Shown in the board switcher; defaults to the bound group's label. */
+  name?: string;
+  /** Schematic group this board realises, if the schematic is partitioned. */
+  groupId?: string;
   board: PcbBoard;
   footprints: PcbFootprint[];
   tracks: PcbTrack[];
   vias: PcbVia[];
   zones: PcbZone[];
   rules: PcbRules;
+};
+
+/**
+ * Every board in a project. One schematic can be split across several physical
+ * boards (see lib/circuit/groups.ts), so the PCB document is a set rather than
+ * a single layout.
+ *
+ * Stored in the same DesignDoc row as before. `normalizePcbSet` accepts a bare
+ * legacy PcbDoc and lifts it into a one-board set, so no migration is needed
+ * and an existing project keeps its layout.
+ */
+export type PcbSet = {
+  version: 2;
+  boards: PcbDoc[];
+  activeBoardId?: string;
 };
 
 export const EMPTY_PCB: PcbDoc = {
@@ -618,11 +639,78 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
 
   return {
     version: 1,
+    id: typeof obj.id === "string" && obj.id ? obj.id.slice(0, 60) : undefined,
+    name: typeof obj.name === "string" && obj.name.trim() ? obj.name.trim().slice(0, 60) : undefined,
+    groupId:
+      typeof obj.groupId === "string" && obj.groupId.trim()
+        ? obj.groupId.trim().slice(0, 60)
+        : undefined,
     board,
     footprints,
     tracks: normalizeTracks(obj.tracks, board),
     vias: normalizeVias(obj.vias, board),
     zones: normalizeZones(obj.zones, board),
     rules: normalizeRules(obj.rules),
+  };
+}
+
+/**
+ * Accepts either a PcbSet or a single legacy PcbDoc and always returns a set
+ * with at least one board, so callers never special-case the old shape.
+ */
+export function normalizePcbSet(raw: unknown): PcbSet {
+  const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+
+  const rawBoards = Array.isArray(obj.boards)
+    ? obj.boards
+    : // A legacy document is the board itself.
+      [obj];
+
+  const boards = rawBoards.map((b, i) => {
+    const doc = normalizePcbDoc(b);
+    return { ...doc, id: doc.id ?? `board-${i + 1}`, name: doc.name ?? `Board ${i + 1}` };
+  });
+
+  if (boards.length === 0) {
+    boards.push({ ...emptyPcbDoc(), id: "board-1", name: "Board 1" });
+  }
+
+  // Ids must be unique or the switcher and the save path address the wrong one.
+  const seen = new Set<string>();
+  for (const b of boards) {
+    let id = b.id!;
+    let n = 2;
+    while (seen.has(id)) id = `${b.id}-${n++}`;
+    b.id = id;
+    seen.add(id);
+  }
+
+  const activeBoardId =
+    typeof obj.activeBoardId === "string" && boards.some((b) => b.id === obj.activeBoardId)
+      ? obj.activeBoardId
+      : boards[0]!.id;
+
+  return { version: 2, boards, activeBoardId };
+}
+
+export function emptyPcbSet(): PcbSet {
+  return {
+    version: 2,
+    boards: [{ ...emptyPcbDoc(), id: "board-1", name: "Board 1" }],
+    activeBoardId: "board-1",
+  };
+}
+
+/** A new board, named after the group it realises when there is one. */
+export function createBoard(existing: PcbDoc[], groupId?: string, label?: string): PcbDoc {
+  const used = new Set(existing.map((b) => b.id));
+  let i = existing.length + 1;
+  let id = `board-${i}`;
+  while (used.has(id)) id = `board-${++i}`;
+  return {
+    ...emptyPcbDoc(),
+    id,
+    name: label ?? `Board ${i}`,
+    groupId,
   };
 }

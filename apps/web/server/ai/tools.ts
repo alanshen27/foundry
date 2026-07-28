@@ -10,13 +10,15 @@ import {
   type WokwiDiagram,
 } from "@/lib/circuit/catalog";
 import {
-  emptyPcbDoc,
+  emptyPcbSet,
   FOOTPRINT_IDS,
   normalizePcbDoc,
+  normalizePcbSet,
   unsupportedFootprintIds,
 } from "@/lib/pcb/doc";
 import { buildNets, buildRatsnest } from "@/lib/pcb/netlist";
 import { runDrc } from "@/lib/pcb/drc";
+import { circuitForGroup, partitionBoards } from "@/lib/circuit/groups";
 import { boardPads } from "@/lib/pcb/geometry";
 import { isPlausibleZooOpId } from "@foundry/cad";
 import {
@@ -102,6 +104,21 @@ const circuitSchema = z.object({
 type CircuitInput = z.infer<typeof circuitSchema>;
 
 const pcbSchema = z.object({
+  boardId: z
+    .string()
+    .max(60)
+    .optional()
+    .describe(
+      "Which board to write, from get_project_state pcb.boards[].id. Omit for the only/active board. A new id creates a board.",
+    ),
+  boardName: z.string().max(60).optional().describe("Display name, e.g. 'Sensor board'."),
+  groupId: z
+    .string()
+    .max(60)
+    .optional()
+    .describe(
+      "Schematic region this board realises, from get_project_state schematicBoards[].id. Sets which parts and nets belong to it; omit when the schematic is not split.",
+    ),
   board: z.object({
     widthMm: z.number().min(5).max(500).describe("Board outline width in mm"),
     heightMm: z.number().min(5).max(500).describe("Board outline height in mm"),
@@ -435,19 +452,48 @@ export function buildProjectTools(ctx: ToolContext) {
             validationChecks: checks,
             stages: stageStates.map((s) => ({ stage: s.stage, status: s.status })),
             circuit: circuitDoc,
-            pcb: pcb?.data ? normalizePcbDoc(pcb.data) : null,
+            pcb: pcb?.data ? normalizePcbSet(pcb.data) : null,
+            /**
+             * How the schematic is split across physical boards. Regions are
+             * drawn on the schematic canvas; a net listed in `crossings` has
+             * pins on two boards and cannot be a trace — it needs a connector
+             * on each board and a cable between them.
+             */
+            schematicBoards: circuitDoc
+              ? (() => {
+                  const p = partitionBoards(circuitDoc);
+                  return {
+                    regions: p.slices.map((s) => ({
+                      id: s.group.id,
+                      label: s.group.label,
+                      parts: s.partIds,
+                      internalNets: s.internalNets,
+                      netsNeedingConnectors: s.crossingNets,
+                    })),
+                    crossings: p.crossings.map((c) => ({
+                      net: c.net,
+                      betweenBoards: c.groupLabels,
+                    })),
+                    partsOnNoBoard: p.ungroupedPartIds,
+                    overlappingRegions: p.overlaps.map((o) => [o.aLabel, o.bLabel]),
+                  };
+                })()
+              : null,
             // Every pad's board position and reachable layers. Routing needs
             // these exact coordinates: a track connects only if its endpoint
             // lands on the pad, so the model cannot guess them from the
             // footprint centre alone.
             pcbPads: pcb?.data
-              ? boardPads(normalizePcbDoc(pcb.data).footprints).map((p) => ({
-                  refDes: p.refDes,
-                  pin: p.pin,
-                  xMm: Number(p.xMm.toFixed(3)),
-                  yMm: Number(p.yMm.toFixed(3)),
-                  layers: p.layers,
-                }))
+              ? normalizePcbSet(pcb.data).boards.flatMap((b) =>
+                  boardPads(b.footprints).map((p) => ({
+                    boardId: b.id,
+                    refDes: p.refDes,
+                    pin: p.pin,
+                    xMm: Number(p.xMm.toFixed(3)),
+                    yMm: Number(p.yMm.toFixed(3)),
+                    layers: p.layers,
+                  })),
+                )
               : [],
             // Nets derived from the schematic's wires, so PCB placement can be
             // checked against them. Empty until the schematic has wires.
@@ -933,11 +979,11 @@ export function buildProjectTools(ctx: ToolContext) {
 
     clear_pcb: {
       description:
-        "Clear the PCB board layout (Engineer > PCB): reset outline to defaults and remove all footprints, tracks and vias. Does not touch the schematic.",
+        "Clear the PCB layout (Engineer > PCB): remove every board and reset to a single empty one. Does not touch the schematic.",
       inputSchema: z.object({}),
       execute: async () =>
         guard(ctx, "electronics.edit", async (workspaceId) => {
-          const data = emptyPcbDoc();
+          const data = emptyPcbSet();
           await prisma.designDoc.upsert({
             where: { projectId_branchId_kind: { projectId, branchId, kind: "PCB" } },
             create: {
@@ -968,7 +1014,9 @@ export function buildProjectTools(ctx: ToolContext) {
 
 Routing: place first, render, then route. Each track's endpoints must sit exactly on pad centres — get_project_state lists every pad's board position — because connection is decided geometrically, not by the net field. Front-side SMD pads exist only on F.Cu, so a B.Cu track cannot reach one without a via; through-hole pads (pin headers, USB-C tabs) reach both layers. Route on one layer where you can and use B.Cu with vias at both ends only to cross. The result reports routed/total connections and every DRC violation, so re-check it after each call.
 
-Pours: a GND zone covering the board is usually the last step and removes most GND routing, since it connects every GND pad it surrounds. Draw it inset from the edge by at least the clearance, and route the signal nets first — a pour clears around whatever copper already exists.`,
+Pours: a GND zone covering the board is usually the last step and removes most GND routing, since it connects every GND pad it surrounds. Draw it inset from the edge by at least the clearance, and route the signal nets first — a pour clears around whatever copper already exists.
+
+Multiple boards: when get_project_state reports schematicBoards.regions, each region is a separate physical board. Call this once per board with its own boardId and groupId, and place only that region's parts. Nets in schematicBoards.crossings have pins on two boards, so they cannot be traces — give each board a connector footprint (PinHeader_1x04) for them; this board's ratsnest deliberately excludes them.`,
       inputSchema: pcbSchema,
       execute: async (input: PcbInput) =>
         guard(ctx, "electronics.edit", async (workspaceId) => {
@@ -983,9 +1031,15 @@ Pours: a GND zone covering the board is usually the last step and removes most G
           const existing = await prisma.designDoc.findUnique({
             where: { projectId_branchId_kind: { projectId, branchId, kind: "PCB" } },
           });
-          const previous = existing?.data ? normalizePcbDoc(existing.data) : null;
+          const set = normalizePcbSet(existing?.data ?? null);
+          const targetId = input.boardId ?? set.activeBoardId ?? set.boards[0]!.id!;
+          const previous = set.boards.find((b) => b.id === targetId) ?? null;
+
           const data = normalizePcbDoc({
             version: 1,
+            id: targetId,
+            name: input.boardName ?? previous?.name,
+            groupId: input.groupId ?? previous?.groupId,
             board: input.board,
             footprints: input.footprints,
             tracks: input.tracks ?? previous?.tracks ?? [],
@@ -993,16 +1047,22 @@ Pours: a GND zone covering the board is usually the last step and removes most G
             zones: input.zones ?? previous?.zones ?? [],
             rules: input.rules ?? previous?.rules,
           });
+
+          // A boardId that names no existing board adds one.
+          const boards = previous
+            ? set.boards.map((b) => (b.id === targetId ? data : b))
+            : [...set.boards, data];
+          const nextSet = { version: 2 as const, boards, activeBoardId: targetId };
           await prisma.designDoc.upsert({
             where: { projectId_branchId_kind: { projectId, branchId, kind: "PCB" } },
             create: {
               projectId,
               branchId,
               kind: "PCB",
-              data: data as unknown as Prisma.InputJsonValue,
+              data: nextSet as unknown as Prisma.InputJsonValue,
               updatedById: ctx.userId,
             },
-            update: { data: data as unknown as Prisma.InputJsonValue, updatedById: ctx.userId },
+            update: { data: nextSet as unknown as Prisma.InputJsonValue, updatedById: ctx.userId },
           });
           await recordAudit({
             type: "DesignDocUpdated",
@@ -1026,8 +1086,11 @@ Pours: a GND zone covering the board is usually the last step and removes most G
           });
           const circuit = circuitDoc?.data
             ? normalizeCircuitDoc(circuitDoc.data)
-            : { version: 2 as const, parts: [], wires: [] };
-          const ratsnest = buildRatsnest(circuit, data);
+            : { version: 2 as const, parts: [], wires: [], groups: [] };
+          // Only this board's slice of the schematic: a part on a sibling board
+          // is not an unplaced part here.
+          const slice = circuitForGroup(circuit, data.groupId ?? null);
+          const ratsnest = buildRatsnest(slice, data);
           const { nets, airwires, issues, routedCount, totalConnections } = ratsnest;
           const unresolved =
             issues.unlinkedParts.length +
@@ -1037,6 +1100,9 @@ Pours: a GND zone covering the board is usually the last step and removes most G
 
           return {
             ok: true,
+            boardId: data.id,
+            boardName: data.name,
+            boards: boards.length,
             board: data.board,
             footprints: data.footprints.length,
             tracks: data.tracks.length,

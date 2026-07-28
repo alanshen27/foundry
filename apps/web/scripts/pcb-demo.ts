@@ -31,6 +31,7 @@ const circuit: CircuitDoc = {
     { id: "w1", from: { part: "r1", pin: "2" }, to: { part: "r2", pin: "1" } },
     { id: "w2", from: { part: "r1", pin: "1" }, to: { part: "r3", pin: "1" } },
   ],
+  groups: [],
 };
 
 const placed = normalizePcbDoc({

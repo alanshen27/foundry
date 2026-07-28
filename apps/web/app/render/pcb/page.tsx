@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@foundry/db";
 import { verifyRenderToken } from "@/server/render-token";
-import { normalizePcbDoc } from "@/lib/pcb/doc";
+import { normalizePcbSet } from "@/lib/pcb/doc";
 import { EMPTY_CIRCUIT, normalizeCircuitDoc } from "@/lib/circuit/catalog";
+import { circuitForGroup } from "@/lib/circuit/groups";
 import { PcbRenderView } from "@/components/engineer/pcb-render-view";
 
 /**
@@ -38,8 +39,12 @@ export default async function PcbRenderPage({
       },
     }),
   ]);
-  const pcb = normalizePcbDoc(doc?.data ?? null);
-  const circuit = circuitDoc?.data ? normalizeCircuitDoc(circuitDoc.data) : EMPTY_CIRCUIT;
+  // Screenshots show the active board, and only its slice of the schematic —
+  // a sibling board's parts are not this board's problem.
+  const set = normalizePcbSet(doc?.data ?? null);
+  const pcb = set.boards.find((b) => b.id === set.activeBoardId) ?? set.boards[0]!;
+  const whole = circuitDoc?.data ? normalizeCircuitDoc(circuitDoc.data) : EMPTY_CIRCUIT;
+  const circuit = circuitForGroup(whole, pcb.groupId ?? null);
 
   return (
     <div className="bg-neutral-950 fixed inset-0">

@@ -33,6 +33,7 @@ function gndCircuit(): CircuitDoc {
       { id: "w2", from: { part: "uno", pin: "GND.1" }, to: { part: "r2", pin: "2" } },
       { id: "w3", from: { part: "r1", pin: "2" }, to: { part: "r2", pin: "1" } },
     ],
+    groups: [],
   };
 }
 

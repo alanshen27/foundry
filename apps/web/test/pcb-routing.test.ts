@@ -6,7 +6,7 @@ import { buildCopperGraph, padAt, trackAt, viaAt } from "@/lib/pcb/routing";
 import { boardPads, pointPadDistance, segmentSegmentDistance } from "@/lib/pcb/geometry";
 
 function circuit(partial: Partial<CircuitDoc> = {}): CircuitDoc {
-  return { version: 2, parts: [], wires: [], ...partial };
+  return { version: 2, parts: [], wires: [], groups: [], ...partial };
 }
 
 /** R1 and R2 in series, so R1.2 and R2.1 share one net. */

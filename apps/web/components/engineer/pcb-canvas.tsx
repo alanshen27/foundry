@@ -26,8 +26,10 @@ import {
   Download,
   FlipHorizontal2,
   Layers,
+  Layers3,
   LayoutGrid,
   MousePointer2,
+  Plus,
   Redo2,
   RotateCw,
   Search,
@@ -44,10 +46,13 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
+  createBoard,
   createFootprint,
   emptyPcbDoc,
+  emptyPcbSet,
   footprintDef,
   normalizePcbDoc,
+  normalizePcbSet,
   pcbId,
   searchFootprints,
   type PcbBoard,
@@ -60,6 +65,7 @@ import {
   type PcbZone,
 } from "@/lib/pcb/doc";
 import { EMPTY_CIRCUIT, normalizeCircuitDoc } from "@/lib/circuit/catalog";
+import { circuitForGroup, partitionBoards } from "@/lib/circuit/groups";
 import { buildRatsnest, netsByPad, padNetMap } from "@/lib/pcb/netlist";
 import { buildCopperGraph, padAt, trackAt, viaAt, zoneAt } from "@/lib/pcb/routing";
 import { runDrc } from "@/lib/pcb/drc";
@@ -371,7 +377,27 @@ export function PcbCanvas({
   const circuitQuery = trpc.design.get.useQuery({ projectId, branchId, kind: "CIRCUIT" });
   const save = trpc.design.save.useMutation();
 
-  const [doc, setDoc] = useState<PcbDoc>(emptyPcbDoc);
+  /** Every board in the project; `doc` below is the one being edited. */
+  const [boards, setBoards] = useState<PcbDoc[]>(() => emptyPcbSet().boards);
+  const [activeBoardId, setActiveBoardId] = useState<string>("board-1");
+  const doc = useMemo(
+    () => boards.find((b) => b.id === activeBoardId) ?? boards[0] ?? emptyPcbDoc(),
+    [boards, activeBoardId],
+  );
+  /** Edits target the active board and write the whole set back. */
+  const setDoc = useCallback(
+    (update: PcbDoc | ((d: PcbDoc) => PcbDoc)) => {
+      setBoards((bs) =>
+        bs.map((b) => {
+          if (b.id !== activeBoardId) return b;
+          const next = typeof update === "function" ? update(b) : update;
+          // The id and binding are set by the switcher, never by an edit.
+          return { ...next, id: b.id, name: b.name, groupId: b.groupId };
+        }),
+      );
+    },
+    [activeBoardId],
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -404,6 +430,10 @@ export function PcbCanvas({
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const docRef = useRef(doc);
   docRef.current = doc;
+  const boardsRef = useRef(boards);
+  boardsRef.current = boards;
+  const activeBoardIdRef = useRef(activeBoardId);
+  activeBoardIdRef.current = activeBoardId;
   const saveRef = useRef(save);
   saveRef.current = save;
   const dragRef = useRef<{
@@ -472,7 +502,16 @@ export function PcbCanvas({
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       saveRef.current.mutate(
-        { projectId, branchId, kind: "PCB", data: docRef.current },
+        {
+          projectId,
+          branchId,
+          kind: "PCB",
+          data: {
+            version: 2,
+            boards: boardsRef.current,
+            activeBoardId: activeBoardIdRef.current,
+          },
+        },
         { onSuccess: () => (dirtyRef.current = false) },
       );
     }, 800);
@@ -480,7 +519,11 @@ export function PcbCanvas({
 
   useEffect(() => {
     if (dirtyRef.current) return;
-    setDoc(query.data ? normalizePcbDoc(query.data.data) : emptyPcbDoc());
+    const set = query.data ? normalizePcbSet(query.data.data) : emptyPcbSet();
+    setBoards(set.boards);
+    setActiveBoardId((current) =>
+      set.boards.some((b) => b.id === current) ? current : (set.activeBoardId ?? set.boards[0]!.id!),
+    );
   }, [query.data]);
 
   const undo = useCallback(() => {
@@ -573,10 +616,49 @@ export function PcbCanvas({
 
   const scale = PX_PER_MM * zoom;
 
-  const circuit = useMemo(
+  const fullCircuit = useMemo(
     () => (circuitQuery.data ? normalizeCircuitDoc(circuitQuery.data.data) : EMPTY_CIRCUIT),
     [circuitQuery.data],
   );
+  const partition = useMemo(() => partitionBoards(fullCircuit), [fullCircuit]);
+  /**
+   * Nets are derived from only this board's slice of the schematic. Without
+   * that, a part on a sibling board reads as "unplaced" here and the ratsnest
+   * demands a trace to copper that lives on another PCB entirely.
+   */
+  const circuit = useMemo(
+    () => circuitForGroup(fullCircuit, doc.groupId ?? null),
+    [fullCircuit, doc.groupId],
+  );
+  const boardSlice = partition.slices.find((s) => s.group.id === doc.groupId) ?? null;
+
+  const addBoard = useCallback(
+    (groupId?: string, label?: string) => {
+      const made = createBoard(boardsRef.current, groupId, label);
+      setBoards((bs) => [...bs, made]);
+      setActiveBoardId(made.id!);
+      dirtyRef.current = true;
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  const patchBoardMeta = useCallback(
+    (patch: Partial<Pick<PcbDoc, "name" | "groupId">>) => {
+      setBoards((bs) => bs.map((b) => (b.id === activeBoardIdRef.current ? { ...b, ...patch } : b)));
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  const deleteBoard = useCallback(() => {
+    const remaining = boardsRef.current.filter((b) => b.id !== activeBoardIdRef.current);
+    // A project always has at least one board to edit.
+    if (remaining.length === 0) return;
+    setBoards(remaining);
+    setActiveBoardId(remaining[0]!.id!);
+    scheduleSave();
+  }, [scheduleSave]);
   // Zones pour around a named net, so the graph needs the schematic's pad->net
   // mapping before it can decide what a pour connects.
   const padNetKeys = useMemo(() => padNetMap(circuit, doc), [circuit, doc]);
@@ -1061,6 +1143,32 @@ export function PcbCanvas({
       {/* Canvas */}
       <div className="relative min-w-0 flex-1">
         <div className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-1.5">
+          {/* Board switcher. Present even with one board so it is discoverable. */}
+          <div className="bg-card/90 flex items-center gap-1 rounded-lg border px-1.5 py-0.5 shadow-lg backdrop-blur-md">
+            <Layers3 className="text-muted-foreground size-3" />
+            <select
+              value={activeBoardId}
+              onChange={(e) => setActiveBoardId(e.target.value)}
+              className="max-w-40 bg-transparent text-[11px] outline-none"
+              aria-label="Active board"
+            >
+              {boards.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name ?? b.id}
+                </option>
+              ))}
+            </select>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={!canEdit}
+              onClick={() => addBoard()}
+              title="Add a board"
+            >
+              <Plus className="size-3" />
+            </Button>
+          </div>
+
           <div className="bg-card/90 flex items-center gap-0.5 rounded-lg border p-0.5 shadow-lg backdrop-blur-md">
             <Button
               variant={viewMode === "2d" ? "secondary" : "ghost"}
@@ -1520,6 +1628,68 @@ export function PcbCanvas({
                 <span className="font-mono text-[11px]">{layer.label}</span>
               </label>
             ))}
+          </div>
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Board</h2>
+          <div className="flex flex-col gap-1.5">
+            <label className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground w-16 shrink-0">Name</span>
+              <Input
+                value={doc.name ?? ""}
+                disabled={!canEdit}
+                onChange={(e) => patchBoardMeta({ name: e.target.value })}
+                className="h-7 text-xs"
+                aria-label="Board name"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground w-16 shrink-0">Region</span>
+              <select
+                value={doc.groupId ?? ""}
+                disabled={!canEdit}
+                onChange={(e) => patchBoardMeta({ groupId: e.target.value || undefined })}
+                className="bg-background h-7 flex-1 rounded-md border px-1.5 text-xs"
+                aria-label="Schematic region"
+              >
+                <option value="">whole schematic</option>
+                {fullCircuit.groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {doc.groupId && !fullCircuit.groups.some((g) => g.id === doc.groupId) ? (
+              <p className="text-[10px] leading-snug text-amber-500">
+                This board points at a schematic region that no longer exists.
+              </p>
+            ) : null}
+            {boardSlice ? (
+              <p className="text-muted-foreground text-[10px] leading-snug">
+                {boardSlice.partIds.length} part
+                {boardSlice.partIds.length === 1 ? "" : "s"} in this region ·{" "}
+                {doc.footprints.filter((f) => f.partId).length} linked here
+              </p>
+            ) : null}
+            {boardSlice && boardSlice.crossingNets.length > 0 ? (
+              <p className="text-[10px] leading-snug text-amber-500">
+                Leaves this board: {boardSlice.crossingNets.join(", ")} — each needs a connector
+                footprint, and is excluded from this board&apos;s ratsnest.
+              </p>
+            ) : null}
+            {boards.length > 1 ? (
+              <Button
+                variant="destructive"
+                size="xs"
+                className="mt-0.5 self-start"
+                disabled={!canEdit}
+                onClick={deleteBoard}
+              >
+                <Trash2 className="size-3" /> Delete board
+              </Button>
+            ) : null}
           </div>
         </div>
 

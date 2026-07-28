@@ -5,7 +5,7 @@ import { buildRatsnest } from "@/lib/pcb/netlist";
 import { runDrc, type DrcViolation } from "@/lib/pcb/drc";
 
 function circuit(partial: Partial<CircuitDoc> = {}): CircuitDoc {
-  return { version: 2, parts: [], wires: [], ...partial };
+  return { version: 2, parts: [], wires: [], groups: [], ...partial };
 }
 
 /** R1.1 on the 5V rail, R1.2 tied to R2.1 — two distinct nets on one part. */

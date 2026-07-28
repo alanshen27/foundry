@@ -9,13 +9,16 @@ import {
   MiniMap,
   Panel,
   ReactFlow,
+  ReactFlowProvider,
+  ViewportPortal,
   useEdgesState,
   useNodesState,
+  useReactFlow,
   type Connection,
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { FileDown, RotateCw, Search, Trash2 } from "lucide-react";
+import { FileDown, RotateCw, Search, SquareDashed, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -33,6 +36,7 @@ import {
   searchCatalog,
   wokwiDiagramToDoc,
   type CircuitDoc,
+  type CircuitGroup,
   type CircuitPart,
   type WokwiDiagram,
 } from "@/lib/circuit/catalog";
@@ -43,6 +47,7 @@ import {
   docToGraph,
   type PartNode,
 } from "@/components/engineer/circuit-nodes";
+import { partitionBoards, type BoardPartition } from "@/lib/circuit/groups";
 import { trpc } from "@/lib/trpc";
 
 let seq = 1;
@@ -50,9 +55,79 @@ function uid(prefix: string) {
   return `${prefix}${Date.now().toString(36)}${seq++}`;
 }
 
-function graphToDoc(nodes: PartNode[], edges: Edge[]): CircuitDoc {
+/** Distinct border colours so adjacent board regions stay tellable apart. */
+const GROUP_COLORS = ["#38bdf8", "#a78bfa", "#34d399", "#fbbf24", "#fb7185", "#22d3ee"];
+
+/**
+ * Board regions, drawn in flow coordinates behind the parts. Rendered through
+ * ViewportPortal rather than as nodes so they never take part in selection,
+ * dragging or connection hit-testing — a region is a boundary, not a component.
+ */
+function GroupLayer({
+  groups,
+  partition,
+  activeId,
+  onSelect,
+}: {
+  groups: CircuitGroup[];
+  partition: BoardPartition;
+  activeId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <ViewportPortal>
+      {groups.map((g, i) => {
+        const color = g.color ?? GROUP_COLORS[i % GROUP_COLORS.length]!;
+        const slice = partition.slices.find((s) => s.group.id === g.id);
+        const active = g.id === activeId;
+        return (
+          <div
+            key={g.id}
+            onClick={() => onSelect(g.id)}
+            style={{
+              position: "absolute",
+              transform: `translate(${g.x}px, ${g.y}px)`,
+              width: g.w,
+              height: g.h,
+              border: `2px ${active ? "solid" : "dashed"} ${color}`,
+              borderRadius: 12,
+              background: `${color}0f`,
+              // Parts must stay clickable, so only the label chip takes clicks.
+              pointerEvents: "none",
+              zIndex: 0,
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                top: -11,
+                left: 10,
+                pointerEvents: "all",
+                cursor: "pointer",
+                background: color,
+                color: "#0b0b0b",
+                fontSize: 11,
+                fontWeight: 600,
+                padding: "1px 8px",
+                borderRadius: 6,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {g.label}
+              {slice ? ` · ${slice.partIds.length} parts` : ""}
+              {slice && slice.crossingNets.length > 0 ? ` · ${slice.crossingNets.length}↔` : ""}
+            </div>
+          </div>
+        );
+      })}
+    </ViewportPortal>
+  );
+}
+
+function graphToDoc(nodes: PartNode[], edges: Edge[], groups: CircuitGroup[] = []): CircuitDoc {
   return {
     version: 2,
+    groups,
     parts: nodes.map((n) => ({
       id: n.id,
       type: n.data.partType,
@@ -127,15 +202,18 @@ function ImportDialog({ onImport }: { onImport: (doc: CircuitDoc) => void }) {
   );
 }
 
-export function CircuitCanvas({
-  projectId,
-  branchId,
-  canEdit,
-}: {
-  projectId: string;
-  branchId: string;
-  canEdit: boolean;
-}) {
+type CanvasProps = { projectId: string; branchId: string; canEdit: boolean };
+
+/** Provider wrapper: the inner canvas needs screenToFlowPosition for regions. */
+export function CircuitCanvas(props: CanvasProps) {
+  return (
+    <ReactFlowProvider>
+      <CircuitCanvasInner {...props} />
+    </ReactFlowProvider>
+  );
+}
+
+function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
   const query = trpc.design.get.useQuery({ projectId, branchId, kind: "CIRCUIT" });
   const save = trpc.design.save.useMutation();
 
@@ -143,10 +221,17 @@ export function CircuitCanvas({
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [groups, setGroups] = useState<CircuitGroup[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
+  /** Region being dragged out, in flow coordinates. */
+  const [groupDraft, setGroupDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(
+    null,
+  );
+  const [groupTool, setGroupTool] = useState(false);
   const dirtyRef = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stateRef = useRef({ nodes, edges });
-  stateRef.current = { nodes, edges };
+  const stateRef = useRef({ nodes, edges, groups });
+  stateRef.current = { nodes, edges, groups };
   const saveRef = useRef(save);
   saveRef.current = save;
 
@@ -155,9 +240,9 @@ export function CircuitCanvas({
     dirtyRef.current = true;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const { nodes: n, edges: e } = stateRef.current;
+      const { nodes: n, edges: e, groups: g } = stateRef.current;
       saveRef.current.mutate(
-        { projectId, branchId, kind: "CIRCUIT", data: graphToDoc(n, e) },
+        { projectId, branchId, kind: "CIRCUIT", data: graphToDoc(n, e, g) },
         { onSuccess: () => (dirtyRef.current = false) },
       );
     }, 800);
@@ -170,6 +255,7 @@ export function CircuitCanvas({
     const graph = docToGraph(doc, canEdit);
     setNodes(graph.nodes);
     setEdges(graph.edges);
+    setGroups(doc.groups);
   }, [query.data, canEdit, setNodes, setEdges]);
 
   const onConnect = useCallback(
@@ -242,13 +328,103 @@ export function CircuitCanvas({
     [selectedId, setNodes, scheduleSave],
   );
 
+  const { screenToFlowPosition } = useReactFlow();
+  /** Anchor of the region drag, in flow coordinates. */
+  const groupAnchorRef = useRef<{ x: number; y: number } | null>(null);
+
+  const onPaneMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (!groupTool || !canEdit || e.button !== 0) return;
+      const at = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      groupAnchorRef.current = at;
+      setGroupDraft({ x: at.x, y: at.y, w: 0, h: 0 });
+    },
+    [groupTool, canEdit, screenToFlowPosition],
+  );
+
+  const onPaneMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      const anchor = groupAnchorRef.current;
+      if (!anchor) return;
+      const at = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      // Normalised so dragging up or left still yields a positive extent.
+      setGroupDraft({
+        x: Math.min(anchor.x, at.x),
+        y: Math.min(anchor.y, at.y),
+        w: Math.abs(at.x - anchor.x),
+        h: Math.abs(at.y - anchor.y),
+      });
+    },
+    [screenToFlowPosition],
+  );
+
+  const addGroup = useCallback(
+    (rect: { x: number; y: number; w: number; h: number }) => {
+      // A stray click is a zero-size drag, not an attempt to make a board.
+      if (rect.w < 40 || rect.h < 40) return;
+      const id = uid("g");
+      setGroups((gs) => [
+        ...gs,
+        { id, label: `Board ${gs.length + 1}`, ...rect, color: GROUP_COLORS[gs.length % GROUP_COLORS.length] },
+      ]);
+      setActiveGroupId(id);
+      // One region per activation: the tool suppresses panning while it is on,
+      // so leaving it armed would look like a broken canvas.
+      setGroupTool(false);
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  const onPaneMouseUp = useCallback(() => {
+    const draft = groupDraft;
+    groupAnchorRef.current = null;
+    setGroupDraft(null);
+    if (draft) addGroup(draft);
+  }, [groupDraft, addGroup]);
+
+  const patchGroup = useCallback(
+    (id: string, patch: Partial<CircuitGroup>) => {
+      setGroups((gs) => gs.map((g) => (g.id === id ? { ...g, ...patch } : g)));
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  const deleteGroup = useCallback(
+    (id: string) => {
+      setGroups((gs) => gs.filter((g) => g.id !== id));
+      setActiveGroupId((current) => (current === id ? null : current));
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
   const { theme } = useTheme();
   const results = useMemo(() => searchCatalog(search), [search]);
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
   const isDark = theme.mode === "dark";
 
+  // Live view of how the schematic splits across boards. Recomputed from the
+  // canvas state rather than the saved document so dragging a part between
+  // regions updates the crossing count immediately.
+  const partition = useMemo(
+    () => partitionBoards(graphToDoc(nodes, edges, groups)),
+    [nodes, edges, groups],
+  );
+  const activeGroup = groups.find((g) => g.id === activeGroupId) ?? null;
+  const activeSlice = partition.slices.find((s) => s.group.id === activeGroupId) ?? null;
+
   return (
-    <div className="bg-background absolute inset-0">
+    <div
+      className="bg-background absolute inset-0"
+      // React Flow exposes no pane mouse-down, so the region drag is handled on
+      // the container. Every handler no-ops unless the region tool is active.
+      onMouseDown={onPaneMouseDown}
+      onMouseMove={onPaneMouseMove}
+      onMouseUp={onPaneMouseUp}
+      onMouseLeave={onPaneMouseUp}
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -266,6 +442,8 @@ export function CircuitCanvas({
         connectionMode={ConnectionMode.Loose}
         nodesConnectable={canEdit}
         elementsSelectable
+        // Dragging out a region must not pan the canvas at the same time.
+        panOnDrag={!groupTool}
         deleteKeyCode={canEdit ? ["Backspace", "Delete"] : []}
         fitView
         minZoom={0.2}
@@ -274,6 +452,30 @@ export function CircuitCanvas({
         className="!bg-transparent"
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--color-border)" />
+
+        <GroupLayer
+          groups={groups}
+          partition={partition}
+          activeId={activeGroupId}
+          onSelect={setActiveGroupId}
+        />
+
+        {groupDraft ? (
+          <ViewportPortal>
+            <div
+              style={{
+                position: "absolute",
+                transform: `translate(${groupDraft.x}px, ${groupDraft.y}px)`,
+                width: groupDraft.w,
+                height: groupDraft.h,
+                border: "2px dashed var(--color-primary)",
+                borderRadius: 12,
+                background: "rgb(56 189 248 / 0.08)",
+                pointerEvents: "none",
+              }}
+            />
+          </ViewportPortal>
+        ) : null}
         <Controls position="bottom-left" showInteractive={false} />
         <MiniMap
           position="bottom-right"
@@ -374,9 +576,84 @@ export function CircuitCanvas({
           </Panel>
         ) : null}
 
+        {canEdit ? (
+          <Panel position="top-center" className="!m-3">
+            <div className="bg-card/90 flex max-w-md flex-col gap-2 rounded-xl border p-2.5 shadow-lg backdrop-blur-md">
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant={groupTool ? "secondary" : "outline"}
+                  size="xs"
+                  onClick={() => setGroupTool((t) => !t)}
+                  aria-pressed={groupTool}
+                  title="Drag a rectangle around the parts that become one board"
+                >
+                  <SquareDashed className="size-3" /> Board region
+                </Button>
+                <span className="text-muted-foreground text-[10px]">
+                  {groups.length === 0
+                    ? "No regions — the whole schematic is one board."
+                    : `${groups.length} board${groups.length === 1 ? "" : "s"} · ${partition.crossings.length} net${partition.crossings.length === 1 ? "" : "s"} crossing`}
+                </span>
+              </div>
+
+              {activeGroup ? (
+                <div className="flex flex-col gap-1.5 border-t pt-2">
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      value={activeGroup.label}
+                      onChange={(e) => patchGroup(activeGroup.id, { label: e.target.value })}
+                      className="h-7 flex-1 text-xs"
+                      aria-label="Board region name"
+                    />
+                    <Button
+                      variant="destructive"
+                      size="xs"
+                      onClick={() => deleteGroup(activeGroup.id)}
+                    >
+                      <Trash2 className="size-3" />
+                    </Button>
+                  </div>
+                  <p className="text-muted-foreground text-[10px] leading-snug">
+                    {activeSlice?.partIds.length ?? 0} parts ·{" "}
+                    {activeSlice?.internalNets.length ?? 0} internal nets ·{" "}
+                    {activeSlice?.crossingNets.length ?? 0} needing a connector
+                  </p>
+                  {activeSlice && activeSlice.crossingNets.length > 0 ? (
+                    <p className="text-[10px] leading-snug text-amber-500">
+                      Leaves this board: {activeSlice.crossingNets.join(", ")}. Each needs a
+                      connector footprint on both boards.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {partition.overlaps.length > 0 ? (
+                <p className="text-[10px] leading-snug text-amber-500">
+                  {partition.overlaps
+                    .map((o) => `${o.aLabel} and ${o.bLabel} overlap`)
+                    .join("; ")}
+                  . Parts in the shared area go to the first region.
+                </p>
+              ) : null}
+
+              {groups.length > 0 && partition.ungroupedPartIds.length > 0 ? (
+                <p className="text-muted-foreground text-[10px] leading-snug">
+                  {partition.ungroupedPartIds.length} part
+                  {partition.ungroupedPartIds.length === 1 ? "" : "s"} outside every region — they
+                  are on no board yet.
+                </p>
+              ) : null}
+            </div>
+          </Panel>
+        ) : null}
+
         <Panel position="bottom-center" className="!mb-3">
           <span className="bg-card/85 text-muted-foreground rounded-lg border px-2.5 py-1 text-[11px] shadow backdrop-blur-md">
-            {save.isPending ? "Saving…" : "Autosaves · drag pins to wire · ⌫ deletes"}
+            {save.isPending
+              ? "Saving…"
+              : groupTool
+                ? "Drag a rectangle to mark a board region"
+                : "Autosaves · drag pins to wire · ⌫ deletes"}
           </span>
         </Panel>
       </ReactFlow>
