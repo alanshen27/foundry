@@ -14,6 +14,10 @@ const nextConfig: NextConfig = {
   // Lets a second instance (tests, agents) run without clobbering the main
   // dev server's build cache: NEXT_DIST_DIR=.next-test pnpm dev --port 3100
   distDir: process.env.NEXT_DIST_DIR || ".next",
+  // Lint via root `pnpm lint` (CI). Next's build-time ESLint doesn't load our
+  // flat config plugins and fails deploys on eslint-disable comments for
+  // @next/* / react-hooks/* rules that aren't registered there.
+  eslint: { ignoreDuringBuilds: true },
   transpilePackages: [
     "@foundry/auth",
     "@foundry/cad",

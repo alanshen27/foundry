@@ -38,7 +38,7 @@ export function DotMatrixLoader({
     let dpr = 1;
     let raf = 0;
     let running = true;
-    let t0 = performance.now();
+    const t0 = performance.now();
 
     function color(): string {
       if (tone === "signal") return "#faf9f5";
