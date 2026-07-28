@@ -20,11 +20,9 @@ export function createSupabaseBroadcastPort(config: SupabaseBroadcastConfig): Br
   return {
     subscribe(channel, onMessage): BroadcastSubscription {
       const room = client.channel(channel);
-      for (const event of ["chunk", "run-started", "run-finished"] as const) {
-        room.on("broadcast", { event }, ({ payload }) => {
-          onMessage({ event, payload });
-        });
-      }
+      room.on("broadcast", { event: "*" }, ({ event, payload }) => {
+        onMessage({ event, payload });
+      });
       void room.subscribe();
       return {
         leave: () => {

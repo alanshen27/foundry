@@ -1,4 +1,4 @@
-import type { SiteBuilderPort } from "./port";
+import type { SiteBuilderPort, SiteMessage, SiteRevision, SiteWorkspace } from "./port";
 
 /**
  * SIMULATED site builder for dev/e2e when V0_API_KEY is unset.
@@ -9,25 +9,65 @@ import type { SiteBuilderPort } from "./port";
  */
 export function createSimulatedSiteBuilder(): SiteBuilderPort {
   let counter = 0;
+  const workspaces = new Map<string, SiteWorkspace>();
 
-  const revision = (chatId: string) => ({
-    ok: true as const,
-    data: {
+  function revision(chatId: string): SiteRevision {
+    return {
       chatId,
       versionId: `${chatId}-v${++counter}`,
       previewUrl: null,
       builderUrl: null,
       simulated: true,
-    },
-  });
+    };
+  }
+
+  function message(chatId: string, role: SiteMessage["role"], content: string): SiteMessage {
+    return {
+      id: `${chatId}-message-${++counter}`,
+      role,
+      content,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  function simulatedReply(chatId: string): SiteMessage {
+    return message(
+      chatId,
+      "assistant",
+      "SIMULATED mode: no site or source code was generated. Configure V0_API_KEY to use the native preview, code, and chat workspace.",
+    );
+  }
 
   return {
-    async createSite() {
-      return revision(`simulated-${Date.now()}-${++counter}`);
+    async getSite(chatId) {
+      const workspace = workspaces.get(chatId);
+      return workspace
+        ? { ok: true, data: workspace }
+        : { ok: false, error: "Simulated site conversation not found" };
     },
 
-    async reviseSite(chatId) {
-      return revision(chatId);
+    async createSite(prompt) {
+      const chatId = `simulated-${Date.now()}-${++counter}`;
+      const currentRevision = revision(chatId);
+      workspaces.set(chatId, {
+        chatId,
+        revision: currentRevision,
+        files: [],
+        messages: [message(chatId, "user", prompt), simulatedReply(chatId)],
+      });
+      return { ok: true, data: currentRevision };
+    },
+
+    async reviseSite(chatId, prompt) {
+      const current = workspaces.get(chatId);
+      if (!current) return { ok: false, error: "Simulated site conversation not found" };
+      const currentRevision = revision(chatId);
+      workspaces.set(chatId, {
+        ...current,
+        revision: currentRevision,
+        messages: [...current.messages, message(chatId, "user", prompt), simulatedReply(chatId)],
+      });
+      return { ok: true, data: currentRevision };
     },
 
     async publishSite() {

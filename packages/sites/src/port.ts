@@ -33,6 +33,29 @@ export type SiteDeployment = {
   inspectorUrl: string | null;
 };
 
+/** One message in the builder conversation shown in the native site editor. */
+export type SiteMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string | null;
+};
+
+/** One generated source file from the current builder revision. */
+export type SiteFile = {
+  name: string;
+  content: string;
+  locked: boolean;
+};
+
+/** Native editor data hydrated from the builder's source-of-truth chat. */
+export type SiteWorkspace = {
+  chatId: string;
+  messages: SiteMessage[];
+  files: SiteFile[];
+  revision: SiteRevision;
+};
+
 export type SiteResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
 export type SiteGenOptions = {
@@ -47,6 +70,8 @@ export type SiteGenOptions = {
 };
 
 export interface SiteBuilderPort {
+  /** Load the persistent builder conversation and latest generated source. */
+  getSite(chatId: string, opts?: SiteGenOptions): Promise<SiteResult<SiteWorkspace>>;
   /** Generate a new site from a natural-language prompt. */
   createSite(prompt: string, opts?: SiteGenOptions): Promise<SiteResult<SiteRevision>>;
   /** Iterate on an existing site with a follow-up prompt. */

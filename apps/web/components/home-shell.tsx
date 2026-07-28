@@ -45,6 +45,7 @@ export function HomeShell({
   projects = [],
   folders = [],
   user,
+  contentClassName,
   children,
 }: {
   workspaces: ShellWorkspace[];
@@ -52,6 +53,7 @@ export function HomeShell({
   projects?: ShellProject[];
   folders?: ShellFolder[];
   user: { id: string; name: string; avatarUrl?: string | null };
+  contentClassName?: string;
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -152,7 +154,7 @@ export function HomeShell({
         </div>
       </nav>
 
-      <main className="min-w-0 flex-1 overflow-y-auto p-8">{children}</main>
+      <main className={cn("min-w-0 flex-1 overflow-y-auto p-8", contentClassName)}>{children}</main>
     </div>
   );
 }
