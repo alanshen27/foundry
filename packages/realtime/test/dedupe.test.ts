@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { copilotBroadcastChannel, siteBroadcastChannel } from "../src/broadcast";
 import { dedupePresenceMembers } from "../src/dedupe";
 
 describe("dedupePresenceMembers", () => {
   it("keeps one entry per userId, preferring the latest joinedAt", () => {
     const result = dedupePresenceMembers([
       { userId: "a", name: "Ada", joinedAt: "2026-01-01T00:00:00.000Z" },
-      { userId: "a", name: "Ada", joinedAt: "2026-01-02T00:00:00.000Z", avatarUrl: "https://x/a.png" },
+      {
+        userId: "a",
+        name: "Ada",
+        joinedAt: "2026-01-02T00:00:00.000Z",
+        avatarUrl: "https://x/a.png",
+      },
       { userId: "b", name: "Bob", joinedAt: "2026-01-01T12:00:00.000Z" },
     ]);
 
@@ -22,5 +28,12 @@ describe("dedupePresenceMembers", () => {
 
   it("returns an empty list unchanged", () => {
     expect(dedupePresenceMembers([])).toEqual([]);
+  });
+});
+
+describe("broadcast channels", () => {
+  it("keeps site generation isolated from copilot rooms", () => {
+    expect(siteBroadcastChannel("site_1")).toBe("foundry:site:site_1");
+    expect(copilotBroadcastChannel("channel_1")).toBe("foundry:copilot:channel_1");
   });
 });

@@ -37,6 +37,80 @@ function bodyOf(call: RecordedCall): unknown {
 }
 
 describe("createV0SiteBuilder", () => {
+  it("loads the persistent chat and latest generated source", async () => {
+    const { impl, calls } = recordingFetch(() =>
+      jsonResponse({
+        id: "chat_1",
+        webUrl: "https://v0.dev/chat/chat_1",
+        messages: [
+          {
+            id: "msg_1",
+            role: "user",
+            content: "Build a rover store",
+            createdAt: "2026-07-28T12:00:00.000Z",
+          },
+          {
+            id: "msg_2",
+            role: "assistant",
+            content: "Created the storefront.",
+            createdAt: "2026-07-28T12:00:02.000Z",
+          },
+        ],
+        latestVersion: {
+          id: "ver_1",
+          demoUrl: "https://preview.test/1",
+          files: [
+            {
+              name: "app/page.tsx",
+              content: "export default function Page() { return <main>Rover</main> }",
+              locked: true,
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await builderWith(impl).getSite("chat/1");
+
+    expect(callAt(calls).url).toBe("https://api.test/v1/chats/chat%2F1");
+    expect(callAt(calls).init.method).toBe("GET");
+    expect(callAt(calls).init.body).toBeUndefined();
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        chatId: "chat/1",
+        revision: {
+          chatId: "chat/1",
+          versionId: "ver_1",
+          previewUrl: "https://preview.test/1",
+          builderUrl: "https://v0.dev/chat/chat_1",
+          simulated: false,
+        },
+        messages: [
+          {
+            id: "msg_1",
+            role: "user",
+            content: "Build a rover store",
+            createdAt: "2026-07-28T12:00:00.000Z",
+          },
+          {
+            id: "msg_2",
+            role: "assistant",
+            content: "Created the storefront.",
+            createdAt: "2026-07-28T12:00:02.000Z",
+          },
+        ],
+        files: [
+          {
+            name: "app/page.tsx",
+            content: "export default function Page() { return <main>Rover</main> }",
+            locked: true,
+          },
+        ],
+      },
+    });
+  });
+
   it("creates a chat and extracts the preview URL", async () => {
     const { impl, calls } = recordingFetch(() =>
       jsonResponse({
@@ -184,5 +258,28 @@ describe("createSimulatedSiteBuilder", () => {
 
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toContain("SIMULATED");
+  });
+
+  it("keeps a clearly labeled simulated chat history", async () => {
+    const builder = createSimulatedSiteBuilder();
+    const created = await builder.createSite("Build a rover store");
+    if (!created.ok) throw new Error("expected a simulated revision");
+
+    await builder.reviseSite(created.data.chatId, "Make the hero darker");
+    const workspace = await builder.getSite(created.data.chatId);
+
+    expect(workspace.ok && workspace.data.files).toEqual([]);
+    expect(workspace.ok && workspace.data.messages.map((item) => item.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(
+      workspace.ok &&
+        workspace.data.messages
+          .filter((item) => item.role === "assistant")
+          .every((item) => item.content.includes("SIMULATED")),
+    ).toBe(true);
   });
 });

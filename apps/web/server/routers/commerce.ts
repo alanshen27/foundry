@@ -54,6 +54,20 @@ function credentialsOf(site: { checkout: { shopDomain: string; storefrontToken: 
 }
 
 export const commerceRouter = router({
+  capabilities: protectedProcedure
+    .input(z.object({ siteId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const site = await siteWithAccess(ctx.user.id, input.siteId, "project.read");
+      return {
+        provider: site.checkout?.provider ?? "SHOPIFY",
+        catalog: true,
+        checkout: true,
+        orders: false,
+        ordersReason:
+          "This site uses Shopify's Storefront API, which does not expose merchant orders. Order sync requires a Shopify Admin API connection and verified order webhooks.",
+      } as const;
+    }),
+
   getCheckoutConfig: protectedProcedure
     .input(z.object({ siteId: z.string() }))
     .query(async ({ ctx, input }) => {

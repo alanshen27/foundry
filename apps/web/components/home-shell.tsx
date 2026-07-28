@@ -46,6 +46,7 @@ export function HomeShell({
   projects = [],
   folders = [],
   user,
+  contentClassName,
   children,
 }: {
   workspaces: ShellWorkspace[];
@@ -53,6 +54,7 @@ export function HomeShell({
   projects?: ShellProject[];
   folders?: ShellFolder[];
   user: { id: string; name: string; avatarUrl?: string | null };
+  contentClassName?: string;
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -149,11 +151,11 @@ export function HomeShell({
         </div>
       </nav>
 
-      <main className="relative min-w-0 flex-1 overflow-y-auto">
+      <main className={cn("relative min-w-0 flex-1 overflow-y-auto p-8", contentClassName)}>
         <div className="pointer-events-none sticky top-0 -mb-[100dvh] h-[100dvh] w-full">
           <InteractiveDotField gap={16} radius={52} />
         </div>
-        <div className="relative z-10 p-8">{children}</div>
+        <div className="relative z-10">{children}</div>
       </main>
     </div>
   );

@@ -5,6 +5,7 @@ import type {
   SiteGenOptions,
   SiteResult,
   SiteRevision,
+  SiteWorkspace,
 } from "./port";
 
 const DEFAULT_BASE_URL = "https://api.v0.dev/v1";
@@ -14,11 +15,29 @@ const DEFAULT_BASE_URL = "https://api.v0.dev/v1";
  * fields between releases, so we validate only what we actually depend on
  * and pass the rest through rather than failing a user's build on a new key.
  */
+const fileSchema = z
+  .object({
+    name: z.string(),
+    content: z.string(),
+    locked: z.boolean().optional(),
+  })
+  .passthrough();
+
+const messageSchema = z
+  .object({
+    id: z.string(),
+    content: z.string(),
+    role: z.enum(["user", "assistant"]),
+    createdAt: z.string().optional(),
+  })
+  .passthrough();
+
 const versionSchema = z
   .object({
     id: z.string().optional(),
     demoUrl: z.string().optional(),
     demo: z.string().optional(),
+    files: z.array(fileSchema).optional(),
   })
   .passthrough();
 
@@ -30,6 +49,7 @@ const chatSchema = z
     url: z.string().optional(),
     demo: z.string().optional(),
     latestVersion: versionSchema.optional(),
+    messages: z.array(messageSchema).optional(),
   })
   .passthrough();
 
@@ -70,23 +90,26 @@ export function createV0SiteBuilder(options: V0SiteBuilderOptions): SiteBuilderP
 
   async function request<T>(
     path: string,
-    body: Record<string, unknown>,
+    requestOptions: {
+      method: "GET" | "POST";
+      body?: Record<string, unknown>;
+      signal?: AbortSignal;
+    },
     schema: z.ZodType<T>,
-    signal?: AbortSignal,
   ): Promise<SiteResult<T>> {
     let response: Response;
     try {
       response = await doFetch(`${baseUrl}${path}`, {
-        method: "POST",
+        method: requestOptions.method,
         headers: {
           Authorization: `Bearer ${options.apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(body),
-        signal,
+        body: requestOptions.body ? JSON.stringify(requestOptions.body) : undefined,
+        signal: requestOptions.signal,
       });
     } catch (error) {
-      if (signal?.aborted) return { ok: false, error: "Cancelled" };
+      if (requestOptions.signal?.aborted) return { ok: false, error: "Cancelled" };
       return { ok: false, error: `Could not reach the site builder: ${String(error)}` };
     }
 
@@ -124,13 +147,44 @@ export function createV0SiteBuilder(options: V0SiteBuilderOptions): SiteBuilderP
     };
   }
 
+  function toWorkspace(chatId: string, chat: ChatResponse): SiteWorkspace {
+    return {
+      chatId,
+      revision: toRevision(chatId, chat),
+      messages: (chat.messages ?? []).map((message) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        createdAt: message.createdAt ?? null,
+      })),
+      files: (chat.latestVersion?.files ?? []).map((file) => ({
+        name: file.name,
+        content: file.content,
+        locked: file.locked ?? false,
+      })),
+    };
+  }
+
   return {
+    async getSite(chatId, opts?: SiteGenOptions) {
+      const result = await request(
+        `/chats/${encodeURIComponent(chatId)}`,
+        { method: "GET", signal: opts?.signal },
+        chatSchema,
+      );
+      if (!result.ok) return result;
+      return { ok: true, data: toWorkspace(chatId, result.data) };
+    },
+
     async createSite(prompt, opts?: SiteGenOptions) {
       const result = await request(
         "/chats",
-        opts?.system ? { message: prompt, system: opts.system } : { message: prompt },
+        {
+          method: "POST",
+          body: opts?.system ? { message: prompt, system: opts.system } : { message: prompt },
+          signal: opts?.signal,
+        },
         chatSchema,
-        opts?.signal,
       );
       if (!result.ok) return result;
 
@@ -144,9 +198,8 @@ export function createV0SiteBuilder(options: V0SiteBuilderOptions): SiteBuilderP
     async reviseSite(chatId, prompt, opts?: SiteGenOptions) {
       const result = await request(
         `/chats/${encodeURIComponent(chatId)}/messages`,
-        { message: prompt },
+        { method: "POST", body: { message: prompt }, signal: opts?.signal },
         chatSchema,
-        opts?.signal,
       );
       if (!result.ok) return result;
       // The response id here is the message, not the conversation, so the
@@ -157,9 +210,8 @@ export function createV0SiteBuilder(options: V0SiteBuilderOptions): SiteBuilderP
     async publishSite(chatId, versionId, opts?: SiteGenOptions) {
       const result = await request(
         "/deployments",
-        { chatId, versionId },
+        { method: "POST", body: { chatId, versionId }, signal: opts?.signal },
         deploymentSchema,
-        opts?.signal,
       );
       if (!result.ok) return result;
 

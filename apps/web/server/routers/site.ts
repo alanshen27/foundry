@@ -2,13 +2,27 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { prisma } from "@foundry/db";
 import { slugify } from "@foundry/domain";
+import { siteBroadcastChannel } from "@foundry/realtime";
 import { buildSiteSystemPrompt, type SiteProductContext } from "@foundry/sites";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireWorkspaceCapability } from "../access";
+import { getBroadcastPublisher } from "../realtime";
 import { getSiteBuilder, isSiteBuilderConfigured } from "../sites";
 
 const promptSchema = z.string().trim().min(1).max(2000);
+
+async function publishSiteEvent(siteId: string, status: string, payload: object = {}) {
+  try {
+    await getBroadcastPublisher().publish(siteBroadcastChannel(siteId), {
+      event: "site-generation",
+      payload: { siteId, status, ...payload },
+    });
+  } catch {
+    // Realtime is an enhancement. The authoritative builder/DB operation must
+    // still complete when a broadcast room is temporarily unavailable.
+  }
+}
 
 /** Unique-per-workspace slug: `rover`, `rover-2`, `rover-3`, … */
 async function uniqueSlug(workspaceId: string, name: string): Promise<string> {
@@ -92,7 +106,13 @@ export const siteRouter = router({
       await requireWorkspaceCapability(ctx.user.id, input.workspaceId, "project.read");
       return prisma.site.findMany({
         where: { workspaceId: input.workspaceId },
-        include: { project: { select: { id: true, name: true, slug: true } } },
+        include: {
+          project: { select: { id: true, name: true, slug: true } },
+          checkout: {
+            select: { provider: true, shopDomain: true, sellerName: true, currency: true },
+          },
+          _count: { select: { listings: true } },
+        },
         orderBy: { updatedAt: "desc" },
       });
     }),
@@ -106,6 +126,51 @@ export const siteRouter = router({
     await requireWorkspaceCapability(ctx.user.id, site.workspaceId, "project.read");
     return site;
   }),
+
+  workspace: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const site = await prisma.site.findUnique({
+        where: { id: input.id },
+        include: { project: { select: { id: true, name: true, slug: true } } },
+      });
+      if (!site) throw new TRPCError({ code: "NOT_FOUND" });
+      await requireWorkspaceCapability(ctx.user.id, site.workspaceId, "project.read");
+
+      const result = await getSiteBuilder().getSite(site.builderChatId);
+      if (!result.ok) {
+        if (site.simulated) {
+          return {
+            chatId: site.builderChatId,
+            revision: {
+              chatId: site.builderChatId,
+              versionId: site.builderVersionId,
+              previewUrl: null,
+              builderUrl: null,
+              simulated: true,
+            },
+            files: [],
+            messages: [
+              {
+                id: `${site.id}-prompt`,
+                role: "user" as const,
+                content: site.prompt,
+                createdAt: site.updatedAt.toISOString(),
+              },
+              {
+                id: `${site.id}-simulated`,
+                role: "assistant" as const,
+                content:
+                  "SIMULATED mode: no site or source code was generated. Configure V0_API_KEY to use the native preview, code, and chat workspace.",
+                createdAt: site.updatedAt.toISOString(),
+              },
+            ],
+          };
+        }
+        throw new TRPCError({ code: "BAD_GATEWAY", message: result.error });
+      }
+      return result.data;
+    }),
 
   create: protectedProcedure
     .input(
@@ -191,32 +256,52 @@ export const siteRouter = router({
         ? buildSiteSystemPrompt((await loadProductContext(site.projectId)).context)
         : undefined;
 
-      const result = await getSiteBuilder().reviseSite(site.builderChatId, input.prompt, {
-        system,
-      });
-      if (!result.ok) {
-        throw new TRPCError({ code: "BAD_GATEWAY", message: result.error });
-      }
-
-      const updated = await prisma.site.update({
-        where: { id: site.id },
-        data: {
-          prompt: input.prompt,
-          builderVersionId: result.data.versionId,
-          previewUrl: result.data.previewUrl,
-          builderUrl: result.data.builderUrl ?? site.builderUrl,
-          simulated: result.data.simulated,
-        },
-      });
-
-      await recordAudit({
-        type: "SiteRevised",
-        workspaceId: site.workspaceId,
-        projectId: site.projectId,
+      await publishSiteEvent(site.id, "started", {
+        prompt: input.prompt,
         actorId: ctx.user.id,
-        payload: { siteId: site.id, versionId: result.data.versionId },
+        startedAt: new Date().toISOString(),
       });
-      return updated;
+
+      try {
+        const result = await getSiteBuilder().reviseSite(site.builderChatId, input.prompt, {
+          system,
+        });
+        if (!result.ok) {
+          throw new TRPCError({ code: "BAD_GATEWAY", message: result.error });
+        }
+        await publishSiteEvent(site.id, "generated", {
+          versionId: result.data.versionId,
+        });
+
+        const updated = await prisma.site.update({
+          where: { id: site.id },
+          data: {
+            prompt: input.prompt,
+            builderVersionId: result.data.versionId,
+            previewUrl: result.data.previewUrl,
+            builderUrl: result.data.builderUrl ?? site.builderUrl,
+            simulated: result.data.simulated,
+          },
+        });
+
+        await recordAudit({
+          type: "SiteRevised",
+          workspaceId: site.workspaceId,
+          projectId: site.projectId,
+          actorId: ctx.user.id,
+          payload: { siteId: site.id, versionId: result.data.versionId },
+        });
+        await publishSiteEvent(site.id, "completed", {
+          versionId: result.data.versionId,
+          previewUrl: result.data.previewUrl,
+        });
+        return updated;
+      } catch (error) {
+        await publishSiteEvent(site.id, "failed", {
+          message: error instanceof Error ? error.message : "Site generation failed",
+        });
+        throw error;
+      }
     }),
 
   publish: protectedProcedure
@@ -245,23 +330,36 @@ export const siteRouter = router({
         });
       }
 
-      const result = await getSiteBuilder().publishSite(site.builderChatId, site.builderVersionId);
-      if (!result.ok) {
-        throw new TRPCError({ code: "BAD_GATEWAY", message: result.error });
+      await publishSiteEvent(site.id, "publishing");
+
+      try {
+        const result = await getSiteBuilder().publishSite(
+          site.builderChatId,
+          site.builderVersionId,
+        );
+        if (!result.ok) {
+          throw new TRPCError({ code: "BAD_GATEWAY", message: result.error });
+        }
+
+        const updated = await prisma.site.update({
+          where: { id: site.id },
+          data: { status: "PUBLISHED", publishedUrl: result.data.url },
+        });
+
+        await recordAudit({
+          type: "SitePublished",
+          workspaceId: site.workspaceId,
+          projectId: site.projectId,
+          actorId: ctx.user.id,
+          payload: { siteId: site.id, url: result.data.url, deploymentId: result.data.id },
+        });
+        await publishSiteEvent(site.id, "published", { url: result.data.url });
+        return updated;
+      } catch (error) {
+        await publishSiteEvent(site.id, "failed", {
+          message: error instanceof Error ? error.message : "Site publication failed",
+        });
+        throw error;
       }
-
-      const updated = await prisma.site.update({
-        where: { id: site.id },
-        data: { status: "PUBLISHED", publishedUrl: result.data.url },
-      });
-
-      await recordAudit({
-        type: "SitePublished",
-        workspaceId: site.workspaceId,
-        projectId: site.projectId,
-        actorId: ctx.user.id,
-        payload: { siteId: site.id, url: result.data.url, deploymentId: result.data.id },
-      });
-      return updated;
     }),
 });
