@@ -15,7 +15,10 @@ function SignInForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(() => {
     if (searchParams.get("error") === "confirm") {
-      return searchParams.get("message") || "Email confirmation failed. Try signing in, or request a new link.";
+      return (
+        searchParams.get("message") ||
+        "Email confirmation failed. Try signing in, or request a new link."
+      );
     }
     return null;
   });
@@ -42,7 +45,6 @@ function SignInForm() {
 
   return (
     <AuthShell
-      code="Auth / 01"
       title="Sign in"
       subtitle="Use your account email and password."
       glyphSeed="auth-sign-in"

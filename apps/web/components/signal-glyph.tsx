@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-const GLYPH_CHARS = [" ", ".", "0", "1", "/", ">", "\\", ":"];
+export const GLYPH_CHARS = [" ", ".", "0", "1", "/", ">", "\\", ":"];
 
 function hashSeed(seed: string): number {
   let h = 2166136261;
@@ -24,12 +24,8 @@ function mulberry32(seed: number) {
 
 type Blob = { x: number; y: number; r: number; w: number };
 
-/** Deterministic white-on-orange ASCII density field — Nothing-style digital dissolve. */
-export function buildSignalField(
-  seed: string,
-  rows: number,
-  cols: number,
-): { char: string; opacity: number }[][] {
+/** Deterministic intensity grid (0..1) used by static and animated glyphs. */
+export function buildSignalIntensity(seed: string, rows: number, cols: number): number[][] {
   const rand = mulberry32(hashSeed(seed || "foundyr"));
   const blobs: Blob[] = Array.from({ length: 6 + Math.floor(rand() * 3) }, () => ({
     x: 0.15 + rand() * 0.7,
@@ -45,9 +41,9 @@ export function buildSignalField(
     w: 1.35,
   });
 
-  const field: { char: string; opacity: number }[][] = [];
+  const field: number[][] = [];
   for (let y = 0; y < rows; y += 1) {
-    const row: { char: string; opacity: number }[] = [];
+    const row: number[] = [];
     for (let x = 0; x < cols; x += 1) {
       const nx = (x + 0.5) / cols;
       const ny = (y + 0.5) / rows;
@@ -59,20 +55,26 @@ export function buildSignalField(
       }
       // Soft edge dissolve + grain
       d *= 0.75 + rand() * 0.45;
-      const t = Math.max(0, Math.min(1, d * 0.55));
-      if (t < 0.08) {
-        row.push({ char: " ", opacity: 0 });
-      } else {
-        const idx = Math.min(GLYPH_CHARS.length - 1, 1 + Math.floor(t * (GLYPH_CHARS.length - 2)));
-        row.push({
-          char: GLYPH_CHARS[idx]!,
-          opacity: 0.35 + t * 0.65,
-        });
-      }
+      row.push(Math.max(0, Math.min(1, d * 0.55)));
     }
     field.push(row);
   }
   return field;
+}
+
+/** Deterministic white-on-orange ASCII density field — Nothing-style digital dissolve. */
+export function buildSignalField(
+  seed: string,
+  rows: number,
+  cols: number,
+): { char: string; opacity: number }[][] {
+  return buildSignalIntensity(seed, rows, cols).map((row) =>
+    row.map((t) => {
+      if (t < 0.08) return { char: " ", opacity: 0 };
+      const idx = Math.min(GLYPH_CHARS.length - 1, 1 + Math.floor(t * (GLYPH_CHARS.length - 2)));
+      return { char: GLYPH_CHARS[idx]!, opacity: 0.35 + t * 0.65 };
+    }),
+  );
 }
 
 export function SignalGlyph({

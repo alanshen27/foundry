@@ -20,6 +20,7 @@ import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTheme } from "@/components/theme-provider";
+import { defineFoundryMonacoThemes } from "@/lib/monaco-theme";
 import { monacoThemeFor } from "@/lib/theme";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -535,6 +536,7 @@ export function CodeWorkspace({
                 key={`${activeFileId}-${monacoTheme}`}
                 height="100%"
                 theme={monacoTheme}
+                beforeMount={defineFoundryMonacoThemes}
                 language={languageFor(fileQuery.data.path)}
                 value={content}
                 onChange={onChange}

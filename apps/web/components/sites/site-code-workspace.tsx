@@ -6,6 +6,7 @@ import type { SiteFile } from "@foundry/sites";
 import { Code2, FileCode2, LockKeyhole } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useTheme } from "@/components/theme-provider";
+import { defineFoundryMonacoThemes } from "@/lib/monaco-theme";
 import { monacoThemeFor } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -122,6 +123,7 @@ export function SiteCodeWorkspace({ files }: { files: SiteFile[] }) {
                   key={`${activeFile.name}-${monacoTheme}`}
                   height="100%"
                   theme={monacoTheme}
+                  beforeMount={defineFoundryMonacoThemes}
                   language={languageFor(activeFile.name)}
                   value={activeFile.content}
                   options={{
