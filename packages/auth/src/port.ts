@@ -18,21 +18,14 @@ export type AuthenticatedIdentity = {
  * requires email confirmation before a session is issued (Supabase).
  */
 export type SignUpResult =
-  | { ok: true; identity: AuthenticatedIdentity; hasSession: boolean }
-  | { ok: false; error: string };
+  { ok: true; identity: AuthenticatedIdentity; hasSession: boolean } | { ok: false; error: string };
 
 /** Supabase email OTP kinds we handle in custom confirmation routes. */
 export type EmailOtpKind =
-  | "signup"
-  | "email"
-  | "invite"
-  | "magiclink"
-  | "recovery"
-  | "email_change";
+  "signup" | "email" | "invite" | "magiclink" | "recovery" | "email_change";
 
 export type ConfirmEmailResult =
-  | { ok: true; identity: AuthenticatedIdentity }
-  | { ok: false; error: string };
+  { ok: true; identity: AuthenticatedIdentity } | { ok: false; error: string };
 
 export type SignUpOptions = {
   /** Where Supabase should send the user after they click the email link. */

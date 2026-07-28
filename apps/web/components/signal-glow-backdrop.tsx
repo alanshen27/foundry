@@ -8,10 +8,7 @@ export function SignalGlowBackdrop({ className }: { className?: string }) {
   return (
     <div
       aria-hidden
-      className={cn(
-        "pointer-events-none absolute -inset-x-10 -inset-y-12 select-none",
-        className,
-      )}
+      className={cn("pointer-events-none absolute -inset-x-10 -inset-y-12 select-none", className)}
     >
       <div
         className="signal-glow-pulse absolute inset-0"
@@ -27,8 +24,7 @@ export function SignalGlowBackdrop({ className }: { className?: string }) {
             "radial-gradient(circle, color-mix(in srgb, var(--primary) 85%, white) 1.05px, transparent 1.2px)",
           backgroundSize: "9px 9px",
           maskImage: "radial-gradient(ellipse 68% 55% at 50% 48%, #000 10%, transparent 72%)",
-          WebkitMaskImage:
-            "radial-gradient(ellipse 68% 55% at 50% 48%, #000 10%, transparent 72%)",
+          WebkitMaskImage: "radial-gradient(ellipse 68% 55% at 50% 48%, #000 10%, transparent 72%)",
         }}
       />
       <div
@@ -38,8 +34,7 @@ export function SignalGlowBackdrop({ className }: { className?: string }) {
           backgroundSize: "18px 18px",
           backgroundPosition: "4px 4px",
           maskImage: "radial-gradient(ellipse 55% 45% at 50% 48%, #000 5%, transparent 65%)",
-          WebkitMaskImage:
-            "radial-gradient(ellipse 55% 45% at 50% 48%, #000 5%, transparent 65%)",
+          WebkitMaskImage: "radial-gradient(ellipse 55% 45% at 50% 48%, #000 5%, transparent 65%)",
         }}
       />
     </div>

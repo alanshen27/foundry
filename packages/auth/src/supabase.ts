@@ -47,7 +47,10 @@ function identityFromUser(user: UserLike): AuthenticatedIdentity | null {
   };
 }
 
-function confirmFromUser(user: UserLike | null | undefined, errorMessage: string): ConfirmEmailResult {
+function confirmFromUser(
+  user: UserLike | null | undefined,
+  errorMessage: string,
+): ConfirmEmailResult {
   const identity = user ? identityFromUser(user) : null;
   if (!identity) return { ok: false, error: errorMessage };
   return { ok: true, identity };

@@ -5,11 +5,11 @@ landing pages and the confirmation exchange; Supabase only delivers mail.
 
 ## App routes
 
-| Route            | Purpose                                              |
-| ---------------- | ---------------------------------------------------- |
-| `/auth/confirm`  | Custom template link (`token_hash` + `type`)         |
-| `/auth/callback` | PKCE `code` exchange (default Supabase redirect)     |
-| `/auth/sign-up`  | Shows “check inbox” when confirmation is required    |
+| Route            | Purpose                                           |
+| ---------------- | ------------------------------------------------- |
+| `/auth/confirm`  | Custom template link (`token_hash` + `type`)      |
+| `/auth/callback` | PKCE `code` exchange (default Supabase redirect)  |
+| `/auth/sign-up`  | Shows “check inbox” when confirmation is required |
 
 Sign-up passes `emailRedirectTo = {APP_ORIGIN}/auth/callback` so the default
 Supabase confirmation flow also lands in-app.
