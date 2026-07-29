@@ -76,10 +76,9 @@ services:
   - type: web
     name: foundry-web
     runtime: node
-    # Starter = 512MB. Next + one Chromium screenshot spikes past that and
-    # Render OOM-kills the dyno. Prefer Standard (2GB) in the dashboard if
-    # thumbnails / copilot viewport renders still bounce the service.
-    plan: starter
+    # Pro = 4GB. Next + Chromium (thumbnails / viewport captures) OOMs on
+    # Starter (512MB) and can still bounce Standard (2GB).
+    plan: pro
     region: oregon
     # --only-shell: server/ai/render.ts always launches headless, which resolves
     # to chromium-headless-shell. Skipping headful Chromium halves the download.
@@ -101,7 +100,9 @@ services:
   - type: worker
     name: foundry-chat-worker
     runtime: node
-    plan: starter
+    # Pro = 4GB — same Chromium memory floor as foundry-web (tool loop drives
+    # extract_product_images + viewport captures).
+    plan: pro
     region: oregon
     # The worker runs the copilot tool loop (server/ai/tools.ts), so it drives
     # Chromium too — extract_product_images and the viewport captures both fail
