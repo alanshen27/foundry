@@ -366,20 +366,11 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
         }
 
         const focusPath = options?.focusPath?.trim();
-        const focusContent = focusPath ? (files[focusPath] ?? "") : "";
-        // Prefer an empty range list (same as single-file iterateCad) when we
-        // don't have a focus file. When we do, clamp to real lines only —
-        // never `split("\n").length - 1` on trailing `\n` (Zoo 400).
-        const source_ranges =
-          focusPath && focusContent.trim()
-            ? [
-                {
-                  file: focusPath,
-                  prompt,
-                  range: wholeFileSourceRange(focusContent),
-                },
-              ]
-            : [];
+        // Always send empty source_ranges — same as single-file iterateCad.
+        // Zoo's multi-file endpoint rejects whole-file ranges we compute
+        // ("Source range out of bounds") even after clamping trailing newlines.
+        // The top-level prompt + attached files are enough; focusPath is logged.
+        const source_ranges: [] = [];
 
         const attached = entries.map(([name, content]) => ({
           name,
@@ -387,9 +378,7 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
         }));
 
         console.log(
-          `[zoo] multi-file iteration files=${attached.length} focus=${focusPath ?? "(all)"} rangeEnd=${
-            source_ranges[0]?.range.end.line ?? "-"
-          }`,
+          `[zoo] multi-file iteration files=${attached.length} focus=${focusPath ?? "(all)"} source_ranges=0`,
         );
         const res = await ml.create_text_to_cad_multi_file_iteration({
           client,

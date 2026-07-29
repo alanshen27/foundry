@@ -38,24 +38,19 @@ export async function createRunEventStream(runId: string): Promise<ReadableStrea
         return;
       }
 
-      // Don't hold the SSE open forever on a run the worker never progressed.
-      // Measure RUNNING from startedAt when present so queue wait doesn't count.
-      const ageMs = Date.now() - (run.startedAt ?? run.createdAt).getTime();
+      // SSE is read-only. Never flip ChatRun → ERROR here — that raced deploys /
+      // cold workers and showed "Timed out waiting for worker" while the job was
+      // still alive (or about to be reclaimed). Stale expiry owns terminalization.
+      // Only disconnect a client that has been waiting on a still-PENDING run.
       const pendingAgeMs = Date.now() - run.createdAt.getTime();
-      if (
-        (run.status === "PENDING" && pendingAgeMs > 45_000) ||
-        (run.status === "RUNNING" && lastSeq === 0 && ageMs > 60_000)
-      ) {
-        const error = "Timed out waiting for worker (check Redis / chat worker)";
-        await prisma.chatRun.update({
-          where: { id: runId },
-          data: {
-            status: "ERROR",
-            error,
-            finishedAt: new Date(),
-          },
-        });
-        controller.enqueue(sseEncode({ type: "error", errorText: error }));
+      if (run.status === "PENDING" && pendingAgeMs > 90_000 && lastSeq === 0) {
+        controller.enqueue(
+          sseEncode({
+            type: "error",
+            errorText:
+              "Still waiting for the chat worker to pick up this run. Keep this tab open, or retry in a moment.",
+          }),
+        );
         controller.enqueue(sseComment("done"));
         controller.close();
         closed = true;

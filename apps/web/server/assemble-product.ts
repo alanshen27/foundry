@@ -120,9 +120,11 @@ export async function assembleProductWithZooMcp(params: {
   }
 
   doc = mergeProjectOutputs(doc, iterated.data.files);
+  // Prefer focused main.kcl — Zoo often rewrites that and echoes the seed at
+  // assemblyZooPath; taking the seed first left assemblies unposed.
   const assemblyOut =
-    iterated.data.files[assemblyZooPath] ??
     iterated.data.files["main.kcl"] ??
+    iterated.data.files[assemblyZooPath] ??
     iterated.data.files[params.assembly.path] ??
     doc.components.find((c) => c.id === params.assembly.id)?.content;
   if (!assemblyOut?.trim()) {
