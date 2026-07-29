@@ -290,8 +290,10 @@ export function ToolCard({ part }: { part: ToolPart }) {
   return (
     <div
       className={cn(
-        "flex flex-col gap-1.5 py-0.5 text-xs",
-        failed ? "text-destructive" : "text-muted-foreground",
+        "flex flex-col gap-1.5 py-1.5 text-xs",
+        failed
+          ? "border-destructive/30 bg-destructive/5 text-destructive border-l-2 pl-2"
+          : "text-muted-foreground",
       )}
     >
       <div className="flex items-center gap-2">
@@ -301,8 +303,10 @@ export function ToolCard({ part }: { part: ToolPart }) {
           {detail ? (
             <span
               className={cn(
-                "block truncate",
-                failed ? "text-destructive/80" : "text-muted-foreground",
+                "block",
+                failed
+                  ? "text-destructive/80 whitespace-pre-wrap break-words"
+                  : "text-muted-foreground truncate",
               )}
               title={detail}
             >

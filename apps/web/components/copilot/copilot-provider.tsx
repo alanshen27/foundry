@@ -101,6 +101,7 @@ function ChatEngine({
 }) {
   const utils = trpc.useUtils();
   const cancelMutation = trpc.chat.cancelActiveRun.useMutation();
+  const persistMutation = trpc.chat.persistMessages.useMutation();
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusRef = useRef<"submitted" | "streaming" | "ready" | "error">("ready");
   const busyRef = useRef(false);
@@ -160,18 +161,48 @@ function ChatEngine({
       selfRunRef.current = false;
       setLocalBusy(false);
       void utils.chat.activeRun.invalidate({ projectId, channelId });
-      setMessages((prev) => pruneEmptyAssistantMessages(prev));
+      // Never drop a failed turn — stamp it if the stream ended in error,
+      // otherwise only prune truly empty placeholders.
+      setMessages((prev) => {
+        if (statusRef.current === "error") {
+          const next = markFailedAssistantMessages(prev, error?.message);
+          void persistMutation
+            .mutateAsync({ projectId, branchId, channelId, messages: next })
+            .catch((err) => console.error("failed to persist chat transcript", err));
+          return next;
+        }
+        return pruneEmptyAssistantMessages(prev);
+      });
       refreshProjectData();
     },
     onError: (err) => {
       selfRunRef.current = false;
       setLocalBusy(false);
       void utils.chat.activeRun.invalidate({ projectId, channelId });
-      setMessages((prev) =>
-        markFailedAssistantMessages(prev, err instanceof Error ? err.message : String(err)),
-      );
+      const reason = err instanceof Error ? err.message : String(err);
+      setMessages((prev) => {
+        const next = markFailedAssistantMessages(prev, reason);
+        void persistMutation
+          .mutateAsync({ projectId, branchId, channelId, messages: next })
+          .catch((e) => console.error("failed to persist chat transcript", e));
+        return next;
+      });
     },
   });
+
+  /** Stamp a failure note and persist the transcript so refresh keeps it. */
+  const stampAndPersistFailure = useCallback(
+    (reason?: string) => {
+      setMessages((prev) => {
+        const next = markFailedAssistantMessages(prev, reason);
+        void persistMutation
+          .mutateAsync({ projectId, branchId, channelId, messages: next })
+          .catch((err) => console.error("failed to persist chat transcript", err));
+        return next;
+      });
+    },
+    [setMessages, persistMutation, projectId, branchId, channelId],
+  );
 
   statusRef.current = status;
   // Gate send on local stream state only. A stuck ChatRun row / hung resume
@@ -194,12 +225,20 @@ function ChatEngine({
     ) {
       setLocalBusy(false);
       if (status === "error") {
-        setMessages((prev) => markFailedAssistantMessages(prev, error?.message));
+        stampAndPersistFailure(error?.message);
       } else {
         setMessages((prev) => pruneEmptyAssistantMessages(prev));
       }
     }
-  }, [localBusy, activeRunQuery.data, activeRunQuery.isFetching, status, error, setMessages]);
+  }, [
+    localBusy,
+    activeRunQuery.data,
+    activeRunQuery.isFetching,
+    status,
+    error,
+    setMessages,
+    stampAndPersistFailure,
+  ]);
 
   useEffect(() => {
     const broadcast = createBroadcastPort();
@@ -222,7 +261,7 @@ function ChatEngine({
         void utils.chat.activeRun.invalidate({ projectId, channelId });
         const payload = message.payload as { status?: string; error?: string } | undefined;
         if (payload?.status === "error") {
-          setMessages((prev) => markFailedAssistantMessages(prev, payload.error));
+          stampAndPersistFailure(payload.error);
         } else {
           setMessages((prev) => pruneEmptyAssistantMessages(prev));
         }
@@ -235,7 +274,15 @@ function ChatEngine({
       sub.leave();
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
     };
-  }, [channelId, projectId, resumeStream, refreshProjectData, utils, setMessages]);
+  }, [
+    channelId,
+    projectId,
+    resumeStream,
+    refreshProjectData,
+    utils,
+    setMessages,
+    stampAndPersistFailure,
+  ]);
 
   useEffect(() => {
     onMessages(channelId, messages);
@@ -255,13 +302,11 @@ function ChatEngine({
         selfRunRef.current = false;
         setLocalBusy(false);
         busyRef.current = false;
-        setMessages((prev) =>
-          markFailedAssistantMessages(prev, err instanceof Error ? err.message : "request failed"),
-        );
+        stampAndPersistFailure(err instanceof Error ? err.message : "request failed");
       });
       void utils.chat.activeRun.invalidate({ projectId, channelId });
     },
-    [sendMessage, shell, utils, projectId, channelId, setMessages],
+    [sendMessage, shell, utils, projectId, channelId, stampAndPersistFailure],
   );
 
   const stopRun = useCallback(() => {
@@ -269,6 +314,7 @@ function ChatEngine({
     stop();
     setLocalBusy(false);
     busyRef.current = false;
+    // Keep whatever streamed before stop — only prune empty placeholders.
     setMessages((prev) => pruneEmptyAssistantMessages(prev));
     void cancelMutation
       .mutateAsync({ projectId, channelId })

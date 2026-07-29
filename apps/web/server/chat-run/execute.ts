@@ -12,9 +12,14 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { buildProjectTools, withToolLogging } from "@/server/ai/tools";
 import { appOrigin } from "@/server/app-origin";
 import { COPILOT_SYSTEM_PROMPT } from "./prompt";
-import { saveNewMessages } from "./persist";
+import {
+  persistFailedRunFromEvents,
+  persistRunMessages,
+  type ChannelScope,
+} from "./persist";
 import { publishRunChunk, publishRunFinished, publishRunStarted } from "./publish";
 import {
+  markFailedAssistantMessages,
   sanitizeUiMessagesForModel,
   stripAllToolParts,
   stripOrphanToolCalls,
@@ -98,18 +103,27 @@ export async function executeChatRun(runId: string): Promise<void> {
   const run = await prisma.chatRun.findUnique({ where: { id: runId } });
   if (!run || run.status === "DONE" || run.status === "ERROR" || run.status === "CANCELLED") return;
 
+  const channelId = run.channelId;
+
   await prisma.chatRun.update({
     where: { id: runId },
     data: { status: "RUNNING", startedAt: new Date() },
   });
 
+  const scope: ChannelScope = {
+    projectId: run.projectId,
+    branchId: run.branchId,
+    channelId,
+  };
+
   const env = getServerEnv();
   if (!env.OPENAI_API_KEY) {
+    const error = "OPENAI_API_KEY is not configured";
     await prisma.chatRun.update({
       where: { id: runId },
-      data: { status: "ERROR", error: "OPENAI_API_KEY is not configured", finishedAt: new Date() },
+      data: { status: "ERROR", error, finishedAt: new Date() },
     });
-    await publishRunFinished(runId, run.channelId, "error", "OPENAI_API_KEY is not configured");
+    await publishRunFinished(runId, channelId, "error", error);
     return;
   }
 
@@ -117,7 +131,7 @@ export async function executeChatRun(runId: string): Promise<void> {
     messages: run.inputMessages as unknown[],
   });
 
-  await publishRunStarted(runId, run.channelId);
+  await publishRunStarted(runId, channelId);
 
   const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
 
@@ -135,7 +149,10 @@ export async function executeChatRun(runId: string): Promise<void> {
   );
 
   let seq = 0;
-  let finished = false;
+  let finalized = false;
+  /** Latest UI transcript observed from the stream (updated in onEnd). */
+  let latestMessages: UIMessage[] = rawMessages;
+  let sawStreamMessages = false;
   const abort = new AbortController();
 
   const { copilotBroadcastChannel, createSupabaseBroadcastPort, createOffBroadcastPort } =
@@ -154,12 +171,69 @@ export async function executeChatRun(runId: string): Promise<void> {
     port = createOffBroadcastPort();
   }
 
-  const cancelSub = port.subscribe(copilotBroadcastChannel(run.channelId), (msg) => {
+  const cancelSub = port.subscribe(copilotBroadcastChannel(channelId), (msg) => {
     const payload = msg.payload as { runId: string; status?: string };
     if (msg.event === "run-finished" && payload.runId === runId && payload.status === "cancelled") {
       if (!abort.signal.aborted) abort.abort();
     }
   });
+
+  async function finalize(
+    status: "done" | "error" | "cancelled",
+    error?: string,
+  ): Promise<void> {
+    if (finalized) return;
+    finalized = true;
+
+    let messages = latestMessages;
+    // If the stream died before onEnd, rebuild whatever chunks we already
+    // published so the user still has the assistant turn after refresh.
+    if (status !== "done" && !sawStreamMessages) {
+      try {
+        const { rebuildUiMessagesFromRunEvents } = await import("./persist");
+        messages = await rebuildUiMessagesFromRunEvents(runId, rawMessages);
+      } catch (err) {
+        console.error(`[chat-run ${runId}] rebuild before finalize failed`, err);
+      }
+    }
+
+    if (status === "error") {
+      messages = markFailedAssistantMessages(messages, error ?? "request failed");
+    } else if (status === "cancelled") {
+      // Keep partial work; only stamp if the assistant turn would otherwise
+      // look empty after prune on the client.
+      const hasAssistantContent = messages.some(
+        (m) =>
+          m.role === "assistant" &&
+          m.parts.some((p) => {
+            if (p.type === "text") return p.text.trim().length > 0;
+            return p.type.startsWith("tool-") || p.type === "dynamic-tool";
+          }),
+      );
+      if (!hasAssistantContent) {
+        messages = markFailedAssistantMessages(messages, "cancelled");
+      }
+    }
+
+    await persistRunMessages(scope, messages).catch((err) => {
+      console.error(`[chat-run ${runId}] failed to persist messages`, err);
+    });
+
+    await prisma.chatRun.update({
+      where: { id: runId },
+      data: {
+        status: status === "done" ? "DONE" : status === "cancelled" ? "CANCELLED" : "ERROR",
+        finishedAt: new Date(),
+        error: status === "done" ? null : (error ?? status),
+      },
+    });
+    await publishRunFinished(
+      runId,
+      channelId,
+      status,
+      status === "error" ? (error ?? "request failed") : status === "cancelled" ? "cancelled" : null,
+    );
+  }
 
   try {
     let prepared = await toModelMessages(rawMessages, tools);
@@ -203,34 +277,9 @@ export async function executeChatRun(runId: string): Promise<void> {
 
       const uiStream = result.toUIMessageStream({
         originalMessages: uiMessages,
-        onEnd: async ({ messages: finalMessages, isAborted }) => {
-          if (finished) return;
-          finished = true;
-
-          const cancelled = isAborted || abort.signal.aborted;
-          // Save even when cancelled: whatever the model produced before the
-          // stop is real work the user watched happen, and dropping it is why
-          // interrupted turns used to vanish on reload.
-          await saveNewMessages(
-            {
-              projectId: run.projectId,
-              branchId: run.branchId,
-              channelId: run.channelId,
-            },
-            finalMessages as UIMessage[],
-          ).catch((err) => {
-            console.error(`[chat-run ${runId}] failed to persist messages`, err);
-          });
-
-          await prisma.chatRun.update({
-            where: { id: runId },
-            data: {
-              status: cancelled ? "CANCELLED" : "DONE",
-              finishedAt: new Date(),
-              error: cancelled ? "cancelled" : null,
-            },
-          });
-          await publishRunFinished(runId, run.channelId, cancelled ? "cancelled" : "done");
+        onEnd: async ({ messages: finalMessages }) => {
+          latestMessages = finalMessages as UIMessage[];
+          sawStreamMessages = true;
         },
       });
 
@@ -243,7 +292,7 @@ export async function executeChatRun(runId: string): Promise<void> {
           }
           const { done, value } = await reader.read();
           if (done) break;
-          await publishRunChunk(runId, run.channelId, ++seq, value);
+          await publishRunChunk(runId, channelId, ++seq, value);
         }
       } finally {
         reader.releaseLock();
@@ -286,30 +335,31 @@ export async function executeChatRun(runId: string): Promise<void> {
       seq = 0;
       await runStream(prepared.ui, prepared.model);
     }
+
+    if (abort.signal.aborted) {
+      await finalize("cancelled", "cancelled");
+    } else {
+      await finalize("done");
+    }
   } catch (err) {
     const cancelled = abort.signal.aborted;
     if (cancelled) {
-      if (!finished) {
-        finished = true;
-        await prisma.chatRun.update({
-          where: { id: runId },
-          data: { status: "CANCELLED", finishedAt: new Date(), error: "cancelled" },
-        });
-        await publishRunFinished(runId, run.channelId, "cancelled");
-      }
+      await finalize("cancelled", "cancelled");
       return;
     }
-    if (!finished) {
-      finished = true;
-      const message = err instanceof Error ? err.message : String(err);
-      await prisma.chatRun.update({
-        where: { id: runId },
-        data: { status: "ERROR", error: message, finishedAt: new Date() },
-      });
-      await publishRunFinished(runId, run.channelId, "error", message);
-    }
+    const message = err instanceof Error ? err.message : String(err);
+    await finalize("error", message);
     throw err;
   } finally {
+    // Last-resort persist if finalize never ran (should be rare).
+    if (!finalized) {
+      await persistFailedRunFromEvents({
+        runId,
+        scope,
+        inputMessages: rawMessages,
+        error: "run ended without finalize",
+      }).catch((err) => console.error(`[chat-run ${runId}] last-resort persist failed`, err));
+    }
     cancelSub.leave();
   }
 }

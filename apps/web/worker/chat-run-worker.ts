@@ -108,9 +108,9 @@ const worker = new Worker(
     connection,
     concurrency: 10,
     // Zoo multi-file iteration + MCP execute_kcl can run many minutes with
-    // only awaits (event loop free). Keep the lock long enough that a Redis
-    // blip doesn't mark the job stalled mid-assembly.
-    lockDuration: 15 * 60_000,
+    // only awaits (event loop free). Keep the lock aligned with RUNNING_STALE
+    // so Redis doesn't mark the job stalled mid-assembly.
+    lockDuration: 40 * 60_000,
     stalledInterval: 60_000,
     maxStalledCount: 1,
   },

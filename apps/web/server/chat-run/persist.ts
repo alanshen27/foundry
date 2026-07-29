@@ -7,7 +7,8 @@
  * client had not loaded — or that sanitization had stripped — was destroyed.
  */
 import { prisma, type Prisma } from "@foundry/db";
-import type { UIMessage } from "ai";
+import { readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai";
+import { markFailedAssistantMessages } from "@/lib/copilot/messages";
 
 /**
  * How many messages a client loads. Reads take the newest N: with an
@@ -71,4 +72,98 @@ export async function saveNewMessages(scope: ChannelScope, messages: UIMessage[]
     skipDuplicates: true,
   });
   return result.count;
+}
+
+/**
+ * Authoritative write from the chat worker: create or update message parts.
+ *
+ * Unlike `saveNewMessages`, this intentionally overwrites parts so a failed
+ * run can stamp `Failed: …` onto an assistant turn that was partially streamed
+ * (and so timeout reclaim can persist whatever chunks already landed).
+ */
+export async function persistRunMessages(
+  scope: ChannelScope,
+  messages: UIMessage[],
+): Promise<number> {
+  const rows = messages.filter((message) => message.id && message.parts.length > 0);
+  if (rows.length === 0) return 0;
+
+  const now = Date.now();
+  await prisma.$transaction(
+    rows.map((message, index) =>
+      prisma.chatMessage.upsert({
+        where: { id: message.id },
+        create: {
+          id: message.id,
+          projectId: scope.projectId,
+          branchId: scope.branchId,
+          channelId: scope.channelId,
+          role: message.role,
+          parts: message.parts as unknown as Prisma.InputJsonValue,
+          createdAt: new Date(now + index),
+        },
+        update: {
+          parts: message.parts as unknown as Prisma.InputJsonValue,
+        },
+      }),
+    ),
+  );
+  return rows.length;
+}
+
+/**
+ * Rebuild the UI transcript for a run from persisted SSE chunks, then optionally
+ * stamp a failure note. Used when the worker dies mid-stream (onEnd never ran).
+ */
+export async function persistFailedRunFromEvents(params: {
+  runId: string;
+  scope: ChannelScope;
+  inputMessages: UIMessage[];
+  error: string;
+}): Promise<number> {
+  const rebuilt = await rebuildUiMessagesFromRunEvents(params.runId, params.inputMessages);
+  const stamped = markFailedAssistantMessages(rebuilt, params.error);
+  return persistRunMessages(params.scope, stamped);
+}
+
+export async function rebuildUiMessagesFromRunEvents(
+  runId: string,
+  originalMessages: UIMessage[],
+): Promise<UIMessage[]> {
+  const events = await prisma.chatRunEvent.findMany({
+    where: { runId },
+    orderBy: { seq: "asc" },
+    select: { chunk: true },
+  });
+  if (events.length === 0) return originalMessages;
+
+  const stream = new ReadableStream<UIMessageChunk>({
+    start(controller) {
+      for (const event of events) {
+        controller.enqueue(event.chunk as UIMessageChunk);
+      }
+      controller.close();
+    },
+  });
+
+  let last: UIMessage | undefined;
+  try {
+    for await (const message of readUIMessageStream({
+      stream,
+      terminateOnError: false,
+    })) {
+      last = message;
+    }
+  } catch (err) {
+    console.warn(`[chat-run] rebuild from events failed run=${runId}`, err);
+    return originalMessages;
+  }
+
+  if (!last || last.parts.length === 0) return originalMessages;
+
+  const tail = originalMessages[originalMessages.length - 1];
+  if (tail?.role === "assistant" && tail.id === last.id) {
+    return [...originalMessages.slice(0, -1), last];
+  }
+  return [...originalMessages, last];
 }

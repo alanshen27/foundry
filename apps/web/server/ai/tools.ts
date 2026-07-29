@@ -26,6 +26,8 @@ import {
   normalizeCadDoc,
   upsertCadContent,
   upsertPartScripts,
+  toZooKclPath,
+  fromZooKclPath,
   type CadComponentKind,
   type CadDoc,
 } from "@/lib/cad/engine";
@@ -382,15 +384,19 @@ async function touchStage(ctx: ToolContext, workspaceId: string, stage: Stage) {
  * full path — so all three resolve.
  */
 function findCadComponent(doc: CadDoc, key: string, kind: CadComponentKind) {
-  const bare = key.trim().replace(/\.kcl$/i, "");
-  return doc.components.find(
-    (c) =>
-      c.kind === kind &&
-      (c.path === key ||
-        c.path.replace(/\.kcl$/i, "") === bare ||
-        c.name === bare ||
-        c.path.endsWith(`/${bare}.kcl`)),
-  );
+  const raw = key.trim();
+  const bare = raw.replace(/\.kcl$/i, "");
+  const zooKey = toZooKclPath(raw);
+  const fromZoo = fromZooKclPath(raw);
+  return doc.components.find((c) => {
+    if (c.kind !== kind) return false;
+    if (c.path === raw || c.path === zooKey || c.path === fromZoo) return true;
+    if (c.name === bare || c.name === raw) return true;
+    if (c.path.replace(/\.kcl$/i, "") === bare) return true;
+    if (c.path.endsWith(`/${bare}.kcl`) || c.path.endsWith(`/${bare}/main.kcl`)) return true;
+    if (toZooKclPath(c.path) === zooKey || fromZooKclPath(c.path) === fromZoo) return true;
+    return false;
+  });
 }
 
 export function buildProjectTools(ctx: ToolContext) {

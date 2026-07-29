@@ -1,4 +1,5 @@
 export {
+  markFailedAssistantMessages,
   pruneEmptyAssistantMessages,
   sanitizeUiMessagesForModel,
   stripAllToolParts,

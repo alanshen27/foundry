@@ -105,11 +105,14 @@ export async function assembleProductWithZooMcp(params: {
   }
   const assemblyZooPath = toZooKclPath(params.assembly.path);
   files[assemblyZooPath] = rewriteKclModuleImportPaths(seed);
+  // Zoo multi-file Text-to-CAD requires a root main.kcl (same convention as
+  // withKclProjectDir / MCP execute). Point it at the assembly entry.
+  files["main.kcl"] = files[assemblyZooPath]!;
 
   const prompt = params.prompt?.trim() || defaultAssemblyIteratePrompt(usable.map((p) => p.path));
 
   const iterated = await params.cad.iterateCadProject(files, prompt, {
-    focusPath: assemblyZooPath,
+    focusPath: "main.kcl",
     signal: params.signal,
   });
   if (!iterated.ok) {
@@ -119,6 +122,7 @@ export async function assembleProductWithZooMcp(params: {
   doc = mergeProjectOutputs(doc, iterated.data.files);
   const assemblyOut =
     iterated.data.files[assemblyZooPath] ??
+    iterated.data.files["main.kcl"] ??
     iterated.data.files[params.assembly.path] ??
     doc.components.find((c) => c.id === params.assembly.id)?.content;
   if (!assemblyOut?.trim()) {

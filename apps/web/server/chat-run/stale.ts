@@ -1,21 +1,29 @@
 import "server-only";
 
 import { prisma, type Prisma } from "@foundry/db";
+import { validateUIMessages, type UIMessage } from "ai";
+import { persistFailedRunFromEvents } from "./persist";
 import { publishRunFinished } from "./publish";
 
 /** PENDING with no worker pickup — usually Redis/worker down. */
 const PENDING_STALE_MS = 45_000;
 /**
  * RUNNING without finishing — worker crashed mid-stream. A single Zoo
- * text_to_cad / assembly job polls for up to ~10 minutes and emits no chunks
- * while it waits, so this has to sit above that or long CAD runs get killed
- * mid-flight.
+ * text_to_cad / multi-part assembly can run a long time with no stream chunks,
+ * so this has to sit above Zoo's worst-case wall clock or runs die mid-flight.
  */
-const RUNNING_STALE_MS = 12 * 60_000;
+const RUNNING_STALE_MS = 40 * 60_000;
 
 type ChatRunClient = Pick<Prisma.TransactionClient, "chatRun">;
 
-type ExpiredRun = { id: string; channelId: string; error: string };
+type ExpiredRun = {
+  id: string;
+  channelId: string;
+  projectId: string;
+  branchId: string;
+  error: string;
+  inputMessages: unknown;
+};
 
 async function expireStaleRuns(
   db: ChatRunClient,
@@ -37,26 +45,34 @@ async function expireStaleRuns(
     ],
   };
 
+  const select = {
+    id: true,
+    channelId: true,
+    projectId: true,
+    branchId: true,
+    inputMessages: true,
+  } as const;
+
   const [pendingRows, runningRows] = await Promise.all([
-    db.chatRun.findMany({
-      where: pendingWhere,
-      select: { id: true, channelId: true },
-    }),
-    db.chatRun.findMany({
-      where: runningWhere,
-      select: { id: true, channelId: true },
-    }),
+    db.chatRun.findMany({ where: pendingWhere, select }),
+    db.chatRun.findMany({ where: runningWhere, select }),
   ]);
 
   const expired: ExpiredRun[] = [
     ...pendingRows.map((r) => ({
       id: r.id,
       channelId: r.channelId,
+      projectId: r.projectId,
+      branchId: r.branchId,
+      inputMessages: r.inputMessages,
       error: "Timed out waiting for worker (check Redis / chat worker)",
     })),
     ...runningRows.map((r) => ({
       id: r.id,
       channelId: r.channelId,
+      projectId: r.projectId,
+      branchId: r.branchId,
+      inputMessages: r.inputMessages,
       error: "Timed out (stale run)",
     })),
   ];
@@ -88,16 +104,44 @@ async function expireStaleRuns(
   return expired;
 }
 
+async function persistAndBroadcastExpired(expired: ExpiredRun[]): Promise<void> {
+  await Promise.all(
+    expired.map(async (run) => {
+      try {
+        let inputMessages: UIMessage[] = [];
+        try {
+          inputMessages = await validateUIMessages({
+            messages: run.inputMessages as unknown[],
+          });
+        } catch {
+          inputMessages = [];
+        }
+        await persistFailedRunFromEvents({
+          runId: run.id,
+          scope: {
+            projectId: run.projectId,
+            branchId: run.branchId,
+            channelId: run.channelId,
+          },
+          inputMessages,
+          error: run.error,
+        });
+      } catch (err) {
+        console.error(`[chat-run] failed to persist stale run ${run.id}`, err);
+      }
+      await publishRunFinished(run.id, run.channelId, "error", run.error);
+    }),
+  );
+}
+
 /**
  * Mark stuck chat runs as ERROR so the UI isn't permanently "busy"
- * and new messages can be sent. Broadcasts run-finished with the timeout
- * reason so the client can stamp a real failure note.
+ * and new messages can be sent. Persists whatever streamed so far (with a
+ * failure stamp) and broadcasts run-finished with the timeout reason.
  */
 export async function expireStaleChatRuns(channelId: string): Promise<number> {
   const expired = await expireStaleRuns(prisma, { channelId });
-  await Promise.all(
-    expired.map((run) => publishRunFinished(run.id, run.channelId, "error", run.error)),
-  );
+  await persistAndBroadcastExpired(expired);
   return expired.length;
 }
 
@@ -108,12 +152,10 @@ export async function expireStaleProjectRuns(
   db: ChatRunClient = prisma,
 ): Promise<number> {
   const expired = await expireStaleRuns(db, { projectId, branchId });
-  // Only broadcast when using the default prisma client (not inside a txn
-  // that may not have a publisher wired the same way).
+  // Only broadcast/persist when using the default prisma client (not inside a
+  // txn that may roll back the ERROR status).
   if (db === prisma) {
-    await Promise.all(
-      expired.map((run) => publishRunFinished(run.id, run.channelId, "error", run.error)),
-    );
+    await persistAndBroadcastExpired(expired);
   }
   return expired.length;
 }

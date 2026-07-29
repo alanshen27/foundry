@@ -10,9 +10,12 @@ import {
   ensureDefaultCategory,
   ensureDefaultChannel,
 } from "../chat";
-import { loadChannelHistory } from "../chat-run/persist";
+import { loadChannelHistory, persistRunMessages } from "../chat-run/persist";
 import { publishRunFinished } from "../chat-run/publish";
 import { expireStaleChatRuns } from "../chat-run/stale";
+import { markFailedAssistantMessages } from "@/lib/copilot/messages";
+import type { UIMessage } from "ai";
+import { validateUIMessages } from "ai";
 
 const channelSelect = {
   id: true,
@@ -53,6 +56,53 @@ export const chatRouter = router({
     .query(async ({ ctx, input }) => {
       await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
       return loadChannelHistory(input.projectId, input.channelId);
+    }),
+
+  /**
+   * Client-side safety net: after a failed/cancelled run the browser still has
+   * the transcript the user saw. Persist it so a refresh doesn't wipe the turn
+   * when the worker died before finalize.
+   */
+  persistMessages: protectedProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        branchId: z.string(),
+        channelId: z.string(),
+        messages: z.array(z.unknown()),
+        error: z.string().trim().min(1).max(2000).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await requireProjectCapability(ctx.user.id, input.projectId, "agent.invoke");
+      const channel = await prisma.chatChannel.findFirst({
+        where: {
+          id: input.channelId,
+          projectId: input.projectId,
+          branchId: input.branchId,
+        },
+        select: { id: true },
+      });
+      if (!channel) throw new TRPCError({ code: "NOT_FOUND", message: "Unknown channel" });
+
+      let messages: UIMessage[];
+      try {
+        messages = await validateUIMessages({ messages: input.messages });
+      } catch {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid chat messages" });
+      }
+      if (input.error) {
+        messages = markFailedAssistantMessages(messages, input.error);
+      }
+      const count = await persistRunMessages(
+        {
+          projectId: input.projectId,
+          branchId: input.branchId,
+          channelId: input.channelId,
+        },
+        messages,
+      );
+      return { ok: true, count };
     }),
 
   activeRun: protectedProcedure
