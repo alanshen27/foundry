@@ -2,23 +2,33 @@
 
 import { useEffect, useState } from "react";
 import { AnimatedSignalGlyph } from "@/components/animated-signal-glyph";
+import { FoundryMarkIcon } from "@/components/foundry-mark";
 import { InteractiveDotField } from "@/components/interactive-dot-field";
 import { cn } from "@/lib/utils";
 
 /**
  * Video-opener title card: the signal-orange panel with the breathing
- * ASCII glyph mark, and the Foundry pixel-mark + wordmark inline on top.
- * The wordmark is editable — click it and type, or pass ?text=Your+Words.
+ * ASCII glyph mark, and the Foundry logo + wordmark inline on top. The
+ * wordmark types itself out, then stays editable — click it and type, or
+ * pass ?text=Your+Words.
  */
 export function DemoIntro({ initialText = "Foundry" }: { initialText?: string }) {
   const [shown, setShown] = useState(false);
+  const [typed, setTyped] = useState(0);
   const [text, setText] = useState(initialText);
-  const showIcon = /foundry/i.test(text);
+  const done = typed >= initialText.length;
+  const showIcon = /foundry/i.test(done ? text : initialText.slice(0, typed));
 
   useEffect(() => {
     const t = setTimeout(() => setShown(true), 500);
     return () => clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    if (!shown || typed >= initialText.length) return;
+    const t = setTimeout(() => setTyped((n) => n + 1), 90);
+    return () => clearTimeout(t);
+  }, [shown, typed, initialText.length]);
 
   return (
     <div className="bg-primary text-primary-foreground fixed inset-0 overflow-hidden">
@@ -43,20 +53,27 @@ export function DemoIntro({ initialText = "Foundry" }: { initialText?: string })
           )}
         >
           {showIcon ? (
-            <span className="inline-grid grid-cols-3 gap-[5px]" aria-hidden>
-              {Array.from({ length: 9 }, (_, i) => (
-                <span key={i} className="size-[9px] bg-[#faf9f5] md:size-[11px]" />
-              ))}
+            <span className="flex size-16 items-center justify-center bg-[#faf9f5] p-2 md:size-20">
+              <FoundryMarkIcon className="size-full" />
             </span>
           ) : null}
-          <span
-            contentEditable
-            suppressContentEditableWarning
-            spellCheck={false}
-            onInput={(e) => setText(e.currentTarget.textContent ?? "")}
-            className="font-mono text-5xl font-medium tracking-[0.2em] whitespace-pre uppercase outline-none md:text-6xl"
-          >
-            {initialText}
+          <span className="font-mono text-5xl font-medium tracking-[0.2em] whitespace-pre uppercase md:text-6xl">
+            {done ? (
+              <span
+                contentEditable
+                suppressContentEditableWarning
+                spellCheck={false}
+                onInput={(e) => setText(e.currentTarget.textContent ?? "")}
+                className="outline-none"
+              >
+                {initialText}
+              </span>
+            ) : (
+              <>
+                {initialText.slice(0, typed)}
+                <span className="animate-pulse">▌</span>
+              </>
+            )}
           </span>
         </div>
       </div>
