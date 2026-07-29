@@ -32,11 +32,17 @@ const serverEnvSchema = z
       }
       return trimmed;
     }, z.string().url().optional()),
+    // On Render, never silently fall back to localhost — that yields endless
+    // AggregateError ECONNREFUSED spam and a SIGTERM'd web process.
     REDIS_URL: z.preprocess((value) => {
       if (typeof value !== "string") return undefined;
       const trimmed = value.trim();
       return trimmed.length > 0 ? trimmed : undefined;
-    }, z.string().url().default("redis://localhost:6379")),
+    }, process.env.RENDER
+      ? z
+          .string({ required_error: "REDIS_URL is required on Render (Upstash rediss://…)" })
+          .url()
+      : z.string().url().default("redis://localhost:6379")),
     // AI copilot (optional; chat is disabled with a clear notice when unset)
     OPENAI_API_KEY: z.string().optional(),
     AI_MODEL: z.string().default("gpt-5.6"),

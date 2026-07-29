@@ -2,19 +2,52 @@ import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import { getServerEnv } from "@foundry/config";
 
+function redisHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "(unparseable REDIS_URL)";
+  }
+}
+
 /**
  * Prefer the raw REDIS_URL string — Upstash auth/TLS is reliable this way.
- * BullMQ accepts an options bag OR a duplicated ioredis connection.
+ * Always attach an error listener: without it, ioredis ECONNREFUSED becomes an
+ * empty AggregateError that looks like a crash loop on Render.
  */
 export function getRedisConnection() {
   const env = getServerEnv();
   const url = env.REDIS_URL.trim();
-  return new IORedis(url, {
+  const host = redisHost(url);
+  const connection = new IORedis(url, {
     maxRetriesPerRequest: null, // Required by BullMQ
     tls: url.startsWith("rediss://") ? {} : undefined,
+    // Prefer IPv4 — some Render→Upstash paths flap on dual-stack AggregateError.
     family: 4,
     enableReadyCheck: false,
+    connectTimeout: 15_000,
+    retryStrategy(times) {
+      // Cap reconnect spam; BullMQ will surface failures to callers.
+      if (times > 20) return null;
+      return Math.min(times * 250, 5_000);
+    },
   });
+  connection.on("error", (err) => {
+    const detail =
+      err && typeof err === "object" && "errors" in err && Array.isArray((err as AggregateError).errors)
+        ? (err as AggregateError).errors
+            .map((e) => {
+              const n = e as { address?: string; port?: number; code?: string };
+              return `${n.address ?? "?"}:${n.port ?? "?"} (${n.code ?? "?"})`;
+            })
+            .join(" | ")
+        : err.message || String(err);
+    console.error(`[redis] error host=${host} → ${detail}`);
+  });
+  connection.on("connect", () => {
+    console.log(`[redis] connected host=${host}`);
+  });
+  return connection;
 }
 
 export const CHAT_RUN_QUEUE_NAME = "chat-runs";
@@ -25,9 +58,6 @@ let sharedConnection: IORedis | undefined;
 function queueConnection() {
   if (!sharedConnection) {
     sharedConnection = getRedisConnection();
-    sharedConnection.on("error", (err) => {
-      console.error("[redis:queue]", err.message || err);
-    });
   }
   return sharedConnection;
 }

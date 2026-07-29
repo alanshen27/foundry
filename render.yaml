@@ -8,13 +8,18 @@
 #
 # After the first sync:
 # 1. Fill every sync:false env var in the foundry-shared group (+ web-only).
+#    REDIS_URL MUST be your Upstash rediss:// URL — unset/localhost causes
+#    AggregateError ECONNREFUSED loops and Render SIGTERM on the web service.
 # 2. Set Supabase Auth Site URL + redirect allowlist to APP_ORIGIN
 #    (and APP_ORIGIN/auth/confirm, APP_ORIGIN/auth/callback).
 # 3. Paste supabase/templates/*.html into Supabase Auth email templates.
 # 4. Set NEXT_PUBLIC_COLLAB_URL (web) to wss://<foundry-collab-host>
 #
-# Build note: --prod=false keeps prisma/typescript (devDependencies) available
-# even when Render sets NODE_ENV=production during build.
+# Build notes:
+# - Do NOT run `corepack enable` — Render's Node image ships pnpm on a
+#   read-only /usr/bin; enable fails with EROFS.
+# - --prod=false keeps prisma/typescript (devDependencies) for generate/build.
+# - engines.node is pinned to 22.x (package.json) so Render doesn't pick Node 26.
 
 envVarGroups:
   - name: foundry-shared
@@ -54,7 +59,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate && pnpm --filter @foundry/web build
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate && pnpm --filter @foundry/web build
     startCommand: pnpm --filter @foundry/web start
     healthCheckPath: /api/health
     buildFilter:
@@ -87,7 +92,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate
     startCommand: pnpm --filter @foundry/web worker:chat:prod
     buildFilter:
       paths:
@@ -117,7 +122,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate
     startCommand: pnpm --filter @foundry/collab-server start:prod
     buildFilter:
       paths:

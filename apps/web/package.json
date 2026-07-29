@@ -8,7 +8,7 @@
     "dev": "NODE_OPTIONS='--max-http-header-size=65536' next dev",
     "prebuild": "pnpm copy:kcl-wasm",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --hostname 0.0.0.0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "playwright test",

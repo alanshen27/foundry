@@ -15,7 +15,9 @@ every service). Web-only vars (`NEXT_PUBLIC_COLLAB_URL`,
    point it at the repo (file: `render.yaml`).
 3. Fill every prompted (`sync: false`) secret in **foundry-shared**:
    - `DATABASE_URL` / `DIRECT_URL` — Supabase Postgres (session/direct for DDL)
-   - `REDIS_URL` — external Redis (`rediss://…` for Upstash TLS)
+   - `REDIS_URL` — **required** Upstash `rediss://…` (TLS). If unset, the app
+     defaults to `localhost:6379` and Render logs endless `ECONNREFUSED` /
+     `AggregateError` until the service is SIGTERM'd.
    - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
      `SUPABASE_SERVICE_ROLE_KEY`
    - Optional: `OPENAI_API_KEY`, `ZOO_API_TOKEN`, `V0_API_KEY`
@@ -40,9 +42,12 @@ redirects and screenshot tools both use it. `AUTH_SECRET` is generated once in
 
 ## Build notes
 
-Install uses `pnpm install --frozen-lockfile --prod=false` so Prisma and other
-devDependencies are present during `prisma generate` / `next build` even when
-Render sets `NODE_ENV=production`.
+- Do **not** run `corepack enable` in build commands — Render's Node image
+  ships pnpm on a read-only `/usr/bin`; enable fails with `EROFS`.
+- Install uses `pnpm install --frozen-lockfile --prod=false` so Prisma and
+  other devDependencies are present during `prisma generate` / `next build`.
+- `package.json` `engines.node` is `22.x` (plus `.node-version`) so Render
+  does not pick an unbounded latest Node.
 
 ## After deploy
 
