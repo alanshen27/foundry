@@ -15,6 +15,7 @@ import {
   shouldSuggestAiPing,
   uiMessageText,
 } from "@/server/chat-run/should-respond";
+import { stampLatestUserAuthor } from "@/lib/copilot/chat-message-meta";
 
 const bodySchema = z.object({
   projectId: z.string(),
@@ -52,7 +53,14 @@ export async function POST(request: Request) {
       channelId = (await ensureDefaultChannel(projectId, branchId)).id;
     }
 
-    const messages = await validateUIMessages({ messages: parsed.data.messages });
+    const validated = await validateUIMessages({ messages: parsed.data.messages });
+    // Attribute only the newest user turn to the session user — never rewrite
+    // teammate messages that arrived without author metadata in the payload.
+    const messages = stampLatestUserAuthor(validated, {
+      id: user.id,
+      name: user.name,
+      avatarUrl: user.avatarUrl,
+    });
     const userText = lastUserText(messages);
     const invokeAi = shouldInvokeAi(userText);
 

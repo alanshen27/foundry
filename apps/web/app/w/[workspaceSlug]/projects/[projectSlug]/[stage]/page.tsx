@@ -61,7 +61,6 @@ export default async function StagePage({
     "schematic",
     "pcb",
     "model",
-    "code",
     "design",
     "assembly",
   ] as const;

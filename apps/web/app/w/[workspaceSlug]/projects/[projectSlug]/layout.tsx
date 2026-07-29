@@ -1,11 +1,13 @@
 import { notFound, redirect } from "next/navigation";
 import type { ReactNode } from "react";
-import type { UIMessage } from "ai";
 import { prisma } from "@foundry/db";
 import type { Stage } from "@foundry/domain";
 import { getCurrentUser } from "@/server/session";
 import { ensureDefaultChannel } from "@/server/chat";
-import { loadChannelHistory } from "@/server/chat-run/persist";
+import {
+  loadChannelHistory,
+  storedMessageToUIMessage,
+} from "@/server/chat-run/persist";
 import { ProjectShell } from "@/components/project-shell";
 
 export default async function ProjectShellLayout({
@@ -53,7 +55,7 @@ export default async function ProjectShellLayout({
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: { id: true, name: true, categoryId: true, sortOrder: true },
     }),
-    loadChannelHistory(project.id, defaultChannel.id),
+    loadChannelHistory(project.id, defaultChannel.id, user.id),
   ]);
 
   const stageStatuses = Object.fromEntries(
@@ -78,14 +80,7 @@ export default async function ProjectShellLayout({
       chatChannels={channels}
       chatCategories={categories}
       defaultChannelId={defaultChannel.id}
-      initialChatMessages={chatRows.map(
-        (row, i) =>
-          ({
-            id: row.id ?? String(i),
-            role: row.role as UIMessage["role"],
-            parts: row.parts as unknown as UIMessage["parts"],
-          }) satisfies UIMessage,
-      )}
+      initialChatMessages={chatRows.map(storedMessageToUIMessage)}
     >
       {children}
     </ProjectShell>

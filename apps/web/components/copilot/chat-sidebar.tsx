@@ -13,7 +13,6 @@ import {
   Eye,
   FileDown,
   FileText,
-  GitBranch,
   Globe,
   Image as ImageIcon,
   ListChecks,
@@ -40,8 +39,24 @@ import {
 } from "@/lib/copilot/mentions";
 import { groupAssistantPartBlocks } from "@/lib/copilot/part-blocks";
 import { isAssistantFailureText } from "@/lib/copilot/messages";
+import {
+  isMessageDeleted,
+  isOwnUserMessage,
+  messageDisplayName,
+  messagePlainText,
+  readChatMeta,
+  type ChatReactionEmoji,
+  type FoundryUIMessage,
+} from "@/lib/copilot/chat-message-meta";
 import { Markdown } from "./markdown";
 import { ChannelSwitcher } from "./channel-switcher";
+import {
+  MessageActionBar,
+  MessageEditForm,
+  MessageReactions,
+  MessageReplyQuote,
+  ReplyPreviewBar,
+} from "./message-actions";
 import { useCopilot } from "./copilot-provider";
 
 const TOOL_META: Record<
@@ -191,12 +206,6 @@ const TOOL_META: Record<
     done: "Inspected the PCB",
     failed: "PCB inspect failed",
     icon: Camera,
-  },
-  add_repo_link: {
-    doing: "Linking repository",
-    done: "Linked repository",
-    failed: "Failed to link repository",
-    icon: GitBranch,
   },
   write_code_file: {
     doing: "Writing code",
@@ -489,35 +498,100 @@ export function ToolCallGroup({ parts }: { parts: ToolPart[] }) {
 export function Message({
   message,
   failed,
+  viewerId,
+  onReply,
+  onEdit,
+  onDelete,
+  onReact,
 }: {
   message: UIMessage;
   /** Live stream just errored on this (usually last) assistant turn. */
   failed?: boolean;
+  viewerId: string;
+  onReply: () => void;
+  onEdit: (text: string) => Promise<void>;
+  onDelete: () => Promise<void>;
+  onReact: (emoji: ChatReactionEmoji) => void;
 }) {
+  const [editing, setEditing] = useState(false);
   const isUser = message.role === "user";
+  const own = isOwnUserMessage(message, viewerId);
+  const deleted = isMessageDeleted(message);
+  const meta = readChatMeta(message);
+  const authorName = messageDisplayName(message);
 
   if (isUser) {
     return (
-      <div className="flex justify-end">
-        <div className="bg-primary text-primary-foreground max-w-[92%] rounded-none px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
-          {message.parts.map((part, i) =>
-            part.type === "text" ? (
-              <span key={i}>
-                {splitMentions(part.text).map((seg, j) =>
-                  seg.kind === "mention" ? (
-                    <span
-                      key={j}
-                      className="bg-primary-foreground/20 inline-flex items-center rounded-none px-1 font-medium"
-                    >
-                      {seg.text}
-                    </span>
-                  ) : (
-                    <span key={j}>{seg.text}</span>
-                  ),
-                )}
-              </span>
-            ) : null,
+      <div className={cn("group relative flex flex-col gap-1", own ? "items-end" : "items-start")}>
+        {!own ? (
+          <span className="text-muted-foreground px-0.5 font-mono text-[10px] tracking-[0.04em]">
+            {authorName}
+            {meta.editedAt && !deleted ? " · edited" : ""}
+          </span>
+        ) : meta.editedAt && !deleted ? (
+          <span className="text-muted-foreground px-0.5 font-mono text-[10px]">edited</span>
+        ) : null}
+        <div className="relative max-w-[92%]">
+          {!deleted ? (
+            <MessageActionBar
+              message={message}
+              viewerId={viewerId}
+              align={own ? "right" : "left"}
+              onReply={onReply}
+              onEdit={() => setEditing(true)}
+              onDelete={() => void onDelete()}
+              onReact={onReact}
+            />
+          ) : null}
+          <MessageReplyQuote message={message} />
+          {editing ? (
+            <MessageEditForm
+              initialText={messagePlainText(message)}
+              onCancel={() => setEditing(false)}
+              onSave={async (text) => {
+                await onEdit(text);
+                setEditing(false);
+              }}
+            />
+          ) : deleted ? (
+            <div className="bg-muted/40 text-muted-foreground rounded-none px-3.5 py-2.5 text-sm italic">
+              Message deleted
+            </div>
+          ) : (
+            <div
+              className={cn(
+                "rounded-none px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
+                own
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted/70 text-foreground border-border border",
+              )}
+            >
+              {message.parts.map((part, i) =>
+                part.type === "text" ? (
+                  <span key={i}>
+                    {splitMentions(part.text).map((seg, j) =>
+                      seg.kind === "mention" ? (
+                        <span
+                          key={j}
+                          className={cn(
+                            "inline-flex items-center rounded-none px-1 font-medium",
+                            own ? "bg-primary-foreground/20" : "bg-primary/15 text-primary",
+                          )}
+                        >
+                          {seg.text}
+                        </span>
+                      ) : (
+                        <span key={j}>{seg.text}</span>
+                      ),
+                    )}
+                  </span>
+                ) : null,
+              )}
+            </div>
           )}
+          {!editing && !deleted ? (
+            <MessageReactions message={message} onToggle={onReact} />
+          ) : null}
         </div>
       </div>
     );
@@ -536,7 +610,18 @@ export function Message({
   const showFailed = Boolean(failed) || stampedFailed;
 
   return (
-    <div className="flex max-w-[95%] flex-col gap-1.5">
+    <div className="group relative flex max-w-[95%] flex-col gap-1.5">
+      {!deleted ? (
+        <MessageActionBar
+          message={message}
+          viewerId={viewerId}
+          onReply={onReply}
+          onEdit={() => setEditing(true)}
+          onDelete={() => void onDelete()}
+          onReact={onReact}
+        />
+      ) : null}
+      <MessageReplyQuote message={message} />
       {groupAssistantPartBlocks(message.parts, message.id).map((block) => {
         if (block.type === "text") {
           if (isAssistantFailureText(block.part.text)) {
@@ -561,6 +646,7 @@ export function Message({
         }
         return <ToolCallGroup key={block.key} parts={block.parts as ToolPart[]} />;
       })}
+      <MessageReactions message={message} onToggle={onReact} />
       {!hasContent ? (
         showFailed ? (
           <p className="text-destructive flex items-center gap-1.5 text-xs">
@@ -597,7 +683,21 @@ function openChatPopout(pathname: string | null) {
 
 export function ChatSidebar() {
   const pathname = usePathname();
-  const { messages, status, busy, error, open, send, stop } = useCopilot();
+  const {
+    messages,
+    status,
+    busy,
+    error,
+    open,
+    send,
+    stop,
+    viewer,
+    replyingTo,
+    setReplyingTo,
+    editMessage,
+    deleteMessage,
+    toggleReaction,
+  } = useCopilot();
   const [input, setInput] = useState("");
   const [caret, setCaret] = useState(0);
   const [mentionIndex, setMentionIndex] = useState(0);
@@ -681,7 +781,7 @@ export function ChatSidebar() {
 
   function trySend() {
     if (!canSend) return;
-    send(input);
+    send(input, replyingTo ? { replyToId: replyingTo.id } : undefined);
     setInput("");
     setCaret(0);
   }
@@ -799,7 +899,15 @@ export function ChatSidebar() {
               <Message
                 key={m.id}
                 message={m}
+                viewerId={viewer.id}
                 failed={status === "error" && m.role === "assistant" && i === messages.length - 1}
+                onReply={() => {
+                  setReplyingTo(m as FoundryUIMessage);
+                  textareaRef.current?.focus();
+                }}
+                onEdit={(text) => editMessage(m.id, text)}
+                onDelete={() => deleteMessage(m.id)}
+                onReact={(emoji) => void toggleReaction(m.id, emoji)}
               />
             ))
           )}
@@ -819,6 +927,9 @@ export function ChatSidebar() {
 
         <form onSubmit={onSubmit} className="shrink-0 border-t p-3">
           <div className="relative">
+            {replyingTo ? (
+              <ReplyPreviewBar message={replyingTo} onClear={() => setReplyingTo(null)} />
+            ) : null}
             {mentionOpen ? (
               <div
                 role="listbox"
@@ -870,7 +981,9 @@ export function ChatSidebar() {
                 placeholder={
                   busy
                     ? "Draft next message… stop to cancel the reply"
-                    : "Message… type @ to mention AI"
+                    : replyingTo
+                      ? `Reply to ${messageDisplayName(replyingTo)}`
+                      : "Message… type @ to mention AI"
                 }
                 rows={2}
                 className="placeholder:text-muted-foreground max-h-40 flex-1 resize-none bg-transparent text-sm outline-none"

@@ -19,6 +19,15 @@ import {
   type BroadcastPort,
 } from "@foundry/realtime";
 import { BackgroundChatTransport } from "@/lib/copilot/background-chat-transport";
+import {
+  historyRowToUIMessage,
+  messageDisplayName,
+  messagePlainText,
+  withChatMeta,
+  type ChatHistoryRow,
+  type ChatReactionEmoji,
+  type FoundryUIMessage,
+} from "@/lib/copilot/chat-message-meta";
 import { isConnectionError } from "@/lib/copilot/connection-error";
 import {
   seedTranscriptWithLocalBackup,
@@ -45,6 +54,10 @@ export type ChatCategory = {
   sortOrder: number;
 };
 
+export type CopilotViewer = { id: string; name: string; avatarUrl?: string | null };
+
+export type SendOptions = { replyToId?: string };
+
 type CopilotContextValue = {
   messages: UIMessage[];
   status: "submitted" | "streaming" | "ready" | "error";
@@ -53,7 +66,7 @@ type CopilotContextValue = {
   error: Error | undefined;
   open: boolean;
   setOpen: (open: boolean) => void;
-  send: (text: string) => void;
+  send: (text: string, options?: SendOptions) => void;
   stop: () => void;
   channels: ChatChannel[];
   categories: ChatCategory[];
@@ -65,7 +78,17 @@ type CopilotContextValue = {
   deleteCategory: (categoryId: string) => Promise<void>;
   projectId: string;
   branchId: string;
+  viewer: CopilotViewer;
+  replyingTo: FoundryUIMessage | null;
+  setReplyingTo: (message: FoundryUIMessage | null) => void;
+  editMessage: (messageId: string, text: string) => Promise<void>;
+  deleteMessage: (messageId: string) => Promise<void>;
+  toggleReaction: (messageId: string, emoji: ChatReactionEmoji) => Promise<void>;
 };
+
+function rowsToMessages(rows: ChatHistoryRow[]): UIMessage[] {
+  return rows.map(historyRowToUIMessage);
+}
 
 const CopilotContext = createContext<CopilotContextValue | null>(null);
 
@@ -105,12 +128,29 @@ function ChatEngine({
   channelId: string;
   initialMessages: UIMessage[];
   onMessages: (channelId: string, messages: UIMessage[]) => void;
-  shell: Omit<CopilotContextValue, "messages" | "status" | "busy" | "error" | "send" | "stop">;
+  shell: Omit<
+    CopilotContextValue,
+    | "messages"
+    | "status"
+    | "busy"
+    | "error"
+    | "send"
+    | "stop"
+    | "replyingTo"
+    | "setReplyingTo"
+    | "editMessage"
+    | "deleteMessage"
+    | "toggleReaction"
+  >;
   children: ReactNode;
 }) {
   const utils = trpc.useUtils();
   const cancelMutation = trpc.chat.cancelActiveRun.useMutation();
   const persistMutation = trpc.chat.persistMessages.useMutation();
+  const editMutation = trpc.chat.editMessage.useMutation();
+  const deleteMutation = trpc.chat.deleteMessage.useMutation();
+  const reactionMutation = trpc.chat.toggleReaction.useMutation();
+  const [replyingTo, setReplyingTo] = useState<FoundryUIMessage | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusRef = useRef<"submitted" | "streaming" | "ready" | "error">("ready");
   const busyRef = useRef(false);
@@ -310,11 +350,18 @@ function ChatEngine({
           if (!hasPending) {
             local = [
               ...local,
-              {
-                id: `local_user_${Date.now()}`,
-                role: "user",
-                parts: [{ type: "text", text: pending }],
-              } as UIMessage,
+              withChatMeta(
+                {
+                  id: `local_user_${Date.now()}`,
+                  role: "user",
+                  parts: [{ type: "text", text: pending }],
+                } as UIMessage,
+                {
+                  authorUserId: shell.viewer.id,
+                  authorName: shell.viewer.name,
+                  authorAvatarUrl: shell.viewer.avatarUrl ?? null,
+                },
+              ),
             ];
           }
         }
@@ -322,11 +369,7 @@ function ChatEngine({
         let server: UIMessage[] = [];
         try {
           const rows = await utils.client.chat.messages.query({ projectId, channelId });
-          server = rows.map((row) => ({
-            id: row.id,
-            role: row.role as UIMessage["role"],
-            parts: row.parts as unknown as UIMessage["parts"],
-          }));
+          server = rowsToMessages(rows as ChatHistoryRow[]);
         } catch (err) {
           console.error("failed to reload chat history after error", err);
         }
@@ -342,7 +385,7 @@ function ChatEngine({
           .catch((err) => console.error("failed to persist chat transcript", err));
       })();
     },
-    [setMessages, persistMutation, projectId, branchId, channelId, utils],
+    [setMessages, persistMutation, projectId, branchId, channelId, utils, shell.viewer],
   );
   persistFailureStampRef.current = persistFailureStamp;
 
@@ -360,11 +403,7 @@ function ChatEngine({
       });
       try {
         const rows = await utils.client.chat.messages.query({ projectId, channelId });
-        const server = rows.map((row) => ({
-          id: row.id,
-          role: row.role as UIMessage["role"],
-          parts: row.parts as unknown as UIMessage["parts"],
-        }));
+        const server = rowsToMessages(rows as ChatHistoryRow[]);
         const merged = pruneEmptyAssistantMessages(
           mergeTranscriptPreferringUserTurns(server, local),
         );
@@ -557,7 +596,7 @@ function ChatEngine({
   }, [cancelMutation, projectId, branchId, channelId, stop, utils, setMessages, releaseOwnedRun]);
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, options?: SendOptions) => {
       const trimmed = text.trim();
       if (!trimmed) return;
       // Only @AI runs own the stop button / send lock. Notes can always go out.
@@ -565,19 +604,44 @@ function ChatEngine({
       if (wantsAi && busyRef.current) return;
       shell.setOpen(true);
 
+      const replyToId = options?.replyToId ?? replyingTo?.id;
+      const replyTarget =
+        (replyToId
+          ? messagesRef.current.find((m) => m.id === replyToId)
+          : null) ?? replyingTo;
+      const metadata = {
+        authorUserId: shell.viewer.id,
+        authorName: shell.viewer.name,
+        authorAvatarUrl: shell.viewer.avatarUrl ?? null,
+        ...(replyTarget
+          ? {
+              replyToId: replyTarget.id,
+              replyPreview: {
+                id: replyTarget.id,
+                authorName: messageDisplayName(replyTarget),
+                text: messagePlainText(replyTarget) || "…",
+              },
+            }
+          : {}),
+      };
+
       const epoch = ++sendEpochRef.current;
       connectionDropRef.current = false;
       ownedRunIdRef.current = null;
       selfRunRef.current = wantsAi;
       pendingUserTextRef.current = trimmed;
+      setReplyingTo(null);
       // Stash before POST so a reload mid-flight / after 401 still keeps the turn.
       writeLocalTranscript(channelId, [
         ...messagesRef.current,
-        {
-          id: `local_user_${Date.now()}`,
-          role: "user",
-          parts: [{ type: "text", text: trimmed }],
-        } as UIMessage,
+        withChatMeta(
+          {
+            id: `local_user_${Date.now()}`,
+            role: "user",
+            parts: [{ type: "text", text: trimmed }],
+          } as UIMessage,
+          metadata,
+        ),
       ]);
       if (wantsAi) {
         setLocalBusy(true);
@@ -593,7 +657,7 @@ function ChatEngine({
         releaseOwnedRun(epoch);
       };
 
-      void sendMessage({ text: trimmed })
+      void sendMessage({ text: trimmed, metadata })
         .then(() => {
           // Stream finished — server persisted at POST; drop the local safety net.
           if (epoch === sendEpochRef.current) {
@@ -617,7 +681,7 @@ function ChatEngine({
               selfRunRef.current = true;
               setLocalBusy(true);
               busyRef.current = true;
-              await sendMessage({ text: trimmed });
+              await sendMessage({ text: trimmed, metadata });
               if (retryEpoch !== sendEpochRef.current) return;
               pendingUserTextRef.current = null;
               return;
@@ -649,11 +713,100 @@ function ChatEngine({
       cancelMutation,
       persistFailureStamp,
       releaseOwnedRun,
+      replyingTo,
     ],
   );
+
+  const editMessage = useCallback(
+    async (messageId: string, text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      const result = await editMutation.mutateAsync({
+        projectId,
+        messageId,
+        text: trimmed,
+      });
+      setMessages((prev) =>
+        prev.map((message) => {
+          if (message.id !== messageId) return message;
+          return withChatMeta(
+            {
+              ...message,
+              parts: [{ type: "text", text: trimmed }],
+            },
+            { editedAt: result.editedAt },
+          );
+        }),
+      );
+    },
+    [editMutation, projectId, setMessages],
+  );
+
+  const deleteMessage = useCallback(
+    async (messageId: string) => {
+      const result = await deleteMutation.mutateAsync({ projectId, messageId });
+      setMessages((prev) =>
+        prev.map((message) => {
+          if (message.id !== messageId) return message;
+          return withChatMeta(
+            {
+              ...message,
+              parts: [{ type: "text", text: "Message deleted" }],
+            },
+            { deletedAt: result.deletedAt },
+          );
+        }),
+      );
+      setReplyingTo((prev) => (prev?.id === messageId ? null : prev));
+    },
+    [deleteMutation, projectId, setMessages],
+  );
+
+  const toggleReaction = useCallback(
+    async (messageId: string, emoji: ChatReactionEmoji) => {
+      const result = await reactionMutation.mutateAsync({
+        projectId,
+        messageId,
+        emoji,
+      });
+      setMessages((prev) =>
+        prev.map((message) => {
+          if (message.id !== messageId) return message;
+          return withChatMeta(message, { reactions: result.reactions });
+        }),
+      );
+    },
+    [reactionMutation, projectId, setMessages],
+  );
+
   const value = useMemo(
-    () => ({ ...shell, messages, status, busy, error, send, stop: stopRun }),
-    [shell, messages, status, busy, error, send, stopRun],
+    () => ({
+      ...shell,
+      messages,
+      status,
+      busy,
+      error,
+      send,
+      stop: stopRun,
+      replyingTo,
+      setReplyingTo,
+      editMessage,
+      deleteMessage,
+      toggleReaction,
+    }),
+    [
+      shell,
+      messages,
+      status,
+      busy,
+      error,
+      send,
+      stopRun,
+      replyingTo,
+      editMessage,
+      deleteMessage,
+      toggleReaction,
+    ],
   );
 
   return <CopilotContext.Provider value={value}>{children}</CopilotContext.Provider>;
@@ -666,6 +819,7 @@ export function CopilotProvider({
   categories: initialCategories,
   defaultChannelId,
   initialMessages,
+  viewer,
   children,
 }: {
   projectId: string;
@@ -674,6 +828,7 @@ export function CopilotProvider({
   categories: ChatCategory[];
   defaultChannelId: string;
   initialMessages: UIMessage[];
+  viewer: CopilotViewer;
   children: ReactNode;
 }) {
   const utils = trpc.useUtils();
@@ -714,11 +869,7 @@ export function CopilotProvider({
         .query({ projectId, channelId })
         .then((rows) => {
           const fromServer = pruneEmptyAssistantMessages(
-            rows.map((row) => ({
-              id: row.id,
-              role: row.role as UIMessage["role"],
-              parts: row.parts as unknown as UIMessage["parts"],
-            })),
+            rowsToMessages(rows as ChatHistoryRow[]),
           );
           cacheRef.current.set(
             channelId,
@@ -796,6 +947,7 @@ export function CopilotProvider({
       deleteCategory,
       projectId,
       branchId,
+      viewer,
     }),
     [
       open,
@@ -809,6 +961,7 @@ export function CopilotProvider({
       deleteCategory,
       projectId,
       branchId,
+      viewer,
     ],
   );
 

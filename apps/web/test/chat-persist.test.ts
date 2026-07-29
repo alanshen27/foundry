@@ -127,8 +127,20 @@ describe("saveNewMessages", () => {
   it("writes the channel scope and role onto every row", async () => {
     await saveNewMessages(scope, [message("m1", "user", "hi"), message("m2", "assistant", "yo")]);
     expect(writtenRows()).toHaveLength(2);
-    expect(row(0)).toMatchObject({ id: "m1", role: "user", ...scope });
-    expect(row(1)).toMatchObject({ id: "m2", role: "assistant", ...scope });
+    expect(row(0)).toMatchObject({ id: "m1", role: "user", authorUserId: null, ...scope });
+    expect(row(1)).toMatchObject({ id: "m2", role: "assistant", authorUserId: null, ...scope });
+  });
+
+  it("persists authorUserId and replyToId from message metadata", async () => {
+    await saveNewMessages(scope, [
+      {
+        id: "m1",
+        role: "user",
+        parts: [{ type: "text", text: "reply" }],
+        metadata: { authorUserId: "u1", replyToId: "m0" },
+      } as UIMessage,
+    ]);
+    expect(row(0)).toMatchObject({ authorUserId: "u1", replyToId: "m0" });
   });
 
   it("staggers createdAt so array order survives an orderBy on it", async () => {
@@ -161,16 +173,58 @@ describe("loadChannelHistory", () => {
   it("takes the newest page and returns it oldest-first", async () => {
     const at = new Date();
     findMany.mockResolvedValueOnce([
-      { id: "m3", role: "user", parts: [], createdAt: at },
-      { id: "m2", role: "assistant", parts: [], createdAt: at },
-      { id: "m1", role: "user", parts: [], createdAt: at },
-    ]);
+      {
+        id: "m3",
+        role: "user",
+        parts: [],
+        createdAt: at,
+        authorUserId: "u2",
+        author: { id: "u2", name: "Bob", avatarUrl: null },
+        replyToId: null,
+        replyTo: null,
+        editedAt: null,
+        deletedAt: null,
+        reactions: [],
+      },
+      {
+        id: "m2",
+        role: "assistant",
+        parts: [],
+        createdAt: at,
+        authorUserId: null,
+        author: null,
+        replyToId: null,
+        replyTo: null,
+        editedAt: null,
+        deletedAt: null,
+        reactions: [],
+      },
+      {
+        id: "m1",
+        role: "user",
+        parts: [],
+        createdAt: at,
+        authorUserId: "u1",
+        author: { id: "u1", name: "Ada", avatarUrl: null },
+        replyToId: null,
+        replyTo: null,
+        editedAt: null,
+        deletedAt: null,
+        reactions: [{ emoji: "👍", userId: "u1" }],
+      },
+    ] as never);
 
-    const rows = await loadChannelHistory("p1", "c1");
+    const rows = await loadChannelHistory("p1", "c1", "u1");
 
     const call = findMany.mock.calls.at(-1);
     expect(call?.[0].take).toBe(CHAT_HISTORY_LIMIT);
     expect(call?.[0].orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
     expect(rows.map((r) => r.id)).toEqual(["m1", "m2", "m3"]);
+    expect(rows[0]).toMatchObject({
+      authorUserId: "u1",
+      authorName: "Ada",
+      reactions: [{ emoji: "👍", count: 1, me: true }],
+    });
+    expect(rows[2]).toMatchObject({ authorUserId: "u2", authorName: "Bob" });
   });
 });

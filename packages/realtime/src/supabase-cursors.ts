@@ -25,6 +25,8 @@ export function createSupabaseCursorPort(config: SupabaseCursorConfig): CursorPo
       // `self: false` keeps our own cursor out of the echo, so the local
       // pointer is never drawn twice.
       const room = client.channel(channel, { config: { broadcast: { self: false } } });
+      let subscribed = false;
+      let queued: { x: number; y: number } | null = null;
 
       const emit = () => {
         const now = Date.now();
@@ -32,6 +34,14 @@ export function createSupabaseCursorPort(config: SupabaseCursorConfig): CursorPo
           if (now - peer.at > CURSOR_STALE_MS) peers.delete(id);
         }
         onPeers([...peers.values()]);
+      };
+
+      const sendMove = (x: number, y: number) => {
+        void room.send({
+          type: "broadcast",
+          event: "cursor",
+          payload: { ...self, x, y, at: Date.now() } satisfies CursorState,
+        });
       };
 
       room.on("broadcast", { event: "cursor" }, ({ payload }) => {
@@ -48,7 +58,14 @@ export function createSupabaseCursorPort(config: SupabaseCursorConfig): CursorPo
         emit();
       });
 
-      void room.subscribe();
+      void room.subscribe((status) => {
+        if (status !== "SUBSCRIBED") return;
+        subscribed = true;
+        if (queued) {
+          sendMove(queued.x, queued.y);
+          queued = null;
+        }
+      });
 
       // A peer that stops moving still has a valid cursor, but one that closed
       // its tab does not — sweep so stale entries disappear without traffic.
@@ -56,11 +73,11 @@ export function createSupabaseCursorPort(config: SupabaseCursorConfig): CursorPo
 
       return {
         move: (x, y) => {
-          void room.send({
-            type: "broadcast",
-            event: "cursor",
-            payload: { ...self, x, y, at: Date.now() } satisfies CursorState,
-          });
+          if (!subscribed) {
+            queued = { x, y };
+            return;
+          }
+          sendMove(x, y);
         },
         leave: () => {
           clearInterval(sweep);

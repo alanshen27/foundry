@@ -4,7 +4,7 @@
  * Mechanical CAD workspace: multi-component tree (parts / assembly /
  * instructions) + Monaco + live Zoo viewport for the active KCL component.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import Editor from "@monaco-editor/react";
 import {
   Bot,
@@ -207,7 +207,7 @@ function CadCursorLayer({ peers }: { peers: CursorState[] }) {
       {peers.map((peer) => (
         <div
           key={peer.userId}
-          className="absolute"
+          className="absolute will-change-transform"
           style={{
             left: `${normalizedCursorCoordinate(peer.x) * 100}%`,
             top: `${normalizedCursorCoordinate(peer.y) * 100}%`,
@@ -232,6 +232,33 @@ function CadCursorLayer({ peers }: { peers: CursorState[] }) {
       ))}
     </div>
   );
+}
+
+/**
+ * Owns cursor state so peer updates do not re-render CadViewport / Monaco.
+ * Parent only holds a ref to `report`.
+ */
+function CadCursorOverlay({
+  projectId,
+  branchId,
+  surface,
+  self,
+  reportRef,
+}: {
+  projectId: string;
+  branchId: string;
+  surface: string;
+  self: { userId: string; name: string };
+  reportRef: MutableRefObject<((x: number, y: number) => void) | null>;
+}) {
+  const cursors = useCursors(projectId, branchId, surface, self);
+  useEffect(() => {
+    reportRef.current = cursors.report;
+    return () => {
+      reportRef.current = null;
+    };
+  }, [cursors.report, reportRef]);
+  return <CadCursorLayer peers={cursors.peers} />;
 }
 
 export function ModelEditor({
@@ -403,11 +430,11 @@ export function ModelEditor({
   );
   const active: CadComponent | null = viewDoc ? getActiveComponent(viewDoc) : null;
   const isKcl = active?.kind === "part" || active?.kind === "assembly";
-  const cursors = useCursors(projectId, branchId, cadCursorSurface(active?.id ?? "none"), {
+  const reportCursorRef = useRef<((x: number, y: number) => void) | null>(null);
+  const cursorSelf = {
     userId: viewer.data?.id ?? "anonymous",
     name: viewer.data?.name ?? "Someone",
-  });
-  const reportCursor = cursors.report;
+  };
 
   // Debounce the whole document rather than just the active script: an assembly
   // renders from every part it imports, so the engine needs one consistent
@@ -511,7 +538,7 @@ export function ModelEditor({
         onPointerMove={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           if (rect.width <= 0 || rect.height <= 0) return;
-          reportCursor(
+          reportCursorRef.current?.(
             normalizedCursorCoordinate((event.clientX - rect.left) / rect.width),
             normalizedCursorCoordinate((event.clientY - rect.top) / rect.height),
           );
@@ -546,7 +573,13 @@ export function ModelEditor({
             ) : null}
           </>
         )}
-        <CadCursorLayer peers={cursors.peers} />
+        <CadCursorOverlay
+          projectId={projectId}
+          branchId={branchId}
+          surface={cadCursorSurface(active?.id ?? "none")}
+          self={cursorSelf}
+          reportRef={reportCursorRef}
+        />
         {aiLock.data ? (
           <div
             className="bg-card/95 pointer-events-none absolute top-14 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg backdrop-blur-md"

@@ -1,14 +1,19 @@
 /**
  * Chat history persistence.
  *
- * History is append-only: a run may add messages but must never rewrite or
- * remove ones already stored. The previous implementation replaced the whole
- * channel with whatever the client happened to be holding, so anything the
- * client had not loaded — or that sanitization had stripped — was destroyed.
+ * History is append-only for AI runs: a run may add messages but must never
+ * rewrite or remove ones already stored (except richer parts merges). Human
+ * message edit/delete go through dedicated chat router procedures.
  */
 import { prisma, type Prisma } from "@foundry/db";
 import { readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai";
 import { markFailedAssistantMessages } from "@/lib/copilot/messages";
+import {
+  historyRowToUIMessage,
+  readChatMeta,
+  type ChatHistoryRow,
+  type ChatReactionSummary,
+} from "@/lib/copilot/chat-message-meta";
 
 /**
  * How many messages a client loads. Reads take the newest N: with an
@@ -22,48 +27,137 @@ export type ChannelScope = {
   channelId: string;
 };
 
-export type StoredMessage = {
-  id: string;
-  role: string;
-  parts: unknown;
-};
+export type StoredMessage = ChatHistoryRow;
+
+export { historyRowToUIMessage as storedMessageToUIMessage };
+
+function metaFromMessage(message: UIMessage): {
+  authorUserId: string | null;
+  replyToId: string | null;
+} {
+  const meta = readChatMeta(message);
+  return {
+    authorUserId:
+      message.role === "user"
+        ? (typeof meta.authorUserId === "string" && meta.authorUserId
+            ? meta.authorUserId
+            : null)
+        : null,
+    replyToId:
+      typeof meta.replyToId === "string" && meta.replyToId ? meta.replyToId : null,
+  };
+}
+
+function previewTextFromParts(parts: unknown): string {
+  if (!Array.isArray(parts)) return "";
+  const texts: string[] = [];
+  for (const part of parts) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as { type?: string; text?: string };
+    if (p.type === "text" && typeof p.text === "string" && p.text.trim()) {
+      texts.push(p.text.trim());
+    }
+  }
+  const joined = texts.join(" ").replace(/\s+/g, " ").trim();
+  return joined.length > 160 ? `${joined.slice(0, 157)}…` : joined;
+}
+
+function summarizeReactions(
+  rows: Array<{ emoji: string; userId: string }> | undefined,
+  viewerUserId?: string,
+): ChatReactionSummary[] {
+  const byEmoji = new Map<string, { count: number; me: boolean }>();
+  for (const row of rows ?? []) {
+    const cur = byEmoji.get(row.emoji) ?? { count: 0, me: false };
+    cur.count += 1;
+    if (viewerUserId && row.userId === viewerUserId) cur.me = true;
+    byEmoji.set(row.emoji, cur);
+  }
+  return [...byEmoji.entries()]
+    .map(([emoji, v]) => ({ emoji, count: v.count, me: v.me }))
+    .sort((a, b) => a.emoji.localeCompare(b.emoji));
+}
 
 /** Newest `CHAT_HISTORY_LIMIT` messages, returned oldest-first for rendering. */
 export async function loadChannelHistory(
   projectId: string,
   channelId: string,
+  viewerUserId?: string,
 ): Promise<StoredMessage[]> {
   const rows = await prisma.chatMessage.findMany({
     where: { projectId, channelId },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: CHAT_HISTORY_LIMIT,
-    select: { id: true, role: true, parts: true },
+    select: {
+      id: true,
+      role: true,
+      parts: true,
+      authorUserId: true,
+      replyToId: true,
+      editedAt: true,
+      deletedAt: true,
+      createdAt: true,
+      author: { select: { id: true, name: true, avatarUrl: true } },
+      replyTo: {
+        select: {
+          id: true,
+          role: true,
+          parts: true,
+          deletedAt: true,
+          author: { select: { name: true } },
+        },
+      },
+      reactions: { select: { emoji: true, userId: true } },
+    },
   });
-  return rows.reverse();
+
+  return rows.reverse().map((row) => {
+    const replyTo = row.replyTo;
+    return {
+      id: row.id,
+      role: row.role,
+      parts: row.parts,
+      authorUserId: row.authorUserId,
+      authorName: row.author?.name ?? null,
+      authorAvatarUrl: row.author?.avatarUrl ?? null,
+      replyToId: row.replyToId,
+      replyPreview: replyTo
+        ? {
+            id: replyTo.id,
+            authorName:
+              replyTo.author?.name ??
+              (replyTo.role === "assistant" ? "Foundry Copilot" : "Member"),
+            text: replyTo.deletedAt ? "Message deleted" : previewTextFromParts(replyTo.parts) || "…",
+          }
+        : null,
+      editedAt: row.editedAt?.toISOString() ?? null,
+      deletedAt: row.deletedAt?.toISOString() ?? null,
+      reactions: summarizeReactions(row.reactions, viewerUserId),
+      createdAt: row.createdAt.toISOString(),
+    };
+  });
 }
 
 /**
  * Insert any message we haven't stored yet, keyed on the client-supplied id.
- *
- * Messages already in the table are left exactly as they were rather than being
- * overwritten. That matters because the copy passed in here has been through
- * `sanitizeUiMessagesForModel` (and possibly `stripAllToolParts`), which drops
- * in-flight tool parts to keep the model prompt valid — writing that back would
- * quietly erase completed tool cards from earlier turns.
  */
 export async function saveNewMessages(scope: ChannelScope, messages: UIMessage[]): Promise<number> {
   const rows = messages
     .filter((message) => message.id && message.parts.length > 0)
-    .map((message, index) => ({
-      id: message.id,
-      projectId: scope.projectId,
-      branchId: scope.branchId,
-      channelId: scope.channelId,
-      role: message.role,
-      parts: message.parts as unknown as Prisma.InputJsonValue,
-      // Stagger so `orderBy createdAt` keeps the array's order.
-      createdAt: new Date(Date.now() + index),
-    }));
+    .map((message, index) => {
+      const { authorUserId, replyToId } = metaFromMessage(message);
+      return {
+        id: message.id,
+        projectId: scope.projectId,
+        branchId: scope.branchId,
+        channelId: scope.channelId,
+        role: message.role,
+        parts: message.parts as unknown as Prisma.InputJsonValue,
+        authorUserId,
+        replyToId,
+        createdAt: new Date(Date.now() + index),
+      };
+    });
 
   if (rows.length === 0) return 0;
 
@@ -110,7 +204,7 @@ function preferIncomingParts(existing: unknown, incoming: unknown): boolean {
 /**
  * Authoritative write from the chat worker (and client safety net): create or
  * update message parts, but NEVER replace a richer stored body with a thinner
- * one. Client mid-stream snapshots used to wipe completed tool cards / text.
+ * one. Also backfills author/reply when the stored row is missing them.
  */
 export async function persistRunMessages(
   scope: ChannelScope,
@@ -122,17 +216,29 @@ export async function persistRunMessages(
   const ids = rows.map((m) => m.id);
   const existing = await prisma.chatMessage.findMany({
     where: { id: { in: ids } },
-    select: { id: true, parts: true },
+    select: { id: true, parts: true, authorUserId: true, replyToId: true },
   });
-  const existingById = new Map(existing.map((row) => [row.id, row.parts]));
+  const existingById = new Map(existing.map((row) => [row.id, row]));
 
   const now = Date.now();
   const ops = [];
   for (let index = 0; index < rows.length; index++) {
     const message = rows[index]!;
     const prev = existingById.get(message.id);
-    if (prev !== undefined && !preferIncomingParts(prev, message.parts)) {
-      // Keep the richer DB copy — incoming is a downgrade.
+    const { authorUserId, replyToId } = metaFromMessage(message);
+    if (prev !== undefined && !preferIncomingParts(prev.parts, message.parts)) {
+      // Still backfill authorship if the richer row lacks it.
+      if (authorUserId && !prev.authorUserId) {
+        ops.push(
+          prisma.chatMessage.update({
+            where: { id: message.id },
+            data: {
+              authorUserId,
+              ...(replyToId && !prev.replyToId ? { replyToId } : {}),
+            },
+          }),
+        );
+      }
       continue;
     }
     ops.push(
@@ -145,10 +251,14 @@ export async function persistRunMessages(
           channelId: scope.channelId,
           role: message.role,
           parts: message.parts as unknown as Prisma.InputJsonValue,
+          authorUserId,
+          replyToId,
           createdAt: new Date(now + index),
         },
         update: {
           parts: message.parts as unknown as Prisma.InputJsonValue,
+          ...(authorUserId ? { authorUserId } : {}),
+          ...(replyToId ? { replyToId } : {}),
         },
       }),
     );
@@ -159,10 +269,6 @@ export async function persistRunMessages(
   return ops.length;
 }
 
-/**
- * Rebuild the UI transcript for a run from persisted SSE chunks, then optionally
- * stamp a failure note. Used when the worker dies mid-stream (onEnd never ran).
- */
 export async function persistFailedRunFromEvents(params: {
   runId: string;
   scope: ChannelScope;
@@ -174,10 +280,6 @@ export async function persistFailedRunFromEvents(params: {
   return persistRunMessages(params.scope, stamped);
 }
 
-/**
- * Rebuild + upsert whatever the run has streamed so far. Safe to call often
- * during a long Zoo tool call so a browser reload doesn't wipe the turn.
- */
 export async function checkpointRunMessages(params: {
   runId: string;
   scope: ChannelScope;

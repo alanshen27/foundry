@@ -1,15 +1,14 @@
 /**
  * Engineer document tabs — Assembly is the pinned home; CAD / Schematic / PCB
- * open as closable tabs (Chrome / Fusion style). `code` maps `?view=code` for
- * the process-footer Repository surface (not a document tab).
+ * open as closable tabs (Chrome / Fusion style).
  */
-export type EngineerDocKind = "assembly" | "model" | "schematic" | "pcb" | "code";
+export type EngineerDocKind = "assembly" | "model" | "schematic" | "pcb";
 
 export type EngineerDocTab =
   | { key: "assembly"; kind: "assembly"; label: string; pinned: true }
   | {
       key: string;
-      kind: "model" | "schematic" | "pcb" | "code";
+      kind: "model" | "schematic" | "pcb";
       label: string;
       pinned?: false;
       /** CadDoc component id when kind === "model". */
@@ -41,8 +40,6 @@ export function labelForKind(kind: EngineerDocKind): string {
       return "Schematic";
     case "pcb":
       return "PCB";
-    case "code":
-      return "Repository";
   }
 }
 
@@ -52,7 +49,7 @@ export function tabFromViewParam(view: string | undefined, partId?: string | nul
     return {
       key: tabKeyFor("model", partId ?? undefined),
       kind: "model",
-      label: partId ? "CAD" : "CAD",
+      label: "CAD",
       componentId: partId ?? undefined,
     };
   }
@@ -62,10 +59,7 @@ export function tabFromViewParam(view: string | undefined, partId?: string | nul
   if (view === "schematic") {
     return { key: "schematic", kind: "schematic", label: "Schematic" };
   }
-  if (view === "code") {
-    return { key: "code", kind: "code", label: "Repository" };
-  }
-  // sourcing / design / missing → home
+  // sourcing / design / code (removed) / missing → home
   return ASSEMBLY_TAB;
 }
 

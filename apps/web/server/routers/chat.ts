@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { prisma } from "@foundry/db";
+import { prisma, type Prisma } from "@foundry/db";
 import { protectedProcedure, router } from "../trpc";
 import { requireProjectCapability } from "../access";
 import { recordAudit } from "../audit";
@@ -14,8 +14,11 @@ import { loadChannelHistory, persistRunMessages } from "../chat-run/persist";
 import { publishRunFinished } from "../chat-run/publish";
 import { expireStaleChatRuns } from "../chat-run/stale";
 import { markFailedAssistantMessages } from "@/lib/copilot/messages";
+import { CHAT_REACTION_EMOJIS } from "@/lib/copilot/chat-message-meta";
 import type { UIMessage } from "ai";
 import { validateUIMessages } from "ai";
+
+const reactionEmojiSchema = z.enum(CHAT_REACTION_EMOJIS);
 
 const channelSelect = {
   id: true,
@@ -55,7 +58,184 @@ export const chatRouter = router({
     .input(z.object({ projectId: z.string(), channelId: z.string() }))
     .query(async ({ ctx, input }) => {
       await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
-      return loadChannelHistory(input.projectId, input.channelId);
+      return loadChannelHistory(input.projectId, input.channelId, ctx.user.id);
+    }),
+
+  editMessage: protectedProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        messageId: z.string(),
+        text: z.string().trim().min(1).max(8000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { project } = await requireProjectCapability(
+        ctx.user.id,
+        input.projectId,
+        "agent.invoke",
+      );
+      const message = await prisma.chatMessage.findFirst({
+        where: { id: input.messageId, projectId: input.projectId },
+        select: {
+          id: true,
+          role: true,
+          authorUserId: true,
+          deletedAt: true,
+          branchId: true,
+          channelId: true,
+        },
+      });
+      if (!message) throw new TRPCError({ code: "NOT_FOUND", message: "Message not found" });
+      if (message.role !== "user" || message.authorUserId !== ctx.user.id) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "You can only edit your own messages" });
+      }
+      if (message.deletedAt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit a deleted message" });
+      }
+      const editedAt = new Date();
+      const updated = await prisma.chatMessage.update({
+        where: { id: message.id },
+        data: {
+          parts: [{ type: "text", text: input.text }] as unknown as Prisma.InputJsonValue,
+          editedAt,
+        },
+        select: { id: true, editedAt: true },
+      });
+      await recordAudit({
+        type: "ChatMessageEdited",
+        workspaceId: project.workspaceId,
+        projectId: input.projectId,
+        branchId: message.branchId,
+        actorId: ctx.user.id,
+        payload: { messageId: message.id, channelId: message.channelId },
+      });
+      return { id: updated.id, editedAt: updated.editedAt?.toISOString() ?? editedAt.toISOString() };
+    }),
+
+  deleteMessage: protectedProcedure
+    .input(z.object({ projectId: z.string(), messageId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { project } = await requireProjectCapability(
+        ctx.user.id,
+        input.projectId,
+        "agent.invoke",
+      );
+      const message = await prisma.chatMessage.findFirst({
+        where: { id: input.messageId, projectId: input.projectId },
+        select: {
+          id: true,
+          role: true,
+          authorUserId: true,
+          deletedAt: true,
+          branchId: true,
+          channelId: true,
+        },
+      });
+      if (!message) throw new TRPCError({ code: "NOT_FOUND", message: "Message not found" });
+      if (message.role !== "user" || message.authorUserId !== ctx.user.id) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You can only delete your own messages",
+        });
+      }
+      if (message.deletedAt) return { ok: true as const, deletedAt: message.deletedAt.toISOString() };
+      const deletedAt = new Date();
+      await prisma.chatMessage.update({
+        where: { id: message.id },
+        data: {
+          deletedAt,
+          parts: [{ type: "text", text: "Message deleted" }] as unknown as Prisma.InputJsonValue,
+        },
+      });
+      await recordAudit({
+        type: "ChatMessageDeleted",
+        workspaceId: project.workspaceId,
+        projectId: input.projectId,
+        branchId: message.branchId,
+        actorId: ctx.user.id,
+        payload: { messageId: message.id, channelId: message.channelId },
+      });
+      return { ok: true as const, deletedAt: deletedAt.toISOString() };
+    }),
+
+  toggleReaction: protectedProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        messageId: z.string(),
+        emoji: reactionEmojiSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { project } = await requireProjectCapability(
+        ctx.user.id,
+        input.projectId,
+        "project.read",
+      );
+      const message = await prisma.chatMessage.findFirst({
+        where: { id: input.messageId, projectId: input.projectId },
+        select: { id: true, deletedAt: true, branchId: true, channelId: true },
+      });
+      if (!message) throw new TRPCError({ code: "NOT_FOUND", message: "Message not found" });
+      if (message.deletedAt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot react to a deleted message" });
+      }
+
+      const existing = await prisma.chatMessageReaction.findUnique({
+        where: {
+          messageId_userId_emoji: {
+            messageId: message.id,
+            userId: ctx.user.id,
+            emoji: input.emoji,
+          },
+        },
+        select: { id: true },
+      });
+
+      let added = false;
+      if (existing) {
+        await prisma.chatMessageReaction.delete({ where: { id: existing.id } });
+      } else {
+        await prisma.chatMessageReaction.create({
+          data: {
+            messageId: message.id,
+            userId: ctx.user.id,
+            emoji: input.emoji,
+          },
+        });
+        added = true;
+      }
+
+      const reactions = await prisma.chatMessageReaction.findMany({
+        where: { messageId: message.id },
+        select: { emoji: true, userId: true },
+      });
+      const byEmoji = new Map<string, { count: number; me: boolean }>();
+      for (const row of reactions) {
+        const cur = byEmoji.get(row.emoji) ?? { count: 0, me: false };
+        cur.count += 1;
+        if (row.userId === ctx.user.id) cur.me = true;
+        byEmoji.set(row.emoji, cur);
+      }
+      const summary = [...byEmoji.entries()]
+        .map(([emoji, v]) => ({ emoji, count: v.count, me: v.me }))
+        .sort((a, b) => a.emoji.localeCompare(b.emoji));
+
+      await recordAudit({
+        type: "ChatReactionToggled",
+        workspaceId: project.workspaceId,
+        projectId: input.projectId,
+        branchId: message.branchId,
+        actorId: ctx.user.id,
+        payload: {
+          messageId: message.id,
+          channelId: message.channelId,
+          emoji: input.emoji,
+          added,
+        },
+      });
+      return { messageId: message.id, added, reactions: summary };
     }),
 
   /**

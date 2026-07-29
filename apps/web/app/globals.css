@@ -403,24 +403,22 @@ svg.lucide {
   }
 }
 
-/* y-monaco remote cursors / selections (color comes from awareness user.color) */
+/* y-monaco remote cursors — per-client colors injected from awareness (see collaborative-monaco). */
 .yRemoteSelection {
-  opacity: 0.45;
+  opacity: 0.35;
+  background-color: hsl(24 95% 53% / 0.35);
 }
 .yRemoteSelectionHead {
   position: absolute;
-  border-left-width: 2px;
-  border-left-style: solid;
-  border-top-width: 2px;
-  border-top-style: solid;
-  border-bottom-width: 2px;
-  border-bottom-style: solid;
+  border-left: 2px solid hsl(24 95% 53%);
+  border-top: 2px solid hsl(24 95% 53%);
+  border-bottom: 2px solid hsl(24 95% 53%);
   height: 100%;
   box-sizing: border-box;
 }
 .yRemoteSelectionHead::after {
   position: absolute;
-  content: attr(data-user);
+  content: "Collaborator";
   border-radius: 0;
   left: -2px;
   top: -1.4em;
@@ -429,7 +427,6 @@ svg.lucide {
   padding: 1px 4px;
   white-space: nowrap;
   color: #fff;
-  background: inherit;
-  border-color: inherit;
+  background: hsl(24 95% 53%);
   font-family: var(--font-mono), ui-monospace, monospace;
 }

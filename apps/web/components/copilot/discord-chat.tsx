@@ -16,8 +16,25 @@ import {
 } from "@/lib/copilot/mentions";
 import { isAssistantFailureText } from "@/lib/copilot/messages";
 import { groupAssistantPartBlocks } from "@/lib/copilot/part-blocks";
+import {
+  isMessageDeleted,
+  isOwnUserMessage,
+  messageAuthorKey,
+  messageDisplayName,
+  messagePlainText,
+  readChatMeta,
+  type ChatReactionEmoji,
+  type FoundryUIMessage,
+} from "@/lib/copilot/chat-message-meta";
 import { ChannelRail } from "./channel-rail";
 import { CopilotThinkingRow, ToolCallGroup, type ToolPart } from "./chat-sidebar";
+import {
+  MessageActionBar,
+  MessageEditForm,
+  MessageReactions,
+  MessageReplyQuote,
+  ReplyPreviewBar,
+} from "./message-actions";
 import { Markdown } from "./markdown";
 import { useCopilot } from "./copilot-provider";
 
@@ -37,7 +54,7 @@ function initials(name: string): string {
   return (letters || name.slice(0, 2)).toUpperCase();
 }
 
-function Avatar({ message, viewer }: { message: UIMessage; viewer: Viewer }) {
+function Avatar({ message }: { message: UIMessage }) {
   if (message.role !== "user") {
     return (
       <div className="bg-primary/10 border-border flex size-9 shrink-0 items-center justify-center overflow-hidden border">
@@ -45,18 +62,20 @@ function Avatar({ message, viewer }: { message: UIMessage; viewer: Viewer }) {
       </div>
     );
   }
-  if (viewer.avatarUrl) {
+  const meta = readChatMeta(message);
+  const name = messageDisplayName(message);
+  if (meta.authorAvatarUrl) {
     return (
       <img
-        src={viewer.avatarUrl}
-        alt={viewer.name}
+        src={meta.authorAvatarUrl}
+        alt={name}
         className="border-border size-9 shrink-0 border object-cover"
       />
     );
   }
   return (
     <div className="bg-muted text-foreground border-border flex size-9 shrink-0 items-center justify-center border font-mono text-[11px] font-semibold tracking-[0.04em]">
-      {initials(viewer.name)}
+      {initials(name)}
     </div>
   );
 }
@@ -67,14 +86,26 @@ function ChatMessage({
   viewer,
   grouped,
   failed,
+  onReply,
+  onEdit,
+  onDelete,
+  onReact,
 }: {
   message: UIMessage;
   viewer: Viewer;
   /** Continuation of the previous author's block — hide avatar and name. */
   grouped: boolean;
   failed?: boolean;
+  onReply: () => void;
+  onEdit: (text: string) => Promise<void>;
+  onDelete: () => Promise<void>;
+  onReact: (emoji: ChatReactionEmoji) => void;
 }) {
+  const [editing, setEditing] = useState(false);
   const isUser = message.role === "user";
+  const deleted = isMessageDeleted(message);
+  const meta = readChatMeta(message);
+  const authorName = messageDisplayName(message, COPILOT_NAME);
   const hasContent = message.parts.some(
     (p) =>
       (p.type === "text" && p.text.trim().length > 0) ||
@@ -89,94 +120,131 @@ function ChatMessage({
   return (
     <div
       className={cn(
-        "hover:bg-muted/30 group flex gap-3 px-5",
+        "hover:bg-muted/30 group relative flex gap-3 px-5",
         grouped ? "py-0.5" : "mt-4 py-0.5 first:mt-0",
       )}
     >
       <div className="w-9 shrink-0">
-        {grouped ? null : <Avatar message={message} viewer={viewer} />}
+        {grouped ? null : <Avatar message={message} />}
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col gap-1 pb-0.5">
+      <div className="relative flex min-w-0 flex-1 flex-col gap-1 pb-0.5">
+        {!deleted ? (
+          <MessageActionBar
+            message={message}
+            viewerId={viewer.id}
+            onReply={onReply}
+            onEdit={() => setEditing(true)}
+            onDelete={() => void onDelete()}
+            onReact={onReact}
+          />
+        ) : null}
+
         {grouped ? null : (
           <div className="flex items-center gap-2">
             <span
               className={cn(
                 "font-mono text-[12px] font-medium tracking-[0.04em]",
                 !isUser && "text-primary",
+                isUser && isOwnUserMessage(message, viewer.id) && "text-foreground",
               )}
             >
-              {isUser ? viewer.name : COPILOT_NAME}
+              {authorName}
             </span>
             {isUser ? null : (
               <span className="bg-primary text-primary-foreground px-1.5 py-px font-mono text-[9px] font-semibold tracking-[0.1em] uppercase">
                 AI
               </span>
             )}
+            {meta.editedAt && !deleted ? (
+              <span className="text-muted-foreground font-mono text-[10px]">(edited)</span>
+            ) : null}
           </div>
         )}
-        {groupAssistantPartBlocks(message.parts, message.id).map((block) => {
-          if (block.type === "text") {
-            if (!isUser && isAssistantFailureText(block.part.text)) {
-              return (
+
+        <MessageReplyQuote message={message} />
+
+        {editing ? (
+          <MessageEditForm
+            initialText={messagePlainText(message)}
+            onCancel={() => setEditing(false)}
+            onSave={async (text) => {
+              await onEdit(text);
+              setEditing(false);
+            }}
+          />
+        ) : deleted ? (
+          <p className="text-muted-foreground text-sm italic">Message deleted</p>
+        ) : (
+          groupAssistantPartBlocks(message.parts, message.id).map((block) => {
+            if (block.type === "text") {
+              if (!isUser && isAssistantFailureText(block.part.text)) {
+                return (
+                  <p
+                    key={block.key}
+                    className="text-destructive flex items-start gap-2 text-sm leading-relaxed whitespace-pre-wrap"
+                  >
+                    <XCircle className="mt-0.5 size-3.5 shrink-0" />
+                    <span>{block.part.text}</span>
+                  </p>
+                );
+              }
+              return isUser ? (
                 <p
                   key={block.key}
-                  className="text-destructive flex items-start gap-2 text-sm leading-relaxed whitespace-pre-wrap"
+                  className="text-foreground/90 text-[15px] leading-relaxed whitespace-pre-wrap"
                 >
-                  <XCircle className="mt-0.5 size-3.5 shrink-0" />
-                  <span>{block.part.text}</span>
+                  {splitMentions(block.part.text).map((seg, j) =>
+                    seg.kind === "mention" ? (
+                      <span
+                        key={j}
+                        className="bg-primary/15 text-primary rounded-none px-1 font-medium"
+                      >
+                        {seg.text}
+                      </span>
+                    ) : (
+                      <span key={j}>{seg.text}</span>
+                    ),
+                  )}
                 </p>
+              ) : (
+                <div key={block.key} className="text-[15px] leading-relaxed">
+                  <Markdown text={block.part.text} />
+                </div>
               );
             }
-            return isUser ? (
-              <p
-                key={block.key}
-                className="text-foreground/90 text-[15px] leading-relaxed whitespace-pre-wrap"
-              >
-                {splitMentions(block.part.text).map((seg, j) =>
-                  seg.kind === "mention" ? (
-                    <span
-                      key={j}
-                      className="bg-primary/15 text-primary rounded-none px-1 font-medium"
-                    >
-                      {seg.text}
-                    </span>
-                  ) : (
-                    <span key={j}>{seg.text}</span>
-                  ),
-                )}
-              </p>
-            ) : (
-              <div key={block.key} className="text-[15px] leading-relaxed">
-                <Markdown text={block.part.text} />
+            return (
+              <div key={block.key} className="max-w-xl">
+                <ToolCallGroup parts={block.parts as ToolPart[]} />
               </div>
             );
-          }
-          return (
-            <div key={block.key} className="max-w-xl">
-              <ToolCallGroup parts={block.parts as ToolPart[]} />
-            </div>
-          );
-        })}
+          })
+        )}
 
-        {hasContent ? (
-          showFailed && !stampedFailed ? (
-            <p className="text-destructive flex items-center gap-1.5 text-sm">
+        {!editing && !deleted ? (
+          <MessageReactions message={message} onToggle={onReact} />
+        ) : null}
+
+        {!editing && !deleted ? (
+          hasContent ? (
+            showFailed && !stampedFailed ? (
+              <p className="text-destructive flex items-center gap-1.5 text-sm">
+                <XCircle className="size-3.5" />
+                Failed
+              </p>
+            ) : null
+          ) : showFailed ? (
+            <p className="text-destructive flex items-center gap-2 text-sm">
               <XCircle className="size-3.5" />
               Failed
             </p>
-          ) : null
-        ) : showFailed ? (
-          <p className="text-destructive flex items-center gap-2 text-sm">
-            <XCircle className="size-3.5" />
-            Failed
-          </p>
-        ) : (
-          <p className="text-muted-foreground flex items-center gap-2 text-sm">
-            <Loader2 className="size-3.5 animate-spin" />
-            Working…
-          </p>
-        )}
+          ) : (
+            <p className="text-muted-foreground flex items-center gap-2 text-sm">
+              <Loader2 className="size-3.5 animate-spin" />
+              Working…
+            </p>
+          )
+        ) : null}
       </div>
     </div>
   );
@@ -195,7 +263,21 @@ export function DiscordChat({
   workspaceName: string;
   user: Viewer;
 }) {
-  const { messages, status, busy, error, send, stop, channels, activeChannelId } = useCopilot();
+  const {
+    messages,
+    status,
+    busy,
+    error,
+    send,
+    stop,
+    channels,
+    activeChannelId,
+    replyingTo,
+    setReplyingTo,
+    editMessage,
+    deleteMessage,
+    toggleReaction,
+  } = useCopilot();
   const activeChannel = channels.find((c) => c.id === activeChannelId);
   const channelName = activeChannel?.name ?? "general";
 
@@ -239,7 +321,7 @@ export function DiscordChat({
 
   function trySend() {
     if (!canSend) return;
-    send(input);
+    send(input, replyingTo ? { replyToId: replyingTo.id } : undefined);
     setInput("");
     setCaret(0);
   }
@@ -345,8 +427,19 @@ export function DiscordChat({
                 key={m.id}
                 message={m}
                 viewer={user}
-                grouped={messages[i - 1]?.role === m.role}
+                grouped={
+                  i > 0 &&
+                  messageAuthorKey(messages[i - 1]!) === messageAuthorKey(m) &&
+                  !readChatMeta(m).replyPreview
+                }
                 failed={status === "error" && m.role === "assistant" && i === messages.length - 1}
+                onReply={() => {
+                  setReplyingTo(m as FoundryUIMessage);
+                  textareaRef.current?.focus();
+                }}
+                onEdit={(text) => editMessage(m.id, text)}
+                onDelete={() => deleteMessage(m.id)}
+                onReact={(emoji) => void toggleReaction(m.id, emoji)}
               />
             ))
           )}
@@ -369,6 +462,9 @@ export function DiscordChat({
 
         <form onSubmit={onSubmit} className="shrink-0 px-6 pb-5">
           <div className="relative">
+            {replyingTo ? (
+              <ReplyPreviewBar message={replyingTo} onClear={() => setReplyingTo(null)} />
+            ) : null}
             {mentionOpen ? (
               <div
                 role="listbox"
@@ -417,7 +513,11 @@ export function DiscordChat({
                 onKeyUp={(e) => setCaret(e.currentTarget.selectionStart)}
                 onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
                 onKeyDown={onKeyDown}
-                placeholder={`Message #${channelName}`}
+                placeholder={
+                  replyingTo
+                    ? `Reply to ${messageDisplayName(replyingTo)}`
+                    : `Message #${channelName}`
+                }
                 rows={1}
                 className="placeholder:text-muted-foreground text-foreground max-h-40 min-h-6 flex-1 resize-none bg-transparent text-[15px] leading-6 outline-none"
                 aria-label="Copilot message"

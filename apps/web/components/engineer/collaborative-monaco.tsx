@@ -6,6 +6,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
+import type { editor as MonacoEditor } from "monaco-editor";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import * as Y from "yjs";
 import { MonacoBinding } from "y-monaco";
@@ -28,11 +29,52 @@ type Props = {
   className?: string;
 };
 
+const STYLE_ID = "foundry-yjs-awareness-styles";
+
+type AwarenessUser = { name?: string; color?: string };
+
+/** y-monaco only adds classes; colors/labels must be injected per client id. */
+function syncAwarenessStyles(awareness: {
+  getStates: () => Map<number, Record<string, unknown>>;
+}): void {
+  let el = document.getElementById(STYLE_ID) as HTMLStyleElement | null;
+  if (!el) {
+    el = document.createElement("style");
+    el.id = STYLE_ID;
+    document.head.appendChild(el);
+  }
+
+  const rules: string[] = [];
+  awareness.getStates().forEach((state, clientId) => {
+    const user = state.user as AwarenessUser | undefined;
+    if (!user?.color) return;
+    const color = String(user.color);
+    const name = String(user.name ?? "Collaborator").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    rules.push(`
+.yRemoteSelection-${clientId} {
+  background-color: ${color};
+}
+.yRemoteSelectionHead-${clientId} {
+  border-color: ${color};
+  border-left-color: ${color};
+  border-top-color: ${color};
+  border-bottom-color: ${color};
+}
+.yRemoteSelectionHead-${clientId}::after {
+  content: "${name}";
+  background: ${color};
+}`);
+  });
+  el.textContent = rules.join("\n");
+}
+
 export function CollaborativeMonaco({ session, language, theme, className }: Props) {
   const ydocRef = useRef<Y.Doc | null>(null);
   const providerRef = useRef<HocuspocusProvider | null>(null);
   const bindingRef = useRef<MonacoBinding | null>(null);
+  const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const [status, setStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
+  const [sessionEpoch, setSessionEpoch] = useState(0);
 
   useEffect(() => {
     const ydoc = new Y.Doc();
@@ -48,15 +90,24 @@ export function CollaborativeMonaco({ session, language, theme, className }: Pro
       },
     });
 
-    provider.awareness?.setLocalStateField("user", {
+    const awareness = provider.awareness;
+    awareness?.setLocalStateField("user", {
       name: session.user.name,
       color: awarenessColorForUser(session.user.id),
     });
 
+    const onAwareness = () => {
+      if (awareness) syncAwarenessStyles(awareness);
+    };
+    awareness?.on("change", onAwareness);
+    onAwareness();
+
     ydocRef.current = ydoc;
     providerRef.current = provider;
+    setSessionEpoch((n) => n + 1);
 
     return () => {
+      awareness?.off("change", onAwareness);
       bindingRef.current?.destroy();
       bindingRef.current = null;
       provider.destroy();
@@ -64,13 +115,17 @@ export function CollaborativeMonaco({ session, language, theme, className }: Pro
       ydocRef.current = null;
       providerRef.current = null;
     };
-  }, [session.url, session.documentName, session.token, session.user.id, session.user.name]);
+    // Token rotation shouldn't tear the live session; auth is checked on connect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- session.token omitted on purpose
+  }, [session.url, session.documentName, session.user.id, session.user.name]);
 
-  const onMount: OnMount = (editor) => {
-    const model = editor.getModel();
+  // Bind Monaco ↔ Yjs whenever both the editor and a live provider exist.
+  useEffect(() => {
+    const editor = editorRef.current;
     const ydoc = ydocRef.current;
     const provider = providerRef.current;
-    if (!model || !ydoc || !provider) return;
+    const model = editor?.getModel();
+    if (!editor || !ydoc || !provider || !model) return;
 
     bindingRef.current?.destroy();
     bindingRef.current = new MonacoBinding(
@@ -79,6 +134,16 @@ export function CollaborativeMonaco({ session, language, theme, className }: Pro
       new Set([editor]),
       provider.awareness,
     );
+
+    return () => {
+      bindingRef.current?.destroy();
+      bindingRef.current = null;
+    };
+  }, [sessionEpoch]);
+
+  const onMount: OnMount = (editor) => {
+    editorRef.current = editor;
+    setSessionEpoch((n) => n + 1);
   };
 
   return (

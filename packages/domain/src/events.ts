@@ -38,6 +38,9 @@ export const DOMAIN_EVENT_TYPES = [
   "ChatChannelDeleted",
   "ChatChannelCategoryCreated",
   "ChatChannelCategoryDeleted",
+  "ChatMessageEdited",
+  "ChatMessageDeleted",
+  "ChatReactionToggled",
   // Verify
   "ValidationCheckCreated",
   "ValidationCheckUpdated",

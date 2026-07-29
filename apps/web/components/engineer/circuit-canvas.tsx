@@ -322,9 +322,12 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
   const [groupTool, setGroupTool] = useState(false);
   const [sketchFileId, setSketchFileId] = useState<string | null>(null);
   const utils = trpc.useUtils();
-  // Sketches live in the Code stage, so the picker lists that stage's files.
+  // Sim sketches are project code files (not a GitHub-connected repo).
   const codeFiles = trpc.code.listProjectFiles.useQuery({ projectId, branchId });
   const reposQuery = trpc.engineer.listRepos.useQuery({ projectId, branchId });
+  const createRepo = trpc.engineer.createRepo.useMutation({
+    onSuccess: () => utils.engineer.listRepos.invalidate({ projectId, branchId }),
+  });
   const createFile = trpc.code.createFile.useMutation();
   const sketchFile = trpc.code.getFile.useQuery(
     { id: sketchFileId ?? "" },
@@ -407,7 +410,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
         (!mcu
           ? "No microcontroller on the schematic."
           : !stateRef.current.source
-            ? "No sketch selected — pick a .js file from the Code stage."
+            ? "No sketch selected — create a .js sketch to simulate."
             : null),
     );
 
@@ -438,17 +441,24 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
       clearInterval(timer);
       simRef.current = null;
     };
-    // Restarts when the selected file's contents change, so editing the sketch
-    // in the Code stage and coming back re-runs the new version.
+    // Restarts when the selected file's contents change.
   }, [simRunning, sketchFile.data?.content, nodes.length, edges.length]);
 
   // Keep the source the run loop reads in step with the selected file.
   stateRef.current.source = sketchFile.data?.content ?? "";
 
-  /** Creates a starter sketch in the firmware repo and selects it. */
+  /** Creates a starter sketch in the project's internal files bucket. */
   const createSketch = useCallback(async () => {
-    const repo = reposQuery.data?.[0];
-    if (!repo) return;
+    let repo = reposQuery.data?.[0];
+    if (!repo) {
+      repo = await createRepo.mutateAsync({
+        projectId,
+        branchId,
+        role: "project-files",
+        url: "foundry://local/project-files",
+        notes: "Internal project files — GitHub sync not enabled",
+      });
+    }
     const made = await createFile.mutateAsync({
       repoId: repo.id,
       path: "sim/sketch.js",
@@ -457,7 +467,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     await utils.code.listProjectFiles.invalidate();
     setSketchFileId(made.id);
     scheduleSave();
-  }, [reposQuery.data, createFile, utils, scheduleSave]);
+  }, [reposQuery.data, createRepo, createFile, utils, scheduleSave, projectId, branchId]);
 
   const onConnect = useCallback(
     (conn: Connection) => {
@@ -966,16 +976,16 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
               </span>
             </div>
 
-            {/* No sketch yet: offer to make one in the Code stage. */}
+            {/* No sketch yet: offer to create one. */}
             {runnableFiles.length === 0 ? (
               <div className="flex items-center gap-2 border-b px-2 py-1.5">
                 <p className="text-muted-foreground flex-1 text-[10px] leading-snug">
-                  No .js sketches in Code yet.
+                  No .js sketch yet.
                 </p>
                 <Button
                   variant="outline"
                   size="xs"
-                  disabled={!canEdit || !reposQuery.data?.length || createFile.isPending}
+                  disabled={!canEdit || createFile.isPending || createRepo.isPending}
                   onClick={() => void createSketch()}
                 >
                   <Code2 className="size-3" /> Create

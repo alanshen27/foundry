@@ -30,6 +30,8 @@ model User {
   createdWorkspaces Workspace[]           @relation("WorkspaceCreator")
   invitationsSent   Invitation[]          @relation("InvitationInviter")
   auditEvents       AuditEvent[]
+  chatMessages      ChatMessage[]
+  chatReactions     ChatMessageReaction[]
 }
 
 // ---------- Workspace ----------
@@ -503,21 +505,50 @@ model ChatChannel {
  * Persisted project chat history for the AI copilot sidebar. Message
  * `parts` stores the AI SDK UIMessage parts array (text + tool calls).
  * channelId is null only for legacy rows, which belong to "General".
+ * authorUserId is set for human (role=user) turns so teammates are not
+ * mis-attributed to whoever is currently logged in.
  */
 model ChatMessage {
-  id        String   @id @default(cuid())
-  projectId String
-  branchId  String
-  channelId String?
-  role      String
-  parts     Json
-  createdAt DateTime @default(now())
+  id           String    @id @default(cuid())
+  projectId    String
+  branchId     String
+  channelId    String?
+  role         String
+  parts        Json
+  authorUserId String?
+  replyToId    String?
+  editedAt     DateTime?
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
 
-  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  channel ChatChannel? @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  project   Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  channel   ChatChannel?          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  author    User?                 @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
+  replyTo   ChatMessage?          @relation("ChatReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   ChatMessage[]         @relation("ChatReplies")
+  reactions ChatMessageReaction[]
 
   @@index([projectId, branchId, createdAt])
   @@index([channelId, createdAt])
+  @@index([authorUserId])
+  @@index([replyToId])
+}
+
+/**
+ * Discord-style emoji reactions on a chat message. One row per (user, emoji).
+ */
+model ChatMessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
 }
 
 enum ChatRunStatus {
