@@ -163,9 +163,9 @@ const TOOL_META: Record<
     icon: Boxes,
   },
   add_part_to_assembly: {
-    doing: "Assembling (Zoo Zookeeper)",
-    done: "Assembled parts",
-    failed: "Assembly failed",
+    doing: "Building product preview",
+    done: "Product preview ready",
+    failed: "Product preview failed",
     icon: Boxes,
   },
   generate_concept_image: {
@@ -275,6 +275,8 @@ function toolDetail(name: string, part: ToolPart): string | null {
     bits.push(`${out.generated} parts in parallel`);
   if (name === "text_to_cad" && Array.isArray(out.failed) && out.failed.length > 0)
     bits.push(`${out.failed.length} failed`);
+  if (name === "add_part_to_assembly" && Array.isArray(out.manufacturingRefs))
+    bits.push(`${out.manufacturingRefs.length} mfg refs`);
   if ((name === "save_cad_script" || name === "text_to_cad") && typeof out.kclChars === "number")
     bits.push(`${out.kclChars} chars KCL`);
   if (
@@ -339,6 +341,14 @@ export function CopilotThinkingRow({ className }: { className?: string }) {
   );
 }
 
+/** Tool rows stay unboxed; failures are red text only (no card / tint fill). */
+function toolRowClass(failed: boolean): string {
+  return cn(
+    "flex flex-col gap-1.5 py-1.5 pl-0.5 text-xs",
+    failed ? "text-destructive" : "text-muted-foreground",
+  );
+}
+
 export function ToolCard({ part }: { part: ToolPart }) {
   const name = toolPartName(part);
   const meta = TOOL_META[name] ?? {
@@ -365,14 +375,7 @@ export function ToolCard({ part }: { part: ToolPart }) {
   const title = running ? meta.doing : failed ? meta.failed : meta.done;
 
   return (
-    <div
-      className={cn(
-        "flex flex-col gap-1.5 py-1.5 text-xs",
-        failed
-          ? "border-destructive/30 bg-destructive/5 text-destructive border-l-2 px-2"
-          : "text-muted-foreground",
-      )}
-    >
+    <div className={toolRowClass(failed)}>
       <div className="flex items-center gap-2">
         <Icon className="size-3.5 shrink-0 opacity-70" />
         <div className="min-w-0 flex-1">
@@ -435,21 +438,16 @@ export function ToolCallGroup({ parts }: { parts: ToolPart[] }) {
   else title = `Worked ${n} tools`;
 
   return (
-    <div
-      className={cn(
-        "flex flex-col gap-1 py-1.5 text-xs",
-        failedCount > 0 && !running
-          ? "border-destructive/30 bg-destructive/5 text-destructive border-l-2 px-2"
-          : "text-muted-foreground",
-      )}
-    >
+    <div className={toolRowClass(failedCount > 0 && !running)}>
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center gap-2 text-left"
       >
         <Wrench className="size-3.5 shrink-0 opacity-70" />
-        <span className={cn("min-w-0 flex-1 font-medium", failedCount === 0 && "text-foreground/70")}>
+        <span
+          className={cn("min-w-0 flex-1 font-medium", failedCount === 0 && "text-foreground/70")}
+        >
           {title}
         </span>
         {running ? (
@@ -461,7 +459,7 @@ export function ToolCallGroup({ parts }: { parts: ToolPart[] }) {
         )}
       </button>
       {expanded ? (
-        <div className="border-border/60 ml-1.5 flex flex-col border-l pl-2">
+        <div className="border-border/60 ml-1.5 flex flex-col border-l pl-0.5">
           {parts.map((part, i) => (
             <ToolCard
               key={
@@ -543,13 +541,13 @@ export function Message({
         if (block.type === "text") {
           if (isAssistantFailureText(block.part.text)) {
             return (
-              <div
+              <p
                 key={block.key}
-                className="border-destructive/40 bg-destructive/10 text-destructive flex items-start gap-2 rounded-none border px-3.5 py-2.5 text-xs leading-relaxed"
+                className="text-destructive flex items-start gap-1.5 text-xs leading-relaxed"
               >
                 <XCircle className="mt-0.5 size-3.5 shrink-0" />
                 <span className="min-w-0 whitespace-pre-wrap">{block.part.text}</span>
-              </div>
+              </p>
             );
           }
           return (
@@ -561,26 +559,24 @@ export function Message({
             </div>
           );
         }
-        return (
-          <ToolCallGroup key={block.key} parts={block.parts as ToolPart[]} />
-        );
+        return <ToolCallGroup key={block.key} parts={block.parts as ToolPart[]} />;
       })}
       {!hasContent ? (
         showFailed ? (
-          <div className="border-destructive/40 bg-destructive/10 text-destructive flex items-center gap-2 rounded-none border px-3.5 py-2.5 text-xs">
+          <p className="text-destructive flex items-center gap-1.5 text-xs">
             <XCircle className="size-3.5 shrink-0" />
             Failed
-          </div>
+          </p>
         ) : (
           <div className="bg-muted/60 text-muted-foreground rounded-none px-3.5 py-2.5 text-xs">
             Working…
           </div>
         )
       ) : showFailed && !stampedFailed ? (
-        <div className="border-destructive/40 bg-destructive/10 text-destructive flex items-center gap-2 rounded-none border px-3 py-1.5 text-[11px]">
+        <p className="text-destructive flex items-center gap-1.5 text-[11px]">
           <XCircle className="size-3 shrink-0" />
           Failed
-        </div>
+        </p>
       ) : null}
     </div>
   );

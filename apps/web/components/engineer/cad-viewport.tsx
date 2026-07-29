@@ -28,8 +28,17 @@ import {
 import { Button } from "@/components/ui/button";
 import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import {
+  entityIdFromHighlight,
+  pairSolidNames,
+  resolveHoverLabel,
+  sceneGetSolidIdsCmd,
+  solidIdsFromSceneGet,
+} from "@/lib/cad/entity-labels";
+import { listCadSolids } from "@/lib/cad/tools";
+import {
   ZOOM_BUTTON_STEP,
   attachViewportInput,
+  toStreamPoint,
   type NavTool,
   type ViewportInput,
 } from "@/lib/cad/viewport-input";
@@ -127,13 +136,34 @@ function cameraCmd(view: CadView, padding = FIT_PADDING): zoo.ModelingCmd {
   }
 }
 
-async function sendCmd(rtc: zoo.WebRTC, cmd: zoo.ModelingCmd): Promise<void> {
+async function sendCmd(rtc: zoo.WebRTC, cmd: zoo.ModelingCmd): Promise<unknown> {
   const req: zoo.WebSocketRequest = {
     type: "modeling_cmd_req",
     cmd_id: crypto.randomUUID(),
     cmd,
   };
-  await rtc.send(zoo.modeling.modeling_commands_ws.toBSON(req));
+  return rtc.send(zoo.modeling.modeling_commands_ws.toBSON(req));
+}
+
+/** Best-effort: name solid3d bodies from KCL bindings so hover can label them. */
+async function syncSolidLabels(rtc: zoo.WebRTC, script: string): Promise<Map<string, string>> {
+  const names = listCadSolids(script);
+  if (names.length === 0) return new Map();
+  try {
+    const listed = await sendCmd(rtc, sceneGetSolidIdsCmd(Math.max(names.length, 32)));
+    const ids = solidIdsFromSceneGet(listed);
+    const map = pairSolidNames(script, ids);
+    for (const [object_id, name] of map) {
+      try {
+        await sendCmd(rtc, { type: "object_set_name", object_id, name });
+      } catch {
+        // Naming is optional — hover still works via the local map.
+      }
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
 }
 
 /** Pull a human-readable message out of Zoo's various failure shapes. */
@@ -409,6 +439,13 @@ export function CadViewport({
   const [status, setStatus] = useState<ViewportStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [rtcReady, setRtcReady] = useState(false);
+  const [hoverLabel, setHoverLabel] = useState<{ name: string; x: number; y: number } | null>(
+    null,
+  );
+  const solidNamesRef = useRef<Map<string, string>>(new Map());
+  const labelCacheRef = useRef<Map<string, string | null>>(new Map());
+  const hoverSeqRef = useRef(0);
+  const streamSizeRef = useRef({ width: 640, height: 480 });
   const [activeView, setActiveView] = useState<StandardView | null>(
     view === "orbit" ? "iso" : (view as StandardView),
   );
@@ -453,6 +490,7 @@ export function CadViewport({
   const setNav = useCallback(
     async (tool: NavTool) => {
       setNavTool(tool);
+      if (tool !== "select") setHoverLabel(null);
       await runCmd({
         type: "set_tool",
         tool: tool === "orbit" ? "camera_revolve" : "select",
@@ -518,6 +556,9 @@ export function CadViewport({
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     setRtcReady(false);
     framedOnceRef.current = false;
+    solidNamesRef.current = new Map();
+    labelCacheRef.current = new Map();
+    setHoverLabel(null);
     setStatus("connecting");
     setError(null);
     onErrorRef.current?.(null);
@@ -549,6 +590,7 @@ export function CadViewport({
     // for the extra pixels a 2x display needs.
     const maxEdge = headless ? 1440 : 2200;
     const size = streamSize(host, maxEdge);
+    streamSizeRef.current = size;
     const wrap = document.createElement("div");
     wrap.style.cssText = "position:relative;width:100%;height:100%;background:#1c222e";
     const video = document.createElement("video");
@@ -628,6 +670,7 @@ export function CadViewport({
       send: (cmd) => sendInteraction(session, cmd),
       getTool: () => navToolRef.current,
       getStreamSize: () => streamed,
+      objectFit: "contain",
     });
 
     // Without this the stream keeps its connect-time resolution: the picture
@@ -639,6 +682,7 @@ export function CadViewport({
         const next = streamSize(host, maxEdge);
         if (next.width === streamed.width && next.height === streamed.height) return;
         streamed = next;
+        streamSizeRef.current = next;
         video.width = next.width;
         video.height = next.height;
         rtcRef.current.resize(next);
@@ -785,6 +829,15 @@ export function CadViewport({
       }
 
       if (cancelled || gen !== execGenRef.current) return;
+
+      // Name solids for hover labels (manufacturing/preview named bindings).
+      if (!importOnly && !headless) {
+        const labeled = await syncSolidLabels(rtc, scriptRef.current);
+        if (cancelled || gen !== execGenRef.current) return;
+        solidNamesRef.current = labeled;
+        labelCacheRef.current = new Map();
+      }
+
       setStatus("running");
       setTimeout(() => {
         if (!cancelled && gen === execGenRef.current) onReadyRef.current?.();
@@ -820,12 +873,133 @@ export function CadViewport({
     void applyView(view);
   }, [headless, ready, view, applyView]);
 
+  // Hover label: throttle highlight queries and resolve solid names under the cursor.
+  useEffect(() => {
+    if (headless || !ready) {
+      setHoverLabel(null);
+      return;
+    }
+    const host = hostRef.current;
+    const video = host?.querySelector("video");
+    if (!host || !video) return;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let pending: { clientX: number; clientY: number; offsetX: number; offsetY: number } | null =
+      null;
+
+    const clearLabel = () => {
+      hoverSeqRef.current += 1;
+      setHoverLabel(null);
+    };
+
+    const probe = () => {
+      timer = null;
+      const p = pending;
+      pending = null;
+      if (!p || navToolRef.current !== "select") {
+        clearLabel();
+        return;
+      }
+      const rtc = rtcRef.current;
+      if (!rtc) return;
+
+      const point = toStreamPoint(
+        p.offsetX,
+        p.offsetY,
+        { width: video.clientWidth, height: video.clientHeight },
+        streamSizeRef.current,
+        "contain",
+      );
+      const seq = ++hoverSeqRef.current;
+      const localX = p.clientX - host.getBoundingClientRect().left;
+      const localY = p.clientY - host.getBoundingClientRect().top;
+
+      void (async () => {
+        try {
+          const result = await sendCmd(rtc, {
+            type: "highlight_set_entity",
+            selected_at_window: point,
+            sequence: seq,
+          });
+          if (seq !== hoverSeqRef.current) return;
+          const entityId = entityIdFromHighlight(result);
+          if (!entityId) {
+            setHoverLabel(null);
+            return;
+          }
+          const name = await resolveHoverLabel(
+            entityId,
+            solidNamesRef.current,
+            (cmd) => sendCmd(rtc, cmd),
+            labelCacheRef.current,
+          );
+          if (seq !== hoverSeqRef.current) return;
+          if (!name) {
+            setHoverLabel(null);
+            return;
+          }
+          setHoverLabel({ name, x: localX, y: localY });
+        } catch {
+          if (seq === hoverSeqRef.current) setHoverLabel(null);
+        }
+      })();
+    };
+
+    const onMove = (e: PointerEvent) => {
+      if (navToolRef.current !== "select") {
+        clearLabel();
+        return;
+      }
+      pending = {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        offsetX: e.offsetX,
+        offsetY: e.offsetY,
+      };
+      // Follow the cursor immediately so the chip doesn't lag the pointer.
+      setHoverLabel((prev) =>
+        prev
+          ? {
+              ...prev,
+              x: e.clientX - host.getBoundingClientRect().left,
+              y: e.clientY - host.getBoundingClientRect().top,
+            }
+          : prev,
+      );
+      if (!timer) timer = setTimeout(probe, 70);
+    };
+
+    const onLeave = () => {
+      pending = null;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      clearLabel();
+    };
+
+    video.addEventListener("pointermove", onMove);
+    video.addEventListener("pointerleave", onLeave);
+    return () => {
+      video.removeEventListener("pointermove", onMove);
+      video.removeEventListener("pointerleave", onLeave);
+      if (timer) clearTimeout(timer);
+      clearLabel();
+    };
+  }, [headless, ready]);
+
   return (
     <div className="bg-muted/30 absolute inset-0">
       <div
         ref={hostRef}
         className="absolute inset-0 [&_video]:h-full [&_video]:w-full [&_video]:object-contain"
       />
+      {hoverLabel && !headless ? (
+        <div
+          className="pointer-events-none absolute z-40 -translate-x-1/2 -translate-y-[calc(100%+10px)] rounded-none border bg-card/95 px-2 py-1 font-mono text-[11px] font-medium shadow-lg backdrop-blur-md"
+          style={{ left: hoverLabel.x, top: hoverLabel.y }}
+        >
+          {hoverLabel.name}
+        </div>
+      ) : null}
 
       {chrome && status !== "error" ? (
         <>

@@ -3,12 +3,14 @@ import { z } from "zod";
 import { prisma } from "@foundry/db";
 import { slugify } from "@foundry/domain";
 import { siteBroadcastChannel } from "@foundry/realtime";
-import { buildSiteSystemPrompt, type SiteProductContext } from "@foundry/sites";
+import { buildSiteSystemPrompt } from "@foundry/sites";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireWorkspaceCapability } from "../access";
 import { getBroadcastPublisher } from "../realtime";
 import { getSiteBuilder, isSiteBuilderConfigured } from "../sites";
+import { loadProductContext } from "../product-context";
+import { loadSiteMediaForPrompt } from "../site-media";
 
 const promptSchema = z.string().trim().min(1).max(2000);
 
@@ -46,62 +48,6 @@ async function uniqueSlug(
     if (!used.has(candidate)) return candidate;
   }
   throw new TRPCError({ code: "CONFLICT", message: "Could not allocate a site slug" });
-}
-
-/**
- * Assembles the product-graph facts the builder is allowed to use. Without
- * this the generated page is a generic template; with it the copy is written
- * from real requirements, components, and verification state.
- */
-async function loadProductContext(
-  projectId: string,
-): Promise<{ context: SiteProductContext; releaseId: string | null }> {
-  const project = await prisma.project.findUnique({ where: { id: projectId } });
-  if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
-
-  const branchId = project.activeBranchId;
-  const [brief, requirements, components, verify, release] = await Promise.all([
-    branchId
-      ? prisma.projectBrief.findUnique({ where: { projectId_branchId: { projectId, branchId } } })
-      : null,
-    branchId
-      ? prisma.requirement.findMany({
-          where: { projectId, branchId },
-          orderBy: { createdAt: "asc" },
-          take: 40,
-        })
-      : [],
-    branchId
-      ? prisma.component.findMany({
-          where: { projectId, branchId },
-          orderBy: { createdAt: "asc" },
-          take: 40,
-        })
-      : [],
-    branchId
-      ? prisma.stageState.findUnique({
-          where: { projectId_branchId_stage: { projectId, branchId, stage: "VERIFY" } },
-        })
-      : null,
-    prisma.release.findFirst({ where: { projectId }, orderBy: { createdAt: "desc" } }),
-  ]);
-
-  const context: SiteProductContext = {
-    productName: project.name,
-    summary: brief?.intendedUse ?? project.description ?? null,
-    releaseVersion: release?.version ?? null,
-    verified: verify?.status === "APPROVED",
-    requirements: requirements.map((r) => {
-      const range = [r.minValue, r.maxValue].filter((v) => v !== null).join("–");
-      const measured = range ? `${range}${r.unit ? ` ${r.unit}` : ""}` : null;
-      return { label: r.title, detail: r.description ?? measured };
-    }),
-    components: components.map((c) => ({
-      name: [c.manufacturer, c.name, c.partNumber].filter(Boolean).join(" "),
-      quantity: c.quantity,
-    })),
-  };
-  return { context, releaseId: release?.id ?? null };
 }
 
 export const siteRouter = router({
@@ -371,9 +317,14 @@ export const siteRouter = router({
         site.projectId ?? undefined,
       );
 
-      const system = site.projectId
-        ? buildSiteSystemPrompt((await loadProductContext(site.projectId)).context)
-        : undefined;
+      let system: string | undefined;
+      if (site.projectId) {
+        const { context } = await loadProductContext(site.projectId);
+        system = buildSiteSystemPrompt({
+          ...context,
+          media: await loadSiteMediaForPrompt(site.id),
+        });
+      }
 
       await publishSiteEvent(site.id, "started", {
         prompt: input.prompt,

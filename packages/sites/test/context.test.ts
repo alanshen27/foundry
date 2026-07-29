@@ -46,4 +46,33 @@ describe("buildSiteSystemPrompt", () => {
 
     expect(prompt).toContain("Do not add a checkout or payment flow");
   });
+
+  it("passes attached media through as verbatim URLs with slot roles", () => {
+    const prompt = buildSiteSystemPrompt({
+      productName: "Palm Rover",
+      verified: true,
+      media: [
+        { slot: "HERO", kind: "STILL", url: "https://storage.example/hero.png", altText: "Rover" },
+        {
+          slot: "VIDEO_PRIMARY",
+          kind: "VIDEO",
+          url: "https://storage.example/clip.mp4",
+          posterUrl: "https://storage.example/poster.png",
+        },
+      ],
+    });
+
+    expect(prompt).toContain("HERO (STILL): https://storage.example/hero.png");
+    expect(prompt).toContain('alt="Rover"');
+    expect(prompt).toContain("poster=https://storage.example/poster.png");
+    expect(prompt).toContain("Use these URLs verbatim");
+    expect(prompt).toContain("Never autoplay with sound");
+  });
+
+  it("bans invented image paths when no media is attached", () => {
+    const prompt = buildSiteSystemPrompt({ productName: "Palm Rover", verified: true });
+
+    expect(prompt).toContain("Product media: none is available");
+    expect(prompt).toContain("placeholder image services");
+  });
 });

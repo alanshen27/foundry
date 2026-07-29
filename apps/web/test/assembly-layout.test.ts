@@ -3,6 +3,7 @@ import {
   planAssemblyPlacements,
   renderAssemblyKcl,
   seedAssemblyKcl,
+  seedAssemblyPreviewKcl,
   defaultAssemblyIteratePrompt,
   ASSEMBLY_LAYOUT_GAP_MM,
 } from "@foundry/cad";
@@ -24,12 +25,27 @@ describe("seedAssemblyKcl", () => {
   });
 });
 
+describe("seedAssemblyPreviewKcl", () => {
+  it("lists manufacturing refs without import scaffolding", () => {
+    const kcl = seedAssemblyPreviewKcl([
+      { name: "shell", path: "parts/shell.kcl" },
+      { name: "lid", path: "parts/lid/main.kcl" },
+    ]);
+    expect(kcl).toContain("PREVIEW");
+    expect(kcl).toContain('solid "shell"');
+    expect(kcl).toContain("parts/shell/main.kcl");
+    expect(kcl).not.toContain("import ");
+  });
+});
+
 describe("defaultAssemblyIteratePrompt", () => {
-  it("lists zoo paths and asks Zoo to reuse parts", () => {
+  it("asks for a preview from manufacturing references", () => {
     const prompt = defaultAssemblyIteratePrompt(["parts/shell.kcl", "parts/lid.kcl"]);
     expect(prompt).toContain("parts/shell/main.kcl");
     expect(prompt).toContain("parts/lid/main.kcl");
-    expect(prompt.toLowerCase()).toContain("reuse");
+    expect(prompt.toLowerCase()).toContain("preview");
+    expect(prompt.toLowerCase()).toContain("manufacturing");
+    expect(prompt.toLowerCase()).not.toContain("reuse the part modules");
   });
 });
 

@@ -8,6 +8,7 @@ export const DOMAIN_EVENT_TYPES = [
   "WorkspaceCreated",
   "WorkspaceMemberAdded",
   "WorkspaceMemberInvited",
+  "ProfileUpdated",
   "ProjectCreated",
   "ProjectFolderCreated",
   "ProjectFolderRenamed",
@@ -50,6 +51,15 @@ export const DOMAIN_EVENT_TYPES = [
   "SiteDeleted",
   "SiteRevised",
   "SitePublished",
+  // Launch media (renders / video)
+  "MediaJobStarted",
+  "MediaJobFinished",
+  "ProductMediaCreated",
+  "ProductMediaApprovalChanged",
+  "ProductMediaDeleted",
+  "SiteMediaAttached",
+  "SiteMediaDetached",
+  "SiteMediaReordered",
   // Commerce
   "CheckoutConfigured",
   "ListingCreated",

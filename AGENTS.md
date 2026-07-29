@@ -39,9 +39,16 @@ fake them.
   `NEXT_PUBLIC_REALTIME_MODE=off` disables presence.
 - Mechanical CAD: Zoo / KittyCAD behind `CadPort` (`packages/cad`);
   requires `ZOO_API_TOKEN`. Models are KCL; viewport is Zoo WebRTC.
-  Assembly placement uses Zoo multi-file Text-to-CAD iteration (attach
-  existing part KCL + prompt) then Zoo MCP `execute_kcl` / multiview
-  validation via `uvx zoo-mcp` — not Foundry-heuristic or chat-LLM poses.
+  `parts/*` are manufacturing/fab KCL; `assembly/product.kcl` is the product
+  PREVIEW. Preview generation attaches part KCL as reference and uses Zoo
+  text-to-CAD (imports optional; named solids preferred), then Zoo MCP
+  `execute_kcl` / multiview via `uvx zoo-mcp` when available.
+- Launch media: image/video generation behind `MediaGenerationPort`
+  (`packages/media`). Stills use the OpenAI Images API; video requires
+  `MEDIA_VIDEO_MODEL`. Unset keys fall back to a SIMULATED adapter whose
+  assets cannot be approved for marketing or attached to a site. Marketing
+  approval (`MediaApproval`) is separate from `VerificationState` — a render is
+  never engineering evidence.
 - Storefront sites: v0 Platform API behind `SiteBuilderPort`
   (`packages/sites`); requires `V0_API_KEY`. v0 owns generation, preview
   hosting, and deployment — FOUNDRY runs no build containers and stores only
@@ -69,7 +76,7 @@ fake them.
 - `packages/domain` — entities, capabilities, stage/status enums, event types
 - `packages/db` — Prisma schema, client, seed
 - `packages/auth`, `packages/storage`, `packages/realtime`, `packages/cad`,
-  `packages/sites`, `packages/commerce` — ports + adapters
+  `packages/sites`, `packages/commerce`, `packages/media` — ports + adapters
 - `packages/config` — env validation
 - `packages/observability` — logger + audit helpers
 - `docs/` — architecture notes and runbooks

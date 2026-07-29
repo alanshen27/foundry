@@ -285,12 +285,15 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
           `[zoo] zookeeper multi-file files=${entries.length} focus=${focusPath ?? "(all)"}`,
         );
 
+        const forcedTools = options?.forcedTools?.length
+          ? options.forcedTools
+          : (["edit_kcl_code"] as const);
         const zk = await zookeeperPrompt({
           token,
           prompt,
           currentFiles,
           projectName: options?.projectName,
-          forcedTools: ["edit_kcl_code"],
+          forcedTools: [...forcedTools],
           signal: options?.signal,
         });
         if (!zk.ok) return zk;

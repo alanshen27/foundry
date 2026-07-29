@@ -16,6 +16,7 @@ import {
   Code2,
   ExternalLink,
   Globe,
+  Images,
   Loader2,
   Monitor,
   PanelRight,
@@ -44,10 +45,11 @@ import { PresenceBar } from "@/components/presence-bar";
 import { CommercePanel } from "@/components/sites/commerce-panel";
 import { CollaborativeSitePrompt } from "@/components/sites/collaborative-site-prompt";
 import { SiteCodeWorkspace } from "@/components/sites/site-code-workspace";
+import { SiteMediaPanel } from "@/components/sites/site-media-panel";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
-type EditorView = "preview" | "code" | "commerce";
+type EditorView = "preview" | "code" | "media" | "commerce";
 type PreviewSize = "desktop" | "tablet" | "mobile";
 type StreamState = {
   status: "started" | "generated" | "completed" | "failed" | "publishing" | "published";
@@ -288,6 +290,7 @@ export function SiteEditorWorkspace({
   const views: { id: EditorView; label: string; icon: typeof Globe }[] = [
     { id: "preview", label: "Preview", icon: Globe },
     { id: "code", label: "Code", icon: Code2 },
+    { id: "media", label: "Media", icon: Images },
     { id: "commerce", label: "Commerce", icon: ShoppingBag },
   ];
 
@@ -688,6 +691,14 @@ export function SiteEditorWorkspace({
             <div className="min-h-0 flex-1">
               <SiteCodeWorkspace files={currentWorkspace?.files ?? []} />
             </div>
+          ) : null}
+
+          {view === "media" ? (
+            <SiteMediaPanel
+              siteId={siteId}
+              projectId={currentSite?.project?.id ?? null}
+              canEdit={canEdit}
+            />
           ) : null}
 
           {view === "commerce" ? (

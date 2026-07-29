@@ -15,6 +15,8 @@ import { cadRouter } from "./cad";
 import { collaborationRouter } from "./collaboration";
 import { siteRouter } from "./site";
 import { commerceRouter } from "./commerce";
+import { mediaRouter } from "./media";
+import { userRouter } from "./user";
 
 export const appRouter = router({
   workspace: workspaceRouter,
@@ -33,6 +35,8 @@ export const appRouter = router({
   collaboration: collaborationRouter,
   site: siteRouter,
   commerce: commerceRouter,
+  media: mediaRouter,
+  user: userRouter,
 });
 
 export type AppRouter = typeof appRouter;

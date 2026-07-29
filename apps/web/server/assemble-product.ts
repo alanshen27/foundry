@@ -1,9 +1,8 @@
 import "server-only";
 import {
   defaultAssemblyIteratePrompt,
-  fromZooKclPath,
   rewriteKclModuleImportPaths,
-  seedAssemblyKcl,
+  seedAssemblyPreviewKcl,
   setActiveComponent,
   toZooKclPath,
   updateComponentContent,
@@ -18,7 +17,7 @@ import { withKclProjectDir } from "./kcl-project-dir";
 
 /**
  * Keep `parts/pcb/main.kcl` in sync with the PCB design doc so the board is a real
- * CAD part (dims as parameters) that can be imported into product.kcl.
+ * CAD manufacturing part (dims as parameters).
  */
 export function syncPcbCadPart(doc: CadDoc, pcb: PcbDoc | null): CadDoc {
   if (!pcb) return doc;
@@ -29,37 +28,20 @@ export function syncPcbCadPart(doc: CadDoc, pcb: PcbDoc | null): CadDoc {
 export type AssembleProductResult = {
   doc: CadDoc;
   assemblyPath: string;
-  /** Parts included in the Zoo multi-file project. */
+  /** Manufacturing parts attached as Zoo references. */
   placed: Array<{ path: string }>;
   zooOpId: string;
   executeMessage: string;
   warnings: string[];
 };
 
-function mergeProjectOutputs(doc: CadDoc, outputs: Record<string, string>): CadDoc {
-  let next = doc;
-  for (const [zooPath, content] of Object.entries(outputs)) {
-    if (!content.trim()) continue;
-    const logical = fromZooKclPath(zooPath);
-    const match = next.components.find(
-      (c) =>
-        c.path === logical ||
-        c.path === zooPath ||
-        toZooKclPath(c.path) === zooPath ||
-        toZooKclPath(c.path) === toZooKclPath(logical),
-    );
-    if (!match) continue;
-    next = updateComponentContent(next, match.id, content);
-  }
-  return next;
-}
-
 /**
- * Rebuild `assembly/product.kcl` with Zoo Zookeeper (Agent API WebSocket):
- * 1. Attach existing part KCL files (no re-bootstrap of geometry)
- * 2. Seed product.kcl with imports only
- * 3. Ask Zookeeper to orient + position parts in the assembly file
- * 4. Validate with Zoo MCP execute_kcl
+ * Rebuild `assembly/product.kcl` as a product PREVIEW via Zoo Zookeeper:
+ * 1. Attach manufacturing part KCL as reference (parts stay under parts/)
+ * 2. Seed product.kcl with comments listing expected solid names
+ * 3. Ask Zoo text-to-CAD for a coherent finished-product preview (named solids OK;
+ *    imports optional — parts need not be reused as modules)
+ * 4. Validate with Zoo MCP execute_kcl when available (soft-fail if MCP missing)
  */
 export async function assembleProductWithZooMcp(params: {
   cad: CadPort;
@@ -67,7 +49,7 @@ export async function assembleProductWithZooMcp(params: {
   assembly: CadComponent;
   parts: CadComponent[];
   pcb?: PcbDoc | null;
-  /** Optional product-intent override for Zoo multi-file iteration. */
+  /** Optional product-preview intent for Zoo. */
   prompt?: string;
   signal?: AbortSignal;
 }): Promise<AssembleProductResult> {
@@ -93,7 +75,7 @@ export async function assembleProductWithZooMcp(params: {
     throw new Error("No parts available to assemble");
   }
 
-  const seed = seedAssemblyKcl(usable);
+  const seed = seedAssemblyPreviewKcl(usable);
   doc = setActiveComponent(
     updateComponentContent(doc, params.assembly.id, seed),
     params.assembly.id,
@@ -101,35 +83,33 @@ export async function assembleProductWithZooMcp(params: {
 
   const files: Record<string, string> = {};
   for (const part of usable) {
+    // Attach manufacturing parts as reference only — never write Zoo rewrites
+    // back into parts/* (fab files stay authoritative).
     files[toZooKclPath(part.path)] = rewriteKclModuleImportPaths(part.content);
   }
   const assemblyZooPath = toZooKclPath(params.assembly.path);
-  files[assemblyZooPath] = rewriteKclModuleImportPaths(seed);
-  // Zoo multi-file Text-to-CAD requires a root main.kcl (same convention as
-  // withKclProjectDir / MCP execute). Point it at the assembly entry.
-  files["main.kcl"] = files[assemblyZooPath]!;
+  files[assemblyZooPath] = seed;
+  files["main.kcl"] = seed;
 
   const prompt = params.prompt?.trim() || defaultAssemblyIteratePrompt(usable.map((p) => p.path));
 
   const iterated = await params.cad.iterateCadProject(files, prompt, {
     focusPath: "main.kcl",
+    forcedTools: ["text_to_cad"],
     signal: params.signal,
   });
   if (!iterated.ok) {
-    throw new Error(`Zoo Zookeeper assembly failed: ${iterated.error}`);
+    throw new Error(`Zoo Zookeeper assembly preview failed: ${iterated.error}`);
   }
 
-  doc = mergeProjectOutputs(doc, iterated.data.files);
-  // Prefer focused main.kcl — Zoo often rewrites that and echoes the seed at
-  // assemblyZooPath; taking the seed first left assemblies unposed.
   const assemblyOut =
     iterated.data.files["main.kcl"] ??
     iterated.data.files[assemblyZooPath] ??
-    iterated.data.files[params.assembly.path] ??
-    doc.components.find((c) => c.id === params.assembly.id)?.content;
-  if (!assemblyOut?.trim()) {
-    throw new Error("Zoo Zookeeper returned no assembly KCL");
+    iterated.data.files[params.assembly.path];
+  if (!assemblyOut?.trim() || assemblyOut.trim() === seed.trim()) {
+    throw new Error("Zoo Zookeeper returned no product preview KCL");
   }
+
   doc = setActiveComponent(
     updateComponentContent(doc, params.assembly.id, assemblyOut),
     params.assembly.id,
@@ -140,7 +120,15 @@ export async function assembleProductWithZooMcp(params: {
   );
 
   if (!executed.ok) {
-    throw new Error(`Zoo MCP execute_kcl failed: ${executed.error}`);
+    warnings.push(`Zoo MCP execute_kcl: ${executed.error}`);
+    return {
+      doc,
+      assemblyPath: params.assembly.path,
+      placed: usable.map((p) => ({ path: p.path })),
+      zooOpId: iterated.data.id,
+      executeMessage: executed.error,
+      warnings,
+    };
   }
 
   return {

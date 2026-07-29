@@ -8,33 +8,18 @@ import { Button } from "@/components/ui/button";
 import { FoundryMark } from "@/components/foundry-mark";
 import { InteractiveDotField } from "@/components/interactive-dot-field";
 import { UserAvatar } from "@/components/user-avatar";
+import { SharedProjectsNav } from "@/components/shared-projects-nav";
 import { WorkspaceSwitcher, type ShellWorkspace } from "@/components/project-shell";
 import {
   WorkspaceFileTree,
   type TreeFolder,
   type TreeProject,
 } from "@/components/workspace-file-tree";
+import { navIconClass, navItemClass } from "@/lib/nav-item";
 import { cn } from "@/lib/utils";
 
 export type ShellProject = TreeProject;
 export type ShellFolder = TreeFolder;
-
-/** Sidebar link; the selected one carries the accent so the sidebar has a focal point. */
-function navItemClass(active: boolean) {
-  return cn(
-    "group flex items-center gap-2.5 rounded-none px-2.5 py-[7px] text-[13px] transition-colors",
-    active
-      ? "bg-primary/10 text-primary font-medium"
-      : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
-  );
-}
-
-function navIconClass(active: boolean) {
-  return cn(
-    "size-[15px] transition-opacity",
-    active ? "opacity-100" : "opacity-70 group-hover:opacity-100",
-  );
-}
 
 /**
  * Shell for non-project pages (workspace home, settings, sites, manage):
@@ -70,6 +55,7 @@ export function HomeShell({
   const onSites = Boolean(sitesHref && pathname?.startsWith(sitesHref));
   const onSettings = Boolean(settingsHref && pathname === settingsHref);
   const onManage = pathname === "/workspaces";
+  const onAccount = pathname === "/account";
 
   async function signOut() {
     await fetch("/api/auth/sign-out", { method: "POST" });
@@ -116,6 +102,8 @@ export function HomeShell({
                 projects={projects}
                 folders={folders}
               />
+
+              <SharedProjectsNav currentWorkspaceId={current.id} className="mt-3" />
             </>
           ) : null}
         </div>
@@ -135,15 +123,31 @@ export function HomeShell({
           </div>
 
           <div className="mt-2 flex items-center gap-2 border-t px-1 pt-2">
-            <UserAvatar
-              userId={user.id}
-              name={user.name}
-              avatarUrl={user.avatarUrl}
-              className="size-7 text-[10px]"
-            />
-            <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
-              {user.name}
-            </span>
+            <Link
+              href="/account"
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2 rounded-none px-1 py-0.5 transition-colors",
+                onAccount
+                  ? "bg-primary/10 text-primary"
+                  : "hover:bg-sidebar-accent/70 hover:text-foreground",
+              )}
+              aria-current={onAccount ? "page" : undefined}
+            >
+              <UserAvatar
+                userId={user.id}
+                name={user.name}
+                avatarUrl={user.avatarUrl}
+                className="size-7 text-[10px]"
+              />
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-xs",
+                  onAccount ? "text-primary font-medium" : "text-muted-foreground",
+                )}
+              >
+                {user.name}
+              </span>
+            </Link>
             <Button variant="ghost" size="icon-sm" onClick={signOut} aria-label="Sign out">
               <LogOut className="size-3.5" />
             </Button>

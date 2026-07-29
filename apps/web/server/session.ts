@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { prisma, type User } from "@foundry/db";
 import { getServerEnv } from "@foundry/config";
@@ -12,9 +13,12 @@ import { createWorkspaceForOwner, defaultWorkspaceName } from "./create-workspac
 
 /**
  * Resolves the current request's identity through the configured AuthPort
- * and maps it to our Postgres User row (upserting on first Supabase login).
+ * and maps it to our Postgres User row.
+ *
+ * Wrapped in React `cache()` so layouts + pages + tRPC context in one RSC
+ * render share a single Auth + DB round-trip (critical on Render → Supabase).
  */
-export async function getCurrentUser(): Promise<User | null> {
+export const getCurrentUser = cache(async (): Promise<User | null> => {
   const env = getServerEnv();
   const cookieStore = await cookies();
 
@@ -37,15 +41,57 @@ export async function getCurrentUser(): Promise<User | null> {
   });
   const identity = await auth.getIdentity();
   if (!identity) return null;
-  return upsertSupabaseUser(identity);
+  // Hot path: read + write only when email/avatar actually changed.
+  return resolveSupabaseUser(identity);
+});
+
+/** True when avatarUrl points at a Foundry-hosted upload (must not be clobbered by OAuth). */
+function isFoundryAvatarUrl(avatarUrl: string | null | undefined): boolean {
+  return Boolean(avatarUrl?.startsWith("/api/files/users/"));
 }
 
+/**
+ * Request-path resolve: avoid a Prisma UPDATE on every authenticated hit.
+ * First-login create / email-adopt still goes through upsertSupabaseUser.
+ */
+export async function resolveSupabaseUser(identity: AuthenticatedIdentity): Promise<User> {
+  const existing = await prisma.user.findUnique({ where: { supabaseId: identity.subject } });
+  if (!existing) return upsertSupabaseUser(identity);
+
+  const nextEmail = identity.email;
+  const nextAvatar = isFoundryAvatarUrl(existing.avatarUrl)
+    ? existing.avatarUrl
+    : (identity.avatarUrl ?? existing.avatarUrl ?? null);
+
+  const emailChanged = existing.email !== nextEmail;
+  const avatarChanged = (existing.avatarUrl ?? null) !== (nextAvatar ?? null);
+  if (!emailChanged && !avatarChanged) return existing;
+
+  return prisma.user.update({
+    where: { id: existing.id },
+    data: {
+      ...(emailChanged ? { email: nextEmail } : {}),
+      ...(avatarChanged ? { avatarUrl: nextAvatar } : {}),
+    },
+  });
+}
+
+/** Sign-in / confirm / OAuth callback — may create or adopt a user row. */
 export async function upsertSupabaseUser(identity: AuthenticatedIdentity): Promise<User> {
   const bySupabaseId = await prisma.user.findUnique({ where: { supabaseId: identity.subject } });
   if (bySupabaseId) {
+    const nextAvatar = isFoundryAvatarUrl(bySupabaseId.avatarUrl)
+      ? bySupabaseId.avatarUrl
+      : (identity.avatarUrl ?? bySupabaseId.avatarUrl ?? null);
+    const emailChanged = bySupabaseId.email !== identity.email;
+    const avatarChanged = (bySupabaseId.avatarUrl ?? null) !== (nextAvatar ?? null);
+    if (!emailChanged && !avatarChanged) return bySupabaseId;
     return prisma.user.update({
       where: { id: bySupabaseId.id },
-      data: { email: identity.email, avatarUrl: identity.avatarUrl ?? undefined },
+      data: {
+        ...(emailChanged ? { email: identity.email } : {}),
+        ...(avatarChanged ? { avatarUrl: nextAvatar } : {}),
+      },
     });
   }
 
@@ -54,9 +100,15 @@ export async function upsertSupabaseUser(identity: AuthenticatedIdentity): Promi
   // unique constraint.
   const byEmail = await prisma.user.findUnique({ where: { email: identity.email } });
   if (byEmail) {
+    const nextAvatar = isFoundryAvatarUrl(byEmail.avatarUrl)
+      ? byEmail.avatarUrl
+      : (identity.avatarUrl ?? byEmail.avatarUrl ?? null);
     return prisma.user.update({
       where: { id: byEmail.id },
-      data: { supabaseId: identity.subject, avatarUrl: identity.avatarUrl ?? undefined },
+      data: {
+        supabaseId: identity.subject,
+        ...((byEmail.avatarUrl ?? null) !== (nextAvatar ?? null) ? { avatarUrl: nextAvatar } : {}),
+      },
     });
   }
 

@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
+import { MediaLibrary } from "@/components/media/media-library";
 import { trpc } from "@/lib/trpc";
 import { formatCents } from "@/lib/format";
 
@@ -17,6 +18,10 @@ type Props = {
   branchId: string;
   canCreate: boolean;
   verifyApproved: boolean;
+  /** site.edit — generate and delete marketing media. */
+  canEditMedia: boolean;
+  /** site.publish — approve media for storefront use. */
+  canApproveMedia: boolean;
 };
 
 type SnapshotSummary = {
@@ -29,7 +34,14 @@ type SnapshotSummary = {
   bomCents: number;
 };
 
-export function LaunchStage({ projectId, branchId, canCreate, verifyApproved }: Props) {
+export function LaunchStage({
+  projectId,
+  branchId,
+  canCreate,
+  verifyApproved,
+  canEditMedia,
+  canApproveMedia,
+}: Props) {
   const router = useRouter();
   const list = trpc.launch.listReleases.useQuery({ projectId, branchId });
   const utils = trpc.useUtils();
@@ -225,6 +237,19 @@ export function LaunchStage({ projectId, branchId, canCreate, verifyApproved }: 
               })}
             </ul>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Marketing media</CardTitle>
+          <p className="text-muted-foreground text-sm">
+            Renders and product video for the storefront. These are marketing assets, not
+            verification evidence — approving one only allows it on a site.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <MediaLibrary projectId={projectId} canEdit={canEditMedia} canApprove={canApproveMedia} />
         </CardContent>
       </Card>
     </div>

@@ -14,17 +14,17 @@ datasource db {
 // ---------- Identity ----------
 
 model User {
-  id           String   @id @default(cuid())
+  id                String   @id @default(cuid())
   // Supabase auth.users.id when AUTH_MODE=supabase; null for LOCAL users.
-  supabaseId   String?  @unique
-  email        String   @unique
-  name         String
+  supabaseId        String?  @unique
+  email             String   @unique
+  name              String
   // Profile picture (Supabase user_metadata.avatar_url / OAuth picture).
-  avatarUrl    String?
+  avatarUrl         String?
   // Only set for the LOCAL dev/e2e auth adapter (scrypt hash). Never used
   // when AUTH_MODE=supabase.
   localPasswordHash String?
-  createdAt    DateTime @default(now())
+  createdAt         DateTime @default(now())
 
   memberships       WorkspaceMembership[]
   createdWorkspaces Workspace[]           @relation("WorkspaceCreator")
@@ -55,6 +55,7 @@ model Workspace {
   invitations Invitation[]
   auditEvents AuditEvent[]
   sites       Site[]
+  media       ProductMedia[]
 }
 
 /// Nested folder for organizing projects inside a workspace sidebar tree.
@@ -83,8 +84,8 @@ model WorkspaceMembership {
   role        WorkspaceRole
   createdAt   DateTime      @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   grants    CapabilityGrant[]
 
   @@unique([workspaceId, userId])
@@ -144,40 +145,42 @@ enum ProjectStatus {
 }
 
 model Project {
-  id             String        @id @default(cuid())
-  workspaceId    String
-  folderId       String?
-  name           String
-  slug           String
-  description    String?
-  status         ProjectStatus @default(ACTIVE)
-  activeBranchId String?
-  createdById    String
-  createdAt      DateTime      @default(now())
+  id                 String        @id @default(cuid())
+  workspaceId        String
+  folderId           String?
+  name               String
+  slug               String
+  description        String?
+  status             ProjectStatus @default(ACTIVE)
+  activeBranchId     String?
+  createdById        String
+  createdAt          DateTime      @default(now())
   /// Storage key for the cached 3D preview shown on workspace cards.
   thumbnailKey       String?
   /// Compared against the MODEL3D doc's updatedAt to detect a stale preview.
   thumbnailUpdatedAt DateTime?
 
-  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  folder           ProjectFolder?    @relation(fields: [folderId], references: [id], onDelete: SetNull)
-  invitations      Invitation[]
-  branches         ProjectBranch[]
-  stageStates      StageState[]
-  artifacts        Artifact[]
-  briefs           ProjectBrief[]
-  requirements     Requirement[]
-  components       Component[]
-  repoLinks        RepoLink[]
-  validationChecks ValidationCheck[]
-  releases         Release[]
-  designDocs       DesignDoc[]
-  chatMessages         ChatMessage[]
-  chatChannels         ChatChannel[]
+  workspace             Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  folder                ProjectFolder?        @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  invitations           Invitation[]
+  branches              ProjectBranch[]
+  stageStates           StageState[]
+  artifacts             Artifact[]
+  briefs                ProjectBrief[]
+  requirements          Requirement[]
+  components            Component[]
+  repoLinks             RepoLink[]
+  validationChecks      ValidationCheck[]
+  releases              Release[]
+  designDocs            DesignDoc[]
+  chatMessages          ChatMessage[]
+  chatChannels          ChatChannel[]
   chatChannelCategories ChatChannelCategory[]
-  chatRuns             ChatRun[]
-  codeFiles            CodeFile[]
-  sites                Site[]
+  chatRuns              ChatRun[]
+  codeFiles             CodeFile[]
+  sites                 Site[]
+  media                 ProductMedia[]
+  mediaJobs             MediaJob[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, folderId])
@@ -285,21 +288,21 @@ model AuditEvent {
 // ---------- Stage 1: Ideate ----------
 
 model ProjectBrief {
-  id                  String   @id @default(cuid())
-  projectId           String
-  branchId            String
-  prompt              String?
-  intendedUse         String?
-  environment         String?
-  targetAudience      String?
-  budgetCents         Int?
-  currency            String   @default("USD")
-  dimensions          String?
-  performanceTargets  String?
-  manufacturingNotes  String?
-  updatedById         String
-  updatedAt           DateTime @updatedAt
-  createdAt           DateTime @default(now())
+  id                 String   @id @default(cuid())
+  projectId          String
+  branchId           String
+  prompt             String?
+  intendedUse        String?
+  environment        String?
+  targetAudience     String?
+  budgetCents        Int?
+  currency           String   @default("USD")
+  dimensions         String?
+  performanceTargets String?
+  manufacturingNotes String?
+  updatedById        String
+  updatedAt          DateTime @updatedAt
+  createdAt          DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -550,7 +553,9 @@ model ChatRun {
   @@index([status, createdAt])
 }
 
-/** Ordered UI message stream chunks for a run (replay + reconnect). */
+/**
+ * Ordered UI message stream chunks for a run (replay + reconnect).
+ */
 model ChatRunEvent {
   id        String   @id @default(cuid())
   runId     String
@@ -617,20 +622,21 @@ model ValidationCheck {
 // ---------- Stage 4: Launch ----------
 
 model Release {
-  id          String   @id @default(cuid())
-  projectId   String
-  branchId    String
-  version     String
-  notes       String?
+  id            String   @id @default(cuid())
+  projectId     String
+  branchId      String
+  version       String
+  notes         String?
   // Immutable frozen copy of requirements, components, repos, and checks
   // at creation time. Releases are never mutated (PRD 14.1).
-  snapshot    Json
-  createdById String
+  snapshot      Json
+  createdById   String
   createdByName String
-  createdAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
 
-  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project  Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   listings Listing[]
+  media    ProductMedia[]
 
   @@unique([projectId, version])
   @@index([projectId, branchId])
@@ -644,36 +650,37 @@ model Release {
 /// SiteBuilderPort — FOUNDRY stores only the ids needed to resume editing,
 /// and never runs build containers of its own.
 model Site {
-  id          String     @id @default(cuid())
-  workspaceId String
-  projectId   String?
+  id               String     @id @default(cuid())
+  workspaceId      String
+  projectId        String?
   /// Release the page describes. Null while the site is still a draft.
-  releaseId   String?
-  name        String
-  slug        String
-  status      SiteStatus @default(DRAFT)
+  releaseId        String?
+  name             String
+  slug             String
+  status           SiteStatus @default(DRAFT)
   /// Prompt that produced the current revision.
-  prompt      String
+  prompt           String
   /// Builder conversation id; every revision of this site shares it.
-  builderChatId String
+  builderChatId    String
   /// Builder version id of the current revision; the deploy target.
   builderVersionId String?
   /// Sandboxed preview URL for the current revision.
-  previewUrl  String?
+  previewUrl       String?
   /// The builder's own editor URL, for an "open in v0" escape hatch.
-  builderUrl  String?
+  builderUrl       String?
   /// Public URL once published.
-  publishedUrl String?
+  publishedUrl     String?
   /// True when produced by the SIMULATED adapter. Never publishable.
-  simulated   Boolean  @default(false)
-  createdById String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  simulated        Boolean    @default(false)
+  createdById      String
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
   workspace Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   project   Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull)
   checkout  CheckoutConfiguration?
   listings  Listing[]
+  media     SiteMediaAttachment[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, projectId])
@@ -689,20 +696,20 @@ enum SiteStatus {
 /// resolve a product and mint a cart. `sellerName` is the seller identity
 /// PRD 24.4 requires before checkout may be activated.
 model CheckoutConfiguration {
-  id          String            @id @default(cuid())
-  siteId      String            @unique
-  provider    CommerceProvider  @default(SHOPIFY)
+  id              String           @id @default(cuid())
+  siteId          String           @unique
+  provider        CommerceProvider @default(SHOPIFY)
   /// e.g. `my-store.myshopify.com`.
-  shopDomain  String
+  shopDomain      String
   /// Storefront access token (public-scope by design). Never returned to
   /// the browser by the API — see the commerce router's select lists.
   storefrontToken String
   /// Legal seller shown at checkout. Required to activate a listing.
-  sellerName  String
-  currency    String            @default("USD")
-  createdById String
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  sellerName      String
+  currency        String           @default("USD")
+  createdById     String
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
 }
@@ -714,22 +721,22 @@ model CheckoutConfiguration {
 /// exists, but `canActivateListing` refuses to make it ACTIVE until one is
 /// selected, so checkout is impossible without it.
 model Listing {
-  id          String        @id @default(cuid())
-  siteId      String
-  releaseId   String?
-  saleMode    SaleMode      @default(PHYSICAL)
-  title       String
+  id                String        @id @default(cuid())
+  siteId            String
+  releaseId         String?
+  saleMode          SaleMode      @default(PHYSICAL)
+  title             String
   /// Price snapshot in minor units, taken from the store when activated.
-  priceCents  Int?
-  currency    String?
+  priceCents        Int?
+  currency          String?
   /// Product handle in the merchant's store.
-  externalHandle String
+  externalHandle    String
   /// Variant id resolved from the store; the checkout line item.
   externalVariantId String?
-  status      ListingStatus @default(DRAFT)
-  createdById String
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  status            ListingStatus @default(DRAFT)
+  createdById       String
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   site    Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
   release Release? @relation(fields: [releaseId], references: [id], onDelete: SetNull)
@@ -758,4 +765,147 @@ enum SaleMode {
   DESIGN_BUNDLE
   LICENSE
   TEMPLATE
+}
+
+// ---------- Launch media (renders & video) ----------
+
+enum ProductMediaKind {
+  STILL
+  VIDEO
+}
+
+/// Editorial intent of an asset. Not a verification claim.
+enum ProductMediaRole {
+  HERO
+  GALLERY
+  DETAIL
+  LIFESTYLE
+  SOCIAL
+  EXPLODED
+  OTHER
+}
+
+enum ProductMediaSource {
+  AI_IMAGE
+  AI_VIDEO
+  CAD_CAPTURE
+  PCB_CAPTURE
+  UPLOAD
+}
+
+/// Marketing sign-off, deliberately separate from `VerificationState` so a
+/// hero render can never be mistaken for engineering evidence (PRD 13 / 24.4).
+enum MediaApproval {
+  DRAFT
+  APPROVED_FOR_MARKETING
+  REJECTED
+}
+
+/// Launch/marketing media for a product: generated stills and short videos.
+///
+/// Bytes live in object storage via ObjectStoragePort; this row holds only
+/// metadata, provenance, and relationships. A render is never evidence that a
+/// product works (PRD 4 principle 3), so `approval` gates storefront use and
+/// `simulated` rows must always be labeled.
+model ProductMedia {
+  id               String             @id @default(cuid())
+  workspaceId      String
+  projectId        String
+  /// Set when the asset is pinned to an immutable release (preferred for live sites).
+  releaseId        String?
+  kind             ProductMediaKind
+  role             ProductMediaRole   @default(GALLERY)
+  source           ProductMediaSource
+  /// Object storage key. Always FOUNDRY-owned bytes.
+  storageKey       String
+  mimeType         String
+  sha256           String?
+  sizeBytes        Int?
+  width            Int?
+  height           Int?
+  /// Video only.
+  durationMs       Int?
+  posterStorageKey String?
+  prompt           String?
+  /// Adapter/model that produced the asset (e.g. `openai:gpt-image-2`, `simulated`).
+  generator        String?
+  approval         MediaApproval      @default(DRAFT)
+  /// True when produced by the SIMULATED adapter. Never real product footage.
+  simulated        Boolean            @default(false)
+  jobId            String?
+  createdById      String
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  workspace   Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project     Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  release     Release?              @relation(fields: [releaseId], references: [id], onDelete: SetNull)
+  job         MediaJob?             @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  attachments SiteMediaAttachment[]
+
+  @@index([projectId, kind])
+  @@index([workspaceId, projectId])
+  @@index([releaseId])
+}
+
+enum SiteMediaSlot {
+  HERO
+  GALLERY
+  VIDEO_PRIMARY
+  SOCIAL
+}
+
+/// Ordered use of a ProductMedia asset on a Site (hero, gallery, video, social).
+/// Detaching removes the join only; the asset stays in the project library.
+model SiteMediaAttachment {
+  id        String        @id @default(cuid())
+  siteId    String
+  mediaId   String
+  slot      SiteMediaSlot @default(GALLERY)
+  sortOrder Int           @default(0)
+  altText   String?
+  createdAt DateTime      @default(now())
+
+  site  Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  media ProductMedia @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, mediaId, slot])
+  @@index([siteId, slot, sortOrder])
+}
+
+enum MediaJobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum MediaJobType {
+  GENERATE_STILLS
+  GENERATE_VIDEO
+  PROMOTE_CAPTURE
+}
+
+/// One generation run. Kept so a failed generator never leaves the UI guessing
+/// and so partial batches are attributable.
+model MediaJob {
+  id          String         @id @default(cuid())
+  workspaceId String
+  projectId   String
+  releaseId   String?
+  type        MediaJobType
+  status      MediaJobStatus @default(PENDING)
+  /// Zod-validated request (prompt, roles, duration, seed media).
+  input       Json
+  error       String?
+  createdById String
+  createdAt   DateTime       @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+
+  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  media   ProductMedia[]
+
+  @@index([projectId, status])
 }

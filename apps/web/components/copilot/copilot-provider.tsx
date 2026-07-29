@@ -19,6 +19,7 @@ import {
   type BroadcastPort,
 } from "@foundry/realtime";
 import { BackgroundChatTransport } from "@/lib/copilot/background-chat-transport";
+import { isConnectionError } from "@/lib/copilot/connection-error";
 import {
   seedTranscriptWithLocalBackup,
   writeLocalTranscript,
@@ -121,6 +122,12 @@ function ChatEngine({
   const ownedRunIdRef = useRef<string | null>(null);
   /** Last user text we tried to send — restored if useChat drops it on error. */
   const pendingUserTextRef = useRef<string | null>(null);
+  /**
+   * True after the stream socket died (sleep/offline) while a run was in
+   * flight. The run keeps executing on the worker; the activeRun poll either
+   * reattaches (still running) or reloads the final transcript (finished).
+   */
+  const connectionDropRef = useRef(false);
   // Freeze the seed so RSC re-renders / prop updates never reset the live chat.
   // Merge sessionStorage so a reload after a failed POST still shows the turn.
   const seedRef = useRef(
@@ -201,6 +208,7 @@ function ChatEngine({
   );
 
   const persistFailureStampRef = useRef<(reason?: string) => void>(() => undefined);
+  const syncTranscriptFromServerRef = useRef<() => void>(() => undefined);
 
   const { messages, sendMessage, status, error, stop, resumeStream, setMessages } = useChat({
     id: channelId,
@@ -209,7 +217,14 @@ function ChatEngine({
     // Manual resume only (see effect below). SDK auto-resume + our send SSE
     // both attach to the same run and the UI flashes as chunks replay twice.
     resume: false,
-    onFinish: () => {
+    onFinish: ({ isError }) => {
+      if (connectionDropRef.current) {
+        // Stream socket died mid-run. Keep busy state — the activeRun poll
+        // reattaches or reloads once we're back online.
+        if (isError) return;
+        // A resumed stream completed normally: fall through to cleanup.
+        connectionDropRef.current = false;
+      }
       const epoch = sendEpochRef.current;
       selfRunRef.current = false;
       setLocalBusy(false);
@@ -237,6 +252,21 @@ function ChatEngine({
     },
     onError: (err) => {
       const reason = err instanceof Error ? err.message : String(err);
+      // The SSE connection dropped (laptop sleep, wifi blip, deploy) after the
+      // run was already enqueued (we have its runId). The worker is still
+      // executing it — do NOT cancel the run and do NOT stamp the transcript
+      // as failed. Release stream ownership so the resume effect can reattach
+      // once the activeRun poll comes back.
+      if (isConnectionError(err) && ownedRunIdRef.current) {
+        console.warn("[copilot] stream connection lost; run continues in background:", reason);
+        connectionDropRef.current = true;
+        selfRunRef.current = false;
+        resumedRunIdRef.current = null;
+        ownedRunIdRef.current = null;
+        pendingPingTipRef.current = null;
+        void utils.chat.activeRun.invalidate({ projectId, channelId });
+        return;
+      }
       pendingPingTipRef.current = null;
       // Lock rejection is handled in send() (clear branch + retry). Do not
       // cancel here — a concurrent retry may already own a new runId.
@@ -315,6 +345,38 @@ function ChatEngine({
     [setMessages, persistMutation, projectId, branchId, channelId, utils],
   );
   persistFailureStampRef.current = persistFailureStamp;
+
+  /**
+   * Reload the transcript after a connection drop whose run finished while we
+   * were away. The worker persisted the final messages (including any real
+   * failure stamp), so read those instead of inventing a "network error".
+   */
+  const syncTranscriptFromServer = useCallback(() => {
+    void (async () => {
+      let local: UIMessage[] = [];
+      setMessages((prev) => {
+        local = prev;
+        return prev;
+      });
+      try {
+        const rows = await utils.client.chat.messages.query({ projectId, channelId });
+        const server = rows.map((row) => ({
+          id: row.id,
+          role: row.role as UIMessage["role"],
+          parts: row.parts as unknown as UIMessage["parts"],
+        }));
+        const merged = pruneEmptyAssistantMessages(
+          mergeTranscriptPreferringUserTurns(server, local),
+        );
+        setMessages(merged);
+        writeLocalTranscript(channelId, merged);
+      } catch (err) {
+        console.error("failed to reload chat history after reconnect", err);
+        setMessages((prev) => pruneEmptyAssistantMessages(prev));
+      }
+    })();
+  }, [setMessages, utils, projectId, channelId]);
+  syncTranscriptFromServerRef.current = syncTranscriptFromServer;
   statusRef.current = status;
   messagesRef.current = messages;
   // Stop / "working" only for real @AI runs — notes (no @AI) briefly hit
@@ -334,7 +396,14 @@ function ChatEngine({
       !activeRunQuery.isFetching
     ) {
       setLocalBusy(false);
-      if (status === "error") {
+      if (connectionDropRef.current) {
+        // The run ended while we were disconnected. The worker already
+        // persisted the final transcript (success or real failure) — load it
+        // instead of stamping a client-side network error over it.
+        connectionDropRef.current = false;
+        syncTranscriptFromServer();
+        refreshProjectData();
+      } else if (status === "error") {
         persistFailureStamp(error?.message);
       } else {
         setMessages((prev) => pruneEmptyAssistantMessages(prev));
@@ -348,10 +417,14 @@ function ChatEngine({
     error,
     setMessages,
     persistFailureStamp,
+    syncTranscriptFromServer,
+    refreshProjectData,
   ]);
 
-  // After reload / other-tab start: reattach SSE only when this tab is not
-  // already the stream owner (sendMessages opened the run stream).
+  // After reload / other-tab start / connection drop: reattach SSE only when
+  // this tab is not already the stream owner (sendMessages opened the run
+  // stream). Keyed on dataUpdatedAt too — after a drop the run id and status
+  // don't change, so only a fresh poll result can retrigger the reattach.
   const resumedRunIdRef = useRef<string | null>(null);
   useEffect(() => {
     const runId = activeRunQuery.data?.id ?? null;
@@ -367,7 +440,7 @@ function ChatEngine({
     setLocalBusy(true);
     ownedRunIdRef.current = runId;
     void resumeStream();
-  }, [activeRunQuery.data?.id, status, resumeStream]);
+  }, [activeRunQuery.data?.id, activeRunQuery.dataUpdatedAt, status, resumeStream]);
 
   useEffect(() => {
     const broadcast = createBroadcastPort();
@@ -417,6 +490,8 @@ function ChatEngine({
           }
           return;
         }
+        const wasDropped = connectionDropRef.current;
+        connectionDropRef.current = false;
         selfRunRef.current = false;
         setLocalBusy(false);
         if (payload?.runId && ownedRunIdRef.current === payload.runId) {
@@ -425,10 +500,13 @@ function ChatEngine({
         void utils.chat.activeRun.invalidate({ projectId, channelId });
         if (payload?.status === "error") {
           persistFailureStamp(payload.error);
+        } else if (wasDropped) {
+          // Our stream dropped mid-run; local transcript is missing the tail.
+          syncTranscriptFromServerRef.current();
         } else {
           setMessages((prev) => pruneEmptyAssistantMessages(prev));
         }
-        if (statusRef.current === "ready") {
+        if (statusRef.current === "ready" || wasDropped) {
           refreshProjectData();
         }
       }
@@ -462,6 +540,7 @@ function ChatEngine({
 
   const stopRun = useCallback(() => {
     const epoch = sendEpochRef.current;
+    connectionDropRef.current = false;
     selfRunRef.current = false;
     stop();
     setLocalBusy(false);
@@ -487,6 +566,7 @@ function ChatEngine({
       shell.setOpen(true);
 
       const epoch = ++sendEpochRef.current;
+      connectionDropRef.current = false;
       ownedRunIdRef.current = null;
       selfRunRef.current = wantsAi;
       pendingUserTextRef.current = trimmed;

@@ -52,8 +52,8 @@ baseProfile = startProfile(baseSketch, at = [-assyWidth / 2, -assyDepth / 2])
 assemblyEnvelope = extrude(baseProfile, length = assyHeight)
 `;
 
-export const ASSEMBLY_STARTER_KCL = `// Product assembly (mm) — parts imported as parts/<name>/main.kcl
-// Drag more parts onto Assembly to place them. Use translate/rotate to position.
+export const ASSEMBLY_STARTER_KCL = `// Product PREVIEW (mm) — visual assembly for Engineer > Assembly.
+// Manufacturing geometry lives under parts/; regenerate this file with add_part_to_assembly.
 
 `;
 
@@ -121,7 +121,9 @@ function pathFor(kind: CadComponentKind, name: string): string {
 export function displayNameFromCadPath(path: string): string {
   const segs = path.split("/").filter(Boolean);
   const file = segs[segs.length - 1] ?? path;
-  if (file.toLowerCase() === "main.kcl" && segs.length >= 2) {
+  // Zoo stores named parts as parts/<slug>/main.kcl — use the folder, not "main".
+  // parts/main.kcl is the root part (only two segments); keep stem "main".
+  if (file.toLowerCase() === "main.kcl" && segs.length >= 3) {
     return segs[segs.length - 2]!;
   }
   return file.replace(/\.(kcl|md)$/i, "") || "part";

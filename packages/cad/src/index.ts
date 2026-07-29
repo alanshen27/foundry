@@ -23,6 +23,7 @@ export {
   kclWithOrientation,
   scoreOrientedBbox,
   seedAssemblyKcl,
+  seedAssemblyPreviewKcl,
   defaultAssemblyIteratePrompt,
   ORIENTATION_CANDIDATES,
   ASSEMBLY_LAYOUT_GAP_MM,

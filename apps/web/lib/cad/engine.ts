@@ -27,6 +27,7 @@ export {
   isForeignImportOnlyScript,
   parseKclModuleImports,
   partModuleAlias,
+  displayNameFromCadPath,
   toZooKclPath,
   fromZooKclPath,
   meshPartProxyKcl,

@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import {
   addCadComponent,
+  displayNameFromCadPath,
   getActiveComponent,
   normalizeCadDoc,
   setActiveComponent,
@@ -117,8 +118,8 @@ function ParamsPanel({
 
 const KIND_META: Record<CadComponentKind, { label: string; icon: typeof Puzzle; folder: string }> =
   {
-    part: { label: "Parts", icon: Puzzle, folder: "parts/" },
-    assembly: { label: "Assembly", icon: Boxes, folder: "assembly/" },
+    part: { label: "Manufacturing", icon: Puzzle, folder: "parts/" },
+    assembly: { label: "Preview", icon: Boxes, folder: "assembly/" },
     instructions: { label: "Instructions", icon: FileText, folder: "docs/" },
   };
 
@@ -159,7 +160,9 @@ function ComponentTree({
               ) : null}
             </div>
             {items.map((c) => {
-              const file = c.path.split("/").pop() ?? c.name;
+              // Parts live at parts/<name>/main.kcl — show the part name, not "main.kcl".
+              const label = c.name || displayNameFromCadPath(c.path);
+              const ext = c.kind === "instructions" ? ".md" : ".kcl";
               return (
                 <button
                   key={c.id}
@@ -172,7 +175,8 @@ function ComponentTree({
                 >
                   <Layers className="text-muted-foreground size-3 shrink-0 opacity-60" />
                   <span className="min-w-0 flex-1 truncate font-mono" title={c.path}>
-                    {file}
+                    {label}
+                    {ext}
                   </span>
                 </button>
               );
@@ -253,12 +257,20 @@ export function ModelEditor({
   const monacoTheme = monacoThemeFor(theme.mode);
   const query = trpc.design.get.useQuery(
     { projectId, branchId, kind: "MODEL3D" },
-    { refetchInterval: 1_500 },
+    {
+      // Collab + save mutations invalidate; avoid hammering Auth/DB every 1.5s.
+      staleTime: 5_000,
+      refetchOnWindowFocus: true,
+    },
   );
   const engine = trpc.cad.engineSession.useQuery({ projectId });
   const aiLock = trpc.design.aiEditLock.useQuery(
     { projectId, branchId },
-    { refetchInterval: 1_000 },
+    {
+      // Poll only while an AI edit holds the lock; otherwise rely on invalidate.
+      refetchInterval: (q) => (q.state.data ? 2_000 : false),
+      refetchOnWindowFocus: true,
+    },
   );
   const viewer = trpc.project.viewer.useQuery();
   const save = trpc.design.save.useMutation();
@@ -457,7 +469,11 @@ export function ModelEditor({
         <div className="flex min-w-0 w-[min(42%,420px)] shrink-0 flex-col border-r">
           <div className="bg-card/60 flex h-9 shrink-0 items-center gap-2 border-b px-3">
             <span className="truncate font-mono text-xs font-medium" title={active?.path}>
-              {active?.path ?? "—"}
+              {active
+                ? `${active.name || displayNameFromCadPath(active.path)}${
+                    active.kind === "instructions" ? ".md" : ".kcl"
+                  }`
+                : "—"}
             </span>
             <span className="text-muted-foreground ml-auto text-[11px]">
               {save.isPending ? "Saving…" : "Autosaves"}

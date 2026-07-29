@@ -34,9 +34,9 @@ test("full Phase 0 journey", async ({ browser }) => {
   const workspaceSlug = new URL(builder.url()).pathname.split("/")[2]!;
 
   // Large project chatbar → Project row under this workspace (not a new Workspace)
-  await builder.getByLabel("Describe the product to build").fill(
-    "A palm-sized two-wheel rover for phase 0 acceptance.",
-  );
+  await builder
+    .getByLabel("Describe the product to build")
+    .fill("A palm-sized two-wheel rover for phase 0 acceptance.");
   await builder.getByRole("button", { name: "More" }).click();
   await builder.getByLabel("Project name").fill("Test Rover");
   await builder.getByRole("button", { name: "Build" }).click();
@@ -87,6 +87,17 @@ test("full Phase 0 journey", async ({ browser }) => {
   await reviewer.waitForURL("**/projects/test-rover/overview");
   await expect(reviewer.getByRole("heading", { name: "Test Rover" })).toBeVisible();
 
+  // Shared work has no place in the reviewer's own folder tree, so their home
+  // sidebar lists it flat under "Shared with me".
+  await reviewer.goto("/");
+  await reviewer.waitForURL(/\/w\/[^/]+$/);
+  await expect(
+    reviewer
+      .getByTestId("shared-with-me")
+      .getByRole("link", { name: /Test Rover/ })
+      .first(),
+  ).toBeVisible();
+
   // Builder sees both members in settings
   await builder.reload();
   await expect(builder.getByText("reviewer@foundry.local")).toBeVisible();
@@ -104,9 +115,9 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
   await page.getByRole("button", { name: "Create" }).click();
   await page.waitForURL("**/w/e2e-studio-*");
   const workspaceSlug = new URL(page.url()).pathname.split("/")[2]!;
-  await page.getByLabel("Describe the product to build").fill(
-    "A rig for testing CAD parameters and chat channels.",
-  );
+  await page
+    .getByLabel("Describe the product to build")
+    .fill("A rig for testing CAD parameters and chat channels.");
   await page.getByRole("button", { name: "More" }).click();
   await page.getByLabel("Project name").fill("Param Rig");
   await page.getByRole("button", { name: "Build" }).click();

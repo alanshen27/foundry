@@ -56,6 +56,15 @@ const serverEnvSchema = z
       const trimmed = value.trim();
       return trimmed.length > 0 ? trimmed : undefined;
     }, z.string().min(1).optional()),
+    // Launch media (marketing renders / product video). Images reuse
+    // OPENAI_API_KEY; unset falls back to a SIMULATED placeholder generator.
+    // Video additionally needs a model the account can access — without it we
+    // refuse rather than pass stills off as footage.
+    MEDIA_VIDEO_MODEL: z.preprocess((value) => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    }, z.string().min(1).optional()),
     // v0 Platform API — generates, previews, and deploys storefront sites.
     // Unset falls back to a clearly-labeled SIMULATED builder (dev/e2e only).
     V0_API_KEY: z.preprocess((value) => {

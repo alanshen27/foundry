@@ -1480,25 +1480,25 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
     add_part_to_assembly: {
       description:
-        "Compose assembly/product.kcl (the ONLY valid assembly path) from existing parts via Zoo Zookeeper (Agent API WebSocket — attaches prior part KCL so Zoo reuses them), then validates with Zoo MCP execute_kcl. Includes parts/pcb when a PCB exists. Engineer > Assembly renders assembly/product.kcl only. Use whenever the user asks to combine/assemble existing parts. Do NOT smash parts into one script or invent poses with save_cad_script.",
+        "Generate assembly/product.kcl (the ONLY valid assembly path) as a product PREVIEW via Zoo Zookeeper text-to-CAD. Attaches manufacturing parts under parts/* as reference (dims/form) — Zoo does NOT have to import them; prefer named solids in the preview matching part names. parts/* stay manufacturing/fab files; assembly/product.kcl is the visual product for Engineer > Assembly. Includes parts/pcb when a PCB exists. Use when the user asks to assemble / preview the product.",
       inputSchema: z.object({
         parts: z
           .array(z.string().min(1).max(128))
           .min(1)
           .max(20)
-          .describe("Names or paths of existing parts, e.g. enclosure or parts/lid.kcl"),
+          .describe("Names or paths of manufacturing parts, e.g. enclosure or parts/lid.kcl"),
         includePcb: z
           .boolean()
           .optional()
           .default(true)
-          .describe("Include the PCB board (parts/pcb.kcl) in the assembly when a PCB doc exists."),
+          .describe("Include the PCB board (parts/pcb.kcl) as a manufacturing reference when a PCB doc exists."),
         prompt: z
           .string()
           .min(8)
           .max(4000)
           .optional()
           .describe(
-            "Optional product-assembly intent for Zoo (how parts mate / orient). Omit for the default assemble prompt.",
+            "Optional product-preview intent for Zoo (how the finished product should look). Omit for the default preview prompt.",
           ),
       }),
       execute: async ({
@@ -1570,9 +1570,9 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             return {
               error: message,
               hint: sourceRangeBug
-                ? "This was a Zoo source_ranges client bug (trailing newline), not bad part KCL. Do NOT pad the assembly scaffold with save_cad_script or isolate parts — call add_part_to_assembly once more after deploy, or tell the user to retry. Never invent poses."
-                : "Fix part KCL (or PCB), then retry add_part_to_assembly once. Do not invent assembly poses with save_cad_script, and do not pad the assembly file to chase source-map errors.",
-              retryable: !sourceRangeBug,
+                ? "Zoo client bug — retry add_part_to_assembly once."
+                : "Retry add_part_to_assembly once with a shorter preview prompt, or report the error. Do not invent poses with save_cad_script.",
+              retryable: true,
             };
           }
 
@@ -1581,13 +1581,14 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           return {
             ok: true,
             assembly: assembled.assemblyPath,
-            placed: assembled.placed,
+            preview: true,
+            manufacturingRefs: assembled.placed,
             zooOpId: assembled.zooOpId,
             zooExecute: assembled.executeMessage,
             ...(assembled.warnings.length ? { warnings: assembled.warnings } : {}),
             ...(missing.length ? { missing } : {}),
             staleStages: staled,
-            hint: "Call render_model_views to inspect the Zoo-validated assembly.",
+            hint: "Call render_model_views to inspect the product preview. Manufacturing parts under parts/ are unchanged.",
           };
         }),
     },

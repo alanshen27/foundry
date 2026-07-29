@@ -1,9 +1,10 @@
 /**
  * Assembly helpers.
  *
- * Preferred path: Zoo multi-file Text-to-CAD iteration reuses existing part
- * files and rewrites assembly/product.kcl (see assembleProductWithZooMl).
- * The bbox / pack helpers below remain for tests and MCP orientation probes.
+ * Product preview path: Zoo generates assembly/product.kcl as a full visual
+ * product. Attached parts/* files are manufacturing references (dims / form);
+ * the preview may use named solids that match those parts without importing
+ * them. Import/pose helpers below remain for tests and MCP orientation probes.
  */
 import type { CadBoundingBox } from "./port";
 import type { CadComponent } from "./port";
@@ -12,7 +13,8 @@ import { partModuleAlias, toZooKclPath } from "./doc";
 
 /**
  * Minimal product.kcl seed: import each part, emit aliases with no poses.
- * Zoo multi-file iteration then positions them — keeps part geometry attached.
+ * Kept for tests / MCP orientation probes — preview assembly uses
+ * {@link seedAssemblyPreviewKcl} instead.
  */
 export function seedAssemblyKcl(parts: Array<Pick<CadComponent, "name" | "path">>): string {
   const lines: string[] = [
@@ -34,15 +36,35 @@ export function seedAssemblyKcl(parts: Array<Pick<CadComponent, "name" | "path">
   return lines.join("\n").trimEnd() + "\n";
 }
 
-/** Default prompt for assembling attached part files into product.kcl. */
+/**
+ * Preview seed for assembly/product.kcl: manufacturing parts stay under parts/;
+ * this file is regenerated as a full product visual with named solids.
+ */
+export function seedAssemblyPreviewKcl(parts: Array<Pick<CadComponent, "name" | "path">>): string {
+  const lines: string[] = [
+    "// Product PREVIEW (mm) — visual product for Engineer > Assembly.",
+    "// Manufacturing geometry lives under parts/; use those files as reference only.",
+    "// Prefer a named solid per manufacturing part (shell = …, lid = …) — not one fused sprue.",
+    "",
+  ];
+  for (const part of parts) {
+    const alias = partModuleAlias(part);
+    lines.push(`// mfg ref: ${toZooKclPath(part.path)} → solid "${alias}"`);
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+/** Default prompt: generate a product preview from attached manufacturing parts. */
 export function defaultAssemblyIteratePrompt(partPaths: string[]): string {
   const list = partPaths.map((p) => `- ${toZooKclPath(p)}`).join("\n");
   return [
-    "Assemble the attached existing KCL parts into a coherent product assembly.",
-    "Reuse the part modules as-is (import …/main.kcl). Do not regenerate part geometry unless an import path must change.",
-    "Orient each part for real-world use and position them with realistic mates / contact — not an exploded side-by-side pack.",
-    "Write translate/rotate only in the assembly file. Units are millimetres.",
-    "Parts:",
+    "Generate a single product PREVIEW into main.kcl (the assembly entry).",
+    "Attached KCL files under parts/ are MANUFACTURING references — use them for dimensions, features, and form.",
+    "You do NOT need to import those modules. Model the finished product as it would look assembled.",
+    "Use a separate named solid for each logical part (matching the reference names) so sections stay selectable — do not fuse everything into one blob or leave parts on a sprue/runner.",
+    "Realistic mates / contact in the product, not an exploded pack. Units: millimetres.",
+    "Manufacturing references:",
     list,
   ].join("\n");
 }

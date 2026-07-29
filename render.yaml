@@ -69,6 +69,10 @@ envVarGroups:
         sync: false
       - key: V0_API_KEY
         sync: false
+      # Launch media video model (stills reuse OPENAI_API_KEY). Leave unset to
+      # keep video generation refusing rather than faking footage.
+      - key: MEDIA_VIDEO_MODEL
+        sync: false
       - key: FOUNDRY_DEFAULT_WORKSPACE_SLUG
         sync: false
 

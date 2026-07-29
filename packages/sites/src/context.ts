@@ -14,6 +14,22 @@ export type SiteProductContext = {
   verified: boolean;
   requirements?: readonly { label: string; detail?: string | null }[];
   components?: readonly { name: string; quantity: number }[];
+  /** Marketing media attached to this site, approved and ready to embed. */
+  media?: readonly SiteMediaAsset[];
+};
+
+/**
+ * One approved asset the builder may embed. URLs are time-limited signed URLs
+ * from the storage port, so the builder must use them verbatim rather than
+ * rewriting or re-hosting them.
+ */
+export type SiteMediaAsset = {
+  slot: "HERO" | "GALLERY" | "VIDEO_PRIMARY" | "SOCIAL";
+  kind: "STILL" | "VIDEO";
+  url: string;
+  altText?: string | null;
+  /** Still shown before a video plays. */
+  posterUrl?: string | null;
 };
 
 function bullets(lines: readonly string[]): string {
@@ -53,6 +69,35 @@ export function buildSiteSystemPrompt(ctx: SiteProductContext): string {
       "",
       "Key components (you may reference these by name):",
       bullets(ctx.components.map((c) => `${c.name} x${c.quantity}`)),
+    );
+  }
+
+  if (ctx.media?.length) {
+    sections.push(
+      "",
+      "Product media (approved renders and video for this product):",
+      bullets(
+        ctx.media.map((asset) => {
+          const alt = asset.altText ? ` alt="${asset.altText}"` : "";
+          const poster = asset.posterUrl ? ` poster=${asset.posterUrl}` : "";
+          return `${asset.slot} (${asset.kind}): ${asset.url}${poster}${alt}`;
+        }),
+      ),
+      "",
+      "Media rules:",
+      bullets([
+        "Use these URLs verbatim in src attributes. Do not rewrite, proxy, shorten, or re-host them.",
+        "Do not use placeholder services, stock photos, gradients-as-images, emoji, or invented image paths.",
+        "HERO is the single above-the-fold image. GALLERY items go in a gallery/grid in the order listed. SOCIAL is only for og:image/twitter:image metadata.",
+        "VIDEO_PRIMARY renders as an HTML5 <video> element with controls, muted, playsInline, and its poster when provided. Never autoplay with sound.",
+        "Every image needs descriptive alt text; use the provided alt text when present.",
+        "Do not overlay claims, badges, prices, or ratings on the media.",
+      ]),
+    );
+  } else {
+    sections.push(
+      "",
+      "Product media: none is available. Build a text-and-layout-driven page — do not reference image files, placeholder image services, or invented asset paths.",
     );
   }
 

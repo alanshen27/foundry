@@ -89,6 +89,9 @@ importers:
       '@foundry/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@foundry/media':
+        specifier: workspace:*
+        version: link:../../packages/media
       '@foundry/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -357,6 +360,18 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
+
+  packages/media:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.20.1
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

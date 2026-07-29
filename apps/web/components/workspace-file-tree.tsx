@@ -460,7 +460,7 @@ export function WorkspaceFileTree({
   const empty = folders.length === 0 && projects.length === 0;
 
   return (
-    <div className="mt-1 min-h-0 flex-1" role="tree" aria-label="Projects and folders">
+    <div className="mt-1 min-h-0 shrink-0" role="tree" aria-label="Projects and folders">
       <div className="mb-0.5 flex items-center justify-end gap-0.5 px-1">
         <Button
           type="button"

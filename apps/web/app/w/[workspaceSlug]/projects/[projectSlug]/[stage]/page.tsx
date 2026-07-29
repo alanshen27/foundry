@@ -129,6 +129,8 @@ export default async function StagePage({
             branchId={branchId}
             canCreate={can("release.create")}
             verifyApproved={verifyState?.status === "APPROVED"}
+            canEditMedia={can("site.edit")}
+            canApproveMedia={can("site.publish")}
           />
         </>
       ) : null}

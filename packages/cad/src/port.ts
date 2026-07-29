@@ -67,6 +67,8 @@ export type CadProjectIterateOptions = CadGenOptions & {
    * Sent as a whole-file source_range so parts stay stable.
    */
   focusPath?: string;
+  /** Override Zookeeper tools (default: edit_kcl_code). Use text_to_cad for preview assemblies. */
+  forcedTools?: Array<"edit_kcl_code" | "text_to_cad">;
 };
 
 /** Axis-aligned bbox from Zoo MCP `calculate_bounding_box_kcl` (mm by default). */

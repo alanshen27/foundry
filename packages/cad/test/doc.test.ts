@@ -6,6 +6,7 @@ import {
   addCadComponents,
   buildKclProject,
   cadDoc,
+  displayNameFromCadPath,
   importMeshAsPart,
   insertPartIntoAssembly,
   isForeignImportOnlyScript,
@@ -21,6 +22,22 @@ import {
   upsertPartScript,
   upsertPartScripts,
 } from "../src/doc";
+
+describe("displayNameFromCadPath", () => {
+  it("uses the part folder for Zoo …/main.kcl paths", () => {
+    expect(displayNameFromCadPath("parts/lid/main.kcl")).toBe("lid");
+    expect(displayNameFromCadPath("parts/enclosure/main.kcl")).toBe("enclosure");
+  });
+
+  it("keeps the root part as main", () => {
+    expect(displayNameFromCadPath("parts/main.kcl")).toBe("main");
+  });
+
+  it("uses the file stem for assembly and docs", () => {
+    expect(displayNameFromCadPath("assembly/product.kcl")).toBe("product");
+    expect(displayNameFromCadPath("docs/assembly-instructions.md")).toBe("assembly-instructions");
+  });
+});
 
 describe("normalizeCadDoc", () => {
   it("migrates v4 Zoo KCL into a multi-component workspace", () => {

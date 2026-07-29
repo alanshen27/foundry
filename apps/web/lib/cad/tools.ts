@@ -564,7 +564,8 @@ export function defaultValues(tool: CadToolDef): CadToolValues {
   return values;
 }
 
-function listSolids(script: string): string[] {
+/** Solid-like bindings in source order (extrude / body* / part*). */
+export function listCadSolids(script: string): string[] {
   const lines = script.split("\n");
   const solids: string[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -580,6 +581,8 @@ function listSolids(script: string): string[] {
   }
   return solids;
 }
+
+const listSolids = listCadSolids;
 
 /** Apply a CAD tool; returns updated KCL. */
 export function applyCadTool(

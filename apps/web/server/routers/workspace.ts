@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { prisma } from "@foundry/db";
 import { assignableRoles, WORKSPACE_ROLES } from "@foundry/domain";
+import { selectSharedProjects } from "@/lib/shared-projects";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireWorkspaceCapability } from "../access";
@@ -18,6 +19,33 @@ export const workspaceRouter = router({
       orderBy: { createdAt: "asc" },
     }),
   ),
+
+  /**
+   * Projects reachable through a membership in a workspace someone else
+   * created — the "Shared with me" sidebar list.
+   */
+  sharedWithMe: protectedProcedure.query(async ({ ctx }) => {
+    const memberships = await prisma.workspaceMembership.findMany({
+      where: { userId: ctx.user.id, workspace: { createdById: { not: ctx.user.id } } },
+      select: {
+        role: true,
+        grants: { select: { projectId: true } },
+        workspace: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            createdBy: { select: { name: true } },
+            projects: {
+              where: { status: "ACTIVE" },
+              select: { id: true, name: true, slug: true },
+            },
+          },
+        },
+      },
+    });
+    return selectSharedProjects(memberships);
+  }),
 
   create: protectedProcedure
     .input(z.object({ name: z.string().min(1).max(80) }))

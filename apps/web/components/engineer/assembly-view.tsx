@@ -1,12 +1,10 @@
 "use client";
 
 /**
- * Engineer home — renders the stored product assembly (`assembly/product.kcl`).
+ * Engineer home — renders the product PREVIEW (`assembly/product.kcl`).
  *
- * That file is the source of truth for how parts are oriented and mated.
- * We do NOT invent an exploded / fanned-out KCL — Foundry asks Zoo MCP for
- * bounding boxes and writes those poses into product.kcl via
- * add_part_to_assembly (PCB is parts/pcb.kcl with board dim params).
+ * Manufacturing geometry lives under parts/. add_part_to_assembly regenerates
+ * this preview from those files as Zoo references (named solids preferred).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, Boxes, CircuitBoard, Package, RefreshCw, Waypoints } from "lucide-react";
@@ -169,11 +167,12 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
       <div className="flex h-full items-center justify-center p-8">
         <div className="max-w-md text-center">
           <Boxes className="text-muted-foreground mx-auto size-8" strokeWidth={1.5} />
-          <h2 className="mt-3 text-lg font-semibold">No product assembly</h2>
+          <h2 className="mt-3 text-lg font-semibold">No product preview</h2>
           <p className="text-muted-foreground mt-1.5 text-sm">
             Assembly shows <span className="font-mono text-[12px]">assembly/product.kcl</span> — the
-            file where parts are imported and positioned. Ask the copilot to add parts to the
-            assembly, or open CAD and edit that file.
+            visual product preview. Manufacturing geometry stays under{" "}
+            <span className="font-mono text-[12px]">parts/</span>. Ask the copilot to build the
+            preview, or open CAD and edit that file.
           </p>
           <button
             type="button"
