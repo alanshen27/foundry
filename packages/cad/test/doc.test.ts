@@ -13,8 +13,11 @@ import {
   normalizeCadDoc,
   parseForeignImports,
   parseKclModuleImports,
+  removeCadComponents,
+  PRODUCT_ASSEMBLY_PATH,
   toZooKclPath,
   fromZooKclPath,
+  upsertCadContent,
   upsertPartScript,
   upsertPartScripts,
 } from "../src/doc";
@@ -204,6 +207,38 @@ describe("foreign mesh import", () => {
 
   it("detects non-import scripts", () => {
     expect(isForeignImportOnlyScript(DEFAULT_KCL)).toBe(false);
+  });
+});
+
+describe("removeCadComponents", () => {
+  it("drops parts by id and reassigns activeId", () => {
+    const base = upsertPartScript(cadDoc(DEFAULT_KCL), "lid", "width = 40\n");
+    const lid = base.components.find((c) => c.name === "lid");
+    expect(lid).toBeTruthy();
+    const next = removeCadComponents(base, [lid!.id]);
+    expect(next.components.some((c) => c.name === "lid")).toBe(false);
+    expect(next.activeId).not.toBe(lid!.id);
+    expect(next.components.some((c) => c.id === next.activeId)).toBe(true);
+  });
+});
+
+describe("product assembly path", () => {
+  it("forces every assembly create onto assembly/product.kcl", () => {
+    const doc = addCadComponents(cadDoc(DEFAULT_KCL), [
+      { name: "exploded", kind: "assembly", content: "a = 1\n" },
+      { name: "layout", kind: "assembly", content: "b = 2\n" },
+    ]);
+    const assemblies = doc.components.filter((c) => c.kind === "assembly");
+    expect(assemblies).toHaveLength(1);
+    expect(assemblies[0]!.path).toBe(PRODUCT_ASSEMBLY_PATH);
+    expect(assemblies[0]!.content).toContain("b = 2");
+  });
+
+  it("rewrites assembly writes via upsertCadContent to product.kcl", () => {
+    const doc = upsertCadContent(cadDoc(DEFAULT_KCL), "assembly/custom.kcl", "c = 3\n");
+    const assy = doc.components.find((c) => c.kind === "assembly");
+    expect(assy?.path).toBe(PRODUCT_ASSEMBLY_PATH);
+    expect(assy?.content).toContain("c = 3");
   });
 });
 

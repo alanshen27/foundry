@@ -39,6 +39,8 @@ envVarGroups:
         value: /opt/render/project/src/.playwright
       - key: AI_MODEL
         value: gpt-5.6
+      - key: AI_LIGHT_MODEL
+        value: gpt-4.1-nano
       - key: AUTH_SECRET
         generateValue: true
       # Public web URL (https://foundry-web-….onrender.com or custom domain).

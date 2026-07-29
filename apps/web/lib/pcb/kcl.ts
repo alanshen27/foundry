@@ -1,11 +1,15 @@
 /**
- * PCB doc → parametric KCL part (`parts/pcb/main.kcl`) for the product assembly.
+ * PCB doc → parametric KCL part(s) for the product assembly.
+ *
+ * One physical board → one CAD part. A single-board project keeps the legacy
+ * path `parts/pcb/main.kcl`. Multi-board projects use `parts/pcb-<slug>/main.kcl`
+ * per board so Zoo can import and pose each slab independently.
  *
  * Zoo whole-module imports must return a **single** solid. Footprint bodies are
  * therefore omitted here (they live in the 2D PCB editor); the board slab with
  * `width` / `depth` / `thickness` params is what Assembly mates against.
  */
-import { footprintDef, type PcbDoc } from "./doc";
+import { footprintDef, type PcbDoc, type PcbSet } from "./doc";
 
 export const PCB_PART_PATH = "parts/pcb/main.kcl";
 export const PCB_PART_NAME = "pcb";
@@ -17,6 +21,62 @@ function n(v: number): string {
   return String(Number(v.toFixed(3)));
 }
 
+/** Sanitize a board name/id into a CAD path segment. */
+export function slugifyPcbPartName(raw: string): string {
+  const slug = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  return slug || "board";
+}
+
+/**
+ * Stable CAD part name for a board in a set.
+ * Sole board → `pcb` (legacy). Multi → `pcb-<slug>` from name, then id.
+ */
+export function pcbCadPartName(board: Pick<PcbDoc, "id" | "name">, boardCount: number): string {
+  if (boardCount <= 1) return PCB_PART_NAME;
+  const base = slugifyPcbPartName(board.name || board.id || "board");
+  const keyed = base === "pcb" || base.startsWith("pcb-") ? base : `pcb-${base}`;
+  return keyed;
+}
+
+export function pcbCadPartPath(partName: string): string {
+  const slug = slugifyPcbPartName(partName);
+  if (slug === "pcb" || slug === "main") return PCB_PART_PATH;
+  return `parts/${slug}/main.kcl`;
+}
+
+/** True when a CadDoc part path is one we manage for PCB boards. */
+export function isManagedPcbCadPartPath(path: string): boolean {
+  const p = path.replace(/\\/g, "/");
+  if (p === PCB_PART_PATH || p === "parts/pcb.kcl") return true;
+  return /^parts\/pcb(?:-[a-z0-9-]+)?(?:\/main)?\.kcl$/i.test(p);
+}
+
+/** Unique part names for every board in the set (de-dupes colliding slugs). */
+export function pcbCadPartNamesForSet(set: PcbSet): Map<string, string> {
+  const boards = set.boards;
+  const used = new Set<string>();
+  const out = new Map<string, string>();
+  for (const board of boards) {
+    const id = board.id ?? `board-${out.size + 1}`;
+    let name = pcbCadPartName(board, boards.length);
+    if (used.has(name)) {
+      const fromId = slugifyPcbPartName(id);
+      name = fromId.startsWith("pcb-") ? fromId : `pcb-${fromId}`;
+    }
+    let n = 2;
+    const base = name;
+    while (used.has(name)) name = `${base}-${n++}`;
+    used.add(name);
+    out.set(id, name);
+  }
+  return out;
+}
+
 /**
  * Parametric board slab centred on the origin — one solid for module import.
  * `width` / `depth` / `thickness` are visual parameters (see parseCadParams).
@@ -24,9 +84,10 @@ function n(v: number): string {
 export function pcbPartKcl(doc: PcbDoc): string {
   const { widthMm: w, heightMm: h, thicknessMm: t } = doc.board;
   const fpCount = doc.footprints.length;
+  const label = doc.name?.trim() || doc.id || "board";
 
   return [
-    "// SIMULATED PCB board for assembly — single solid (Zoo module import rule).",
+    `// SIMULATED PCB board (${label}) for assembly — single solid (Zoo module import rule).`,
     `// Footprints (${fpCount}) stay in Engineer > PCB; dims are CAD params.`,
     `width = ${n(w)}`,
     `depth = ${n(h)}`,

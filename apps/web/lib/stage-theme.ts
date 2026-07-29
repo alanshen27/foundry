@@ -16,7 +16,7 @@ export type StageTheme = {
   rail: string;
   /** Icon tile on stage cards. */
   tile: string;
-  /** Card border on hover. */
+  /** Card hover tint (works with Card ring or gap-px grids). */
   cardHover: string;
   /** Bare foreground tint, for headings and inline text. */
   text: string;
@@ -28,7 +28,7 @@ export const STAGE_THEME: Record<Stage, StageTheme> = {
     active: "bg-phase-ideate/10 text-phase-ideate",
     rail: "bg-phase-ideate",
     tile: "bg-phase-ideate/10 text-phase-ideate",
-    cardHover: "hover:border-phase-ideate/45",
+    cardHover: "hover:bg-phase-ideate/5",
     text: "text-phase-ideate",
   },
   ENGINEER: {
@@ -36,7 +36,7 @@ export const STAGE_THEME: Record<Stage, StageTheme> = {
     active: "bg-phase-engineer/10 text-phase-engineer",
     rail: "bg-phase-engineer",
     tile: "bg-phase-engineer/10 text-phase-engineer",
-    cardHover: "hover:border-phase-engineer/45",
+    cardHover: "hover:bg-phase-engineer/5",
     text: "text-phase-engineer",
   },
   VERIFY: {
@@ -44,7 +44,7 @@ export const STAGE_THEME: Record<Stage, StageTheme> = {
     active: "bg-phase-verify/10 text-phase-verify",
     rail: "bg-phase-verify",
     tile: "bg-phase-verify/10 text-phase-verify",
-    cardHover: "hover:border-phase-verify/45",
+    cardHover: "hover:bg-phase-verify/5",
     text: "text-phase-verify",
   },
   LAUNCH: {
@@ -52,7 +52,7 @@ export const STAGE_THEME: Record<Stage, StageTheme> = {
     active: "bg-phase-launch/10 text-phase-launch",
     rail: "bg-phase-launch",
     tile: "bg-phase-launch/10 text-phase-launch",
-    cardHover: "hover:border-phase-launch/45",
+    cardHover: "hover:bg-phase-launch/5",
     text: "text-phase-launch",
   },
 };

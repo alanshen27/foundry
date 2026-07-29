@@ -47,6 +47,8 @@ const serverEnvSchema = z
     // AI copilot (optional; chat is disabled with a clear notice when unset)
     OPENAI_API_KEY: z.string().optional(),
     AI_MODEL: z.string().default("gpt-5.6"),
+    // Cheap model for "should the copilot reply?" triage on messages without @AI.
+    AI_LIGHT_MODEL: z.string().default("gpt-4.1-nano"),
     APP_ORIGIN: z.string().url().optional(),
     // Zoo / KittyCAD engine + text-to-CAD (required for mechanical MODEL3D)
     ZOO_API_TOKEN: z.preprocess((value) => {

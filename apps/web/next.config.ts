@@ -31,7 +31,9 @@ const nextConfig: NextConfig = {
     "@foundry/storage",
     "@foundry/observability",
   ],
-  serverExternalPackages: ["@kittycad/lib"],
+  // bullmq optionally imports @valkey/valkey-glide; bundling it spams
+  // "Module not found" in dev. Keep these as Node requires instead.
+  serverExternalPackages: ["@kittycad/lib", "bullmq", "ioredis"],
   webpack: (config) => {
     config.resolve.alias = {
       ...config.resolve.alias,

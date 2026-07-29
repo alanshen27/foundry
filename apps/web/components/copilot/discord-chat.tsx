@@ -15,8 +15,9 @@ import {
   type MentionTarget,
 } from "@/lib/copilot/mentions";
 import { isAssistantFailureText } from "@/lib/copilot/messages";
+import { groupAssistantPartBlocks } from "@/lib/copilot/part-blocks";
 import { ChannelRail } from "./channel-rail";
-import { ToolCard, type ToolPart } from "./chat-sidebar";
+import { ToolCallGroup, type ToolPart } from "./chat-sidebar";
 import { Markdown } from "./markdown";
 import { useCopilot } from "./copilot-provider";
 
@@ -114,29 +115,25 @@ function ChatMessage({
             )}
           </div>
         )}
-        {message.parts.map((part, i) => {
-          const partKey =
-            "toolCallId" in part && typeof part.toolCallId === "string"
-              ? part.toolCallId
-              : `${part.type}-${i}`;
-          if (part.type === "text" && part.text.trim()) {
-            if (!isUser && isAssistantFailureText(part.text)) {
+        {groupAssistantPartBlocks(message.parts, message.id).map((block) => {
+          if (block.type === "text") {
+            if (!isUser && isAssistantFailureText(block.part.text)) {
               return (
                 <p
-                  key={partKey}
+                  key={block.key}
                   className="text-destructive flex items-start gap-2 text-sm leading-relaxed whitespace-pre-wrap"
                 >
                   <XCircle className="mt-0.5 size-3.5 shrink-0" />
-                  <span>{part.text}</span>
+                  <span>{block.part.text}</span>
                 </p>
               );
             }
             return isUser ? (
               <p
-                key={partKey}
+                key={block.key}
                 className="text-foreground/90 text-[15px] leading-relaxed whitespace-pre-wrap"
               >
-                {splitMentions(part.text).map((seg, j) =>
+                {splitMentions(block.part.text).map((seg, j) =>
                   seg.kind === "mention" ? (
                     <span
                       key={j}
@@ -150,19 +147,16 @@ function ChatMessage({
                 )}
               </p>
             ) : (
-              <div key={partKey} className="text-[15px] leading-relaxed">
-                <Markdown text={part.text} />
+              <div key={block.key} className="text-[15px] leading-relaxed">
+                <Markdown text={block.part.text} />
               </div>
             );
           }
-          if (part.type.startsWith("tool-") || part.type === "dynamic-tool") {
-            return (
-              <div key={partKey} className="max-w-xl">
-                <ToolCard part={part as ToolPart} />
-              </div>
-            );
-          }
-          return null;
+          return (
+            <div key={block.key} className="max-w-xl">
+              <ToolCallGroup parts={block.parts as ToolPart[]} />
+            </div>
+          );
         })}
 
         {hasContent ? (
@@ -212,7 +206,7 @@ export function DiscordChat({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const canSend = mentionsAi(input) && status !== "submitted" && status !== "streaming";
+  const canSend = Boolean(input.trim()) && status !== "submitted" && status !== "streaming";
   const mentionActive = useMemo(() => mentionQueryAt(input, caret), [input, caret]);
   const mentionOptions = useMemo(
     () => (mentionActive ? filterMentionTargets(mentionActive.query) : []),
@@ -446,8 +440,8 @@ export function DiscordChat({
                 </span>
               ) : input.trim() && !mentionsAi(input) ? (
                 <>
-                  Mention <span className="text-foreground font-medium">@AI</span> to send to the
-                  copilot
+                  Note by default — mention{" "}
+                  <span className="text-foreground font-medium">@AI</span> for the copilot
                 </>
               ) : (
                 <>

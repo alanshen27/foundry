@@ -4,6 +4,8 @@
  */
 export { createZooCadAdapter, type ZooCadAdapterOptions } from "./zoo";
 export { ZooMcpClient, type ZooMcpOptions } from "./mcp";
+export { zookeeperPrompt, extractKclOutputs } from "./zookeeper";
+export type { ZookeeperPromptOptions, ZookeeperPromptResult } from "./zookeeper";
 export type {
   CadBoundingBox,
   CadKclInput,

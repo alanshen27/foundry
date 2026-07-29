@@ -19,8 +19,15 @@ import {
   type BroadcastPort,
 } from "@foundry/realtime";
 import { BackgroundChatTransport } from "@/lib/copilot/background-chat-transport";
-import { mentionsAi } from "@/lib/copilot/mentions";
-import { markFailedAssistantMessages, pruneEmptyAssistantMessages } from "@/lib/copilot/messages";
+import {
+  seedTranscriptWithLocalBackup,
+  writeLocalTranscript,
+} from "@/lib/copilot/local-transcript";
+import {
+  markFailedAssistantMessages,
+  mergeTranscriptPreferringUserTurns,
+  pruneEmptyAssistantMessages,
+} from "@/lib/copilot/messages";
 import { trpc } from "@/lib/trpc";
 
 export type ChatChannel = {
@@ -111,10 +118,16 @@ function ChatEngine({
   const sendEpochRef = useRef(0);
   /** Server run id for the in-flight send (set by transport). */
   const ownedRunIdRef = useRef<string | null>(null);
+  /** Last user text we tried to send — restored if useChat drops it on error. */
+  const pendingUserTextRef = useRef<string | null>(null);
   // Freeze the seed so RSC re-renders / prop updates never reset the live chat.
-  const seedRef = useRef(pruneEmptyAssistantMessages(initialMessages));
+  // Merge sessionStorage so a reload after a failed POST still shows the turn.
+  const seedRef = useRef(
+    seedTranscriptWithLocalBackup(channelId, pruneEmptyAssistantMessages(initialMessages)),
+  );
   // Flip true synchronously on send so the stop square appears before status catches up.
   const [localBusy, setLocalBusy] = useState(false);
+  const messagesRef = useRef<UIMessage[]>(seedRef.current);
 
   // Broadcast handles most start/finish updates. Keep polling sparse — every
   // hit runs Supabase getUser via createContext and was rate-limiting Auth (429).
@@ -148,6 +161,9 @@ function ChatEngine({
     }, 200);
   }, [utils]);
 
+  /** Soft @AI nudge from a note send — applied in onFinish so prune can't drop it. */
+  const pendingPingTipRef = useRef<{ id: string; text: string } | null>(null);
+
   const transport = useMemo(
     () =>
       new BackgroundChatTransport({
@@ -156,6 +172,9 @@ function ChatEngine({
         channelId,
         onRunId: (runId) => {
           ownedRunIdRef.current = runId;
+        },
+        onPingTip: (tip) => {
+          pendingPingTipRef.current = tip;
         },
       }),
     [projectId, branchId, channelId],
@@ -180,33 +199,44 @@ function ChatEngine({
     [cancelMutation, utils, projectId, channelId],
   );
 
+  const persistFailureStampRef = useRef<(reason?: string) => void>(() => undefined);
+
   const { messages, sendMessage, status, error, stop, resumeStream, setMessages } = useChat({
     id: channelId,
     transport,
     messages: seedRef.current,
-    // Reattach to an in-flight worker run after reload / tab return. Stream
-    // route times out dead PENDING/RUNNING keepalives so this can't wedge send.
-    resume: true,
+    // Manual resume only (see effect below). SDK auto-resume + our send SSE
+    // both attach to the same run and the UI flashes as chunks replay twice.
+    resume: false,
     onFinish: () => {
       const epoch = sendEpochRef.current;
       selfRunRef.current = false;
       setLocalBusy(false);
       if (epoch === sendEpochRef.current) ownedRunIdRef.current = null;
       void utils.chat.activeRun.invalidate({ projectId, channelId });
-      setMessages((prev) => {
-        if (statusRef.current === "error") {
-          const next = markFailedAssistantMessages(prev, error?.message);
-          void persistMutation
-            .mutateAsync({ projectId, branchId, channelId, messages: next })
-            .catch((err) => console.error("failed to persist chat transcript", err));
-          return next;
-        }
-        return pruneEmptyAssistantMessages(prev);
-      });
+      const tip = pendingPingTipRef.current;
+      pendingPingTipRef.current = null;
+      if (statusRef.current === "error") {
+        persistFailureStampRef.current(error?.message);
+      } else {
+        setMessages((prev) => {
+          const next = pruneEmptyAssistantMessages(prev);
+          if (!tip || next.some((message) => message.id === tip.id)) return next;
+          return [
+            ...next,
+            {
+              id: tip.id,
+              role: "assistant" as const,
+              parts: [{ type: "text" as const, text: tip.text }],
+            },
+          ];
+        });
+      }
       refreshProjectData();
     },
     onError: (err) => {
       const reason = err instanceof Error ? err.message : String(err);
+      pendingPingTipRef.current = null;
       // Lock rejection is handled in send() (clear branch + retry). Do not
       // cancel here — a concurrent retry may already own a new runId.
       if (/workspace is locked/i.test(reason)) {
@@ -218,31 +248,74 @@ function ChatEngine({
       const epoch = sendEpochRef.current;
       selfRunRef.current = false;
       setLocalBusy(false);
-      setMessages((prev) => {
-        const next = markFailedAssistantMessages(prev, reason);
-        void persistMutation
-          .mutateAsync({ projectId, branchId, channelId, messages: next })
-          .catch((e) => console.error("failed to persist chat transcript", e));
-        return next;
-      });
+      persistFailureStampRef.current(reason);
       // Only the run that failed — never wipe a newer send's ChatRun.
       releaseOwnedRun(epoch);
     },
   });
 
+  /**
+   * On failure, re-read history from the server (user turns are saved at POST)
+   * and merge with whatever the client still holds so a flaky stream/useChat
+   * rollback cannot erase messages the user already sent.
+   */
   const persistFailureStamp = useCallback(
     (reason?: string) => {
-      setMessages((prev) => {
-        const next = markFailedAssistantMessages(prev, reason);
+      void (async () => {
+        let local: UIMessage[] = [];
+        setMessages((prev) => {
+          local = prev;
+          return prev;
+        });
+
+        // useChat sometimes drops the optimistic user turn on transport errors.
+        const pending = pendingUserTextRef.current?.trim();
+        if (pending) {
+          const hasPending = local.some(
+            (m) =>
+              m.role === "user" &&
+              m.parts.some((p) => p.type === "text" && p.text.trim() === pending),
+          );
+          if (!hasPending) {
+            local = [
+              ...local,
+              {
+                id: `local_user_${Date.now()}`,
+                role: "user",
+                parts: [{ type: "text", text: pending }],
+              } as UIMessage,
+            ];
+          }
+        }
+
+        let server: UIMessage[] = [];
+        try {
+          const rows = await utils.client.chat.messages.query({ projectId, channelId });
+          server = rows.map((row) => ({
+            id: row.id,
+            role: row.role as UIMessage["role"],
+            parts: row.parts as unknown as UIMessage["parts"],
+          }));
+        } catch (err) {
+          console.error("failed to reload chat history after error", err);
+        }
+        const merged = markFailedAssistantMessages(
+          mergeTranscriptPreferringUserTurns(server, local),
+          reason,
+        );
+        setMessages(merged);
+        writeLocalTranscript(channelId, merged);
+        pendingUserTextRef.current = null;
         void persistMutation
-          .mutateAsync({ projectId, branchId, channelId, messages: next })
+          .mutateAsync({ projectId, branchId, channelId, messages: merged, error: reason })
           .catch((err) => console.error("failed to persist chat transcript", err));
-        return next;
-      });
+      })();
     },
-    [setMessages, persistMutation, projectId, branchId, channelId],
+    [setMessages, persistMutation, projectId, branchId, channelId, utils],
   );
+  persistFailureStampRef.current = persistFailureStamp;
   statusRef.current = status;
+  messagesRef.current = messages;
   // Gate send on local stream state only. A stuck ChatRun row / hung resume
   // SSE used to set busy forever via activeRun, so Enter did nothing and the
   // composer never cleared (no POST /api/ai/chat).
@@ -279,18 +352,24 @@ function ChatEngine({
     persistFailureStamp,
   ]);
 
-  // After reload: if a worker run is still live and we're idle, reattach SSE.
-  const didResumeRef = useRef(false);
+  // After reload / other-tab start: reattach SSE only when this tab is not
+  // already the stream owner (sendMessages opened the run stream).
+  const resumedRunIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (didResumeRef.current) return;
-    if (!activeRunQuery.data) return;
+    const runId = activeRunQuery.data?.id ?? null;
+    if (!runId) {
+      resumedRunIdRef.current = null;
+      return;
+    }
     if (selfRunRef.current) return;
+    if (ownedRunIdRef.current === runId) return;
+    if (resumedRunIdRef.current === runId) return;
     if (status === "submitted" || status === "streaming") return;
-    didResumeRef.current = true;
+    resumedRunIdRef.current = runId;
     setLocalBusy(true);
-    ownedRunIdRef.current = activeRunQuery.data.id;
+    ownedRunIdRef.current = runId;
     void resumeStream();
-  }, [activeRunQuery.data, status, resumeStream]);
+  }, [activeRunQuery.data?.id, status, resumeStream]);
 
   useEffect(() => {
     const broadcast = createBroadcastPort();
@@ -298,8 +377,12 @@ function ChatEngine({
       if (message.event === "run-started") {
         setLocalBusy(true);
         void utils.chat.activeRun.invalidate({ projectId, channelId });
+        const streaming =
+          statusRef.current === "submitted" || statusRef.current === "streaming";
+        // Other tabs / reloads only — never open a second SSE for our own send.
         if (
           !selfRunRef.current &&
+          !streaming &&
           (statusRef.current === "ready" || statusRef.current === "error")
         ) {
           void resumeStream();
@@ -314,6 +397,18 @@ function ChatEngine({
         }
         if (selfRunRef.current && !ownedRunIdRef.current) {
           // Still waiting for our runId from POST — ignore stray finishes.
+          return;
+        }
+        // Still consuming our own SSE — onFinish will prune. Avoid a second
+        // setMessages that flashes the transcript mid-close.
+        if (
+          selfRunRef.current ||
+          statusRef.current === "submitted" ||
+          statusRef.current === "streaming"
+        ) {
+          if (payload?.status === "error" && !selfRunRef.current) {
+            persistFailureStamp(payload.error);
+          }
           return;
         }
         selfRunRef.current = false;
@@ -348,7 +443,11 @@ function ChatEngine({
 
   useEffect(() => {
     onMessages(channelId, messages);
-  }, [channelId, messages, onMessages]);
+    // Skip sessionStorage writes while tokens stream — JSON.stringify on every
+    // chunk was janking the main thread and amplifying UI flicker.
+    if (status === "submitted" || status === "streaming") return;
+    writeLocalTranscript(channelId, messages);
+  }, [channelId, messages, onMessages, status]);
 
   // Do NOT persist mid-stream from the client. That path used persistRunMessages
   // upserts and routinely overwrote richer worker checkpoints (tool cards/text)
@@ -377,12 +476,21 @@ function ChatEngine({
       const trimmed = text.trim();
       if (!trimmed) return;
       if (busyRef.current) return;
-      if (!mentionsAi(trimmed)) return;
       shell.setOpen(true);
 
       const epoch = ++sendEpochRef.current;
       ownedRunIdRef.current = null;
       selfRunRef.current = true;
+      pendingUserTextRef.current = trimmed;
+      // Stash before POST so a reload mid-flight / after 401 still keeps the turn.
+      writeLocalTranscript(channelId, [
+        ...messagesRef.current,
+        {
+          id: `local_user_${Date.now()}`,
+          role: "user",
+          parts: [{ type: "text", text: trimmed }],
+        } as UIMessage,
+      ]);
       setLocalBusy(true);
       busyRef.current = true;
 
@@ -395,29 +503,35 @@ function ChatEngine({
         releaseOwnedRun(epoch);
       };
 
-      void sendMessage({ text: trimmed }).catch(async (err) => {
-        const reason = err instanceof Error ? err.message : "request failed";
-        if (/workspace is locked/i.test(reason)) {
-          try {
-            // Clear the dead lock, then start a fresh epoch for the retry so a
-            // late cancel from the failed attempt can't touch the new run.
-            await cancelMutation.mutateAsync({ projectId, branchId });
-            if (epoch !== sendEpochRef.current) return;
-            const retryEpoch = ++sendEpochRef.current;
-            ownedRunIdRef.current = null;
-            selfRunRef.current = true;
-            setLocalBusy(true);
-            busyRef.current = true;
-            await sendMessage({ text: trimmed });
-            if (retryEpoch !== sendEpochRef.current) return;
-            return;
-          } catch (retryErr) {
-            fail(retryErr instanceof Error ? retryErr.message : reason);
-            return;
+      void sendMessage({ text: trimmed })
+        .then(() => {
+          // Stream finished — server persisted at POST; drop the local safety net.
+          if (epoch === sendEpochRef.current) pendingUserTextRef.current = null;
+        })
+        .catch(async (err) => {
+          const reason = err instanceof Error ? err.message : "request failed";
+          if (/workspace is locked/i.test(reason)) {
+            try {
+              // Clear the dead lock, then start a fresh epoch for the retry so a
+              // late cancel from the failed attempt can't touch the new run.
+              await cancelMutation.mutateAsync({ projectId, branchId });
+              if (epoch !== sendEpochRef.current) return;
+              const retryEpoch = ++sendEpochRef.current;
+              ownedRunIdRef.current = null;
+              selfRunRef.current = true;
+              setLocalBusy(true);
+              busyRef.current = true;
+              await sendMessage({ text: trimmed });
+              if (retryEpoch !== sendEpochRef.current) return;
+              pendingUserTextRef.current = null;
+              return;
+            } catch (retryErr) {
+              fail(retryErr instanceof Error ? retryErr.message : reason);
+              return;
+            }
           }
-        }
-        fail(reason);
-      });
+          fail(reason);
+        });
       void utils.chat.activeRun.invalidate({ projectId, channelId });
     },
     [
@@ -470,11 +584,18 @@ export function CopilotProvider({
 
   const cacheRef = useRef(
     new Map<string, UIMessage[]>([
-      [defaultChannelId, pruneEmptyAssistantMessages(initialMessages)],
+      [
+        defaultChannelId,
+        seedTranscriptWithLocalBackup(
+          defaultChannelId,
+          pruneEmptyAssistantMessages(initialMessages),
+        ),
+      ],
     ]),
   );
   const onMessages = useCallback((channelId: string, messages: UIMessage[]) => {
     cacheRef.current.set(channelId, messages);
+    writeLocalTranscript(channelId, messages);
   }, []);
 
   const switchChannel = useCallback(
@@ -487,15 +608,16 @@ export function CopilotProvider({
       void utils.client.chat.messages
         .query({ projectId, channelId })
         .then((rows) => {
+          const fromServer = pruneEmptyAssistantMessages(
+            rows.map((row) => ({
+              id: row.id,
+              role: row.role as UIMessage["role"],
+              parts: row.parts as unknown as UIMessage["parts"],
+            })),
+          );
           cacheRef.current.set(
             channelId,
-            pruneEmptyAssistantMessages(
-              rows.map((row) => ({
-                id: row.id,
-                role: row.role as UIMessage["role"],
-                parts: row.parts as unknown as UIMessage["parts"],
-              })),
-            ),
+            seedTranscriptWithLocalBackup(channelId, fromServer),
           );
           setActiveChannelId(channelId);
         })

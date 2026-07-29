@@ -25,10 +25,18 @@ async function publishSiteEvent(siteId: string, status: string, payload: object 
 }
 
 /** Unique-per-workspace slug: `rover`, `rover-2`, `rover-3`, … */
-async function uniqueSlug(workspaceId: string, name: string): Promise<string> {
+async function uniqueSlug(
+  workspaceId: string,
+  name: string,
+  excludeId?: string,
+): Promise<string> {
   const base = slugify(name);
   const taken = await prisma.site.findMany({
-    where: { workspaceId, slug: { startsWith: base } },
+    where: {
+      workspaceId,
+      slug: { startsWith: base },
+      ...(excludeId ? { id: { not: excludeId } } : {}),
+    },
     select: { slug: true },
   });
   const used = new Set(taken.map((s) => s.slug));
@@ -262,6 +270,93 @@ export const siteRouter = router({
         payload: { siteId: site.id, slug: site.slug, simulated: site.simulated },
       });
       return site;
+    }),
+
+  update: protectedProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        name: z.string().trim().min(1).max(80),
+        projectId: z.string().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const site = await prisma.site.findUnique({ where: { id: input.id } });
+      if (!site) throw new TRPCError({ code: "NOT_FOUND" });
+      await requireWorkspaceCapability(
+        ctx.user.id,
+        site.workspaceId,
+        "site.edit",
+        site.projectId ?? undefined,
+      );
+
+      let projectId = site.projectId;
+      if (input.projectId !== undefined) {
+        if (input.projectId === null) {
+          projectId = null;
+        } else {
+          const project = await prisma.project.findUnique({
+            where: { id: input.projectId },
+            select: { workspaceId: true },
+          });
+          if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+          if (project.workspaceId !== site.workspaceId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Project belongs to a different workspace",
+            });
+          }
+          projectId = input.projectId;
+        }
+      }
+
+      const nameChanged = input.name !== site.name;
+      const slug = nameChanged
+        ? await uniqueSlug(site.workspaceId, input.name, site.id)
+        : site.slug;
+
+      const updated = await prisma.site.update({
+        where: { id: site.id },
+        data: { name: input.name, slug, projectId },
+      });
+
+      await recordAudit({
+        type: "SiteUpdated",
+        workspaceId: site.workspaceId,
+        projectId: updated.projectId,
+        actorId: ctx.user.id,
+        payload: {
+          siteId: site.id,
+          name: updated.name,
+          slug: updated.slug,
+          previousSlug: site.slug,
+        },
+      });
+      return updated;
+    }),
+
+  delete: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const site = await prisma.site.findUnique({ where: { id: input.id } });
+      if (!site) throw new TRPCError({ code: "NOT_FOUND" });
+      await requireWorkspaceCapability(
+        ctx.user.id,
+        site.workspaceId,
+        "site.edit",
+        site.projectId ?? undefined,
+      );
+
+      await prisma.site.delete({ where: { id: site.id } });
+
+      await recordAudit({
+        type: "SiteDeleted",
+        workspaceId: site.workspaceId,
+        projectId: site.projectId,
+        actorId: ctx.user.id,
+        payload: { siteId: site.id, name: site.name, slug: site.slug },
+      });
+      return { id: site.id };
     }),
 
   revise: protectedProcedure

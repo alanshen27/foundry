@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ChevronRight, FolderPlus, Loader2, MoreHorizontal, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -14,7 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { AnimatedSignalGlyph } from "@/components/animated-signal-glyph";
+import { EmptyState } from "@/components/empty-state";
 import { FolderColorPicker } from "@/components/folder-color-picker";
 import { MatrixCover, MatrixScreen } from "@/components/matrix-cover";
 import { MoveToFolderDialog } from "@/components/move-to-folder-dialog";
@@ -369,44 +370,30 @@ export function WorkspaceFolderBrowser({
       />
 
       {empty ? (
-        <div className="bg-primary text-primary-foreground relative flex flex-col items-center justify-center overflow-hidden px-6 py-16 text-center">
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-40">
-            <AnimatedSignalGlyph
-              seed={`${workspaceSlug}-empty`}
-              rows={14}
-              cols={64}
-              fontSize={11}
-            />
-          </div>
-          <div
-            className="relative mb-4 flex size-16 items-center justify-center bg-[#faf9f5] text-primary"
-            style={{ ["--glyph-void" as string]: "#faf9f5" }}
-          >
-            <FolderGlyph className="size-9" />
-          </div>
-          <p className="relative font-mono text-[13px] font-medium tracking-[-0.02em]">
-            This folder is empty
-          </p>
-          <p className="relative mt-1 max-w-sm text-[13px] opacity-85">
-            Create a folder or project to organize work here.
-          </p>
-          <div className="relative mt-4 flex gap-2">
-            <button
+        <EmptyState title="This folder is empty" className="min-h-64">
+          <p>Create a folder or project to organize work here.</p>
+          <div className="text-foreground mt-3 flex justify-center gap-2">
+            <Button
               type="button"
-              className="border border-[#faf9f5]/40 px-4 py-2 font-mono text-[11px] tracking-[0.1em] uppercase transition-colors hover:border-[#faf9f5]/80"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
               onClick={() => setNewFolderOpen(true)}
             >
+              <FolderPlus className="size-3.5" />
               New folder
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="bg-[#faf9f5] px-4 py-2 font-mono text-[11px] tracking-[0.1em] text-[#0c0c0c] uppercase transition-colors hover:bg-[#faf9f5]/90"
+              size="sm"
+              className="gap-1.5"
               onClick={() => setNewProjectOpen(true)}
             >
+              <Plus className="size-3.5" />
               Blank project
-            </button>
+            </Button>
           </div>
-        </div>
+        </EmptyState>
       ) : (
         // Auto-fill off the container, not the viewport: with a sidebar in the
         // way, breakpoint columns guess the available width badly.
@@ -414,7 +401,7 @@ export function WorkspaceFolderBrowser({
           {foldersHere.map((folder) => (
             <div key={folder.id} className="group relative">
               <Link href={`/w/${workspaceSlug}/folders/${folder.id}`} className="block">
-                <div className="border-border bg-card hover:border-foreground/30 overflow-hidden border transition-colors">
+                <Card className="gap-0 py-0 transition-colors hover:ring-foreground/30">
                   <FolderTileFace folder={folder} />
                   <div className={TILE_CAPTION}>
                     <div className="min-w-0">
@@ -427,7 +414,7 @@ export function WorkspaceFolderBrowser({
                     </div>
                     <div className="h-2.5" aria-hidden />
                   </div>
-                </div>
+                </Card>
               </Link>
               <ItemMenu
                 open={menuFor === `f:${folder.id}`}
@@ -461,7 +448,7 @@ export function WorkspaceFolderBrowser({
                 href={`/w/${workspaceSlug}/projects/${project.slug}/overview`}
                 className="block"
               >
-                <div className="border-border bg-card hover:border-foreground/30 overflow-hidden border transition-colors">
+                <Card className="gap-0 py-0 transition-colors hover:ring-foreground/30">
                   <ProjectTileFace project={project} rendering={renderingIds.has(project.id)} />
                   <div className={TILE_CAPTION}>
                     <div className="min-w-0">
@@ -474,7 +461,7 @@ export function WorkspaceFolderBrowser({
                     </div>
                     <StageDots project={project} />
                   </div>
-                </div>
+                </Card>
               </Link>
               <ItemMenu
                 open={menuFor === `p:${project.id}`}

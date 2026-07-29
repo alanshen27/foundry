@@ -1,11 +1,15 @@
 import { DefaultChatTransport, type ChatTransport, type UIMessage, type UIMessageChunk } from "ai";
 
+export type AiPingTip = { id: string; text: string };
+
 type Body = {
   projectId: string;
   branchId: string;
   channelId: string;
   /** Fired once the server accepts the run so the client can cancel that id only. */
   onRunId?: (runId: string) => void;
+  /** Soft nudge when a note looks AI-related but had no @AI (no agent run). */
+  onPingTip?: (tip: AiPingTip) => void;
 };
 
 /** Parse JSON API errors without throwing on HTML error pages. */
@@ -48,16 +52,39 @@ export class BackgroundChatTransport<
     });
 
     const text = await response.text();
-    let payload: { runId?: string; error?: string } = {};
+    let payload: {
+      runId?: string | null;
+      error?: string;
+      invoked?: boolean;
+      tip?: AiPingTip;
+    } = {};
     try {
-      payload = text ? (JSON.parse(text) as { runId?: string; error?: string }) : {};
+      payload = text
+        ? (JSON.parse(text) as {
+            runId?: string | null;
+            error?: string;
+            invoked?: boolean;
+            tip?: AiPingTip;
+          })
+        : {};
     } catch {
       throw new Error("Failed to start copilot run");
     }
     if (!response.ok) {
       throw new Error(payload.error ?? "Failed to start copilot run");
     }
-    if (!payload.runId) throw new Error("Copilot run did not return a runId");
+
+    // Message persisted as a human note — no assistant stream.
+    if (!payload.runId) {
+      if (payload.tip?.id && payload.tip.text) {
+        this.ctx.onPingTip?.(payload.tip);
+      }
+      return new ReadableStream<UIMessageChunk>({
+        start(controller) {
+          controller.close();
+        },
+      });
+    }
 
     this.ctx.onRunId?.(payload.runId);
     return this.openRunStream(payload.runId, options.abortSignal);

@@ -24,6 +24,7 @@ import { isPlausibleZooOpId } from "@foundry/cad";
 import {
   addCadComponents,
   normalizeCadDoc,
+  removeCadComponents,
   upsertCadContent,
   upsertPartScripts,
   toZooKclPath,
@@ -397,6 +398,19 @@ function findCadComponent(doc: CadDoc, key: string, kind: CadComponentKind) {
     if (toZooKclPath(c.path) === zooKey || fromZooKclPath(c.path) === fromZoo) return true;
     return false;
   });
+}
+
+/** Resolve a CAD file by id, path, or name (any kind). */
+function findAnyCadComponent(doc: CadDoc, key: string) {
+  const raw = key.trim();
+  if (!raw) return undefined;
+  const byId = doc.components.find((c) => c.id === raw);
+  if (byId) return byId;
+  for (const kind of ["part", "assembly", "instructions"] as const) {
+    const hit = findCadComponent(doc, raw, kind);
+    if (hit) return hit;
+  }
+  return undefined;
 }
 
 export function buildProjectTools(ctx: ToolContext) {
@@ -1137,7 +1151,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
     create_cad_component: {
       description:
-        "Add one or more components to Engineer > Model in a single call (parts, assembly KCL, or instructions markdown). Prefer one batched call with components:[…] over many parallel calls — same result, fewer round trips.",
+        "Add one or more components to Engineer > Model in a single call (parts, assembly KCL, or instructions markdown). Prefer one batched call with components:[…] over many parallel calls — same result, fewer round trips. Assembly kind ALWAYS creates/updates assembly/product.kcl (never another assembly path).",
       inputSchema: z
         .object({
           name: z.string().min(1).max(64).optional(),
@@ -1190,9 +1204,80 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
         }),
     },
 
+    delete_cad_component: {
+      description:
+        "Delete CAD files from Engineer > Model (parts/*.kcl, assembly/*.kcl, docs/*.md). Prefer paths or ids from get_project_state.cad.components. Use when the user asks to remove a part, scrap a failed generation, or clear an assembly file. After deleting parts referenced by assembly/product.kcl, call add_part_to_assembly again if the assembly should still exist.",
+      inputSchema: z.object({
+        paths: z
+          .array(z.string().min(1).max(200))
+          .max(40)
+          .optional()
+          .describe("Paths or names, e.g. parts/lid.kcl, lid, assembly/product.kcl"),
+        ids: z.array(z.string()).max(40).optional().describe("Component ids from get_project_state"),
+        nameContains: z
+          .array(z.string().min(1).max(200))
+          .max(20)
+          .optional()
+          .describe("Case-insensitive name substring match when path/id is unknown"),
+      }),
+      execute: async ({
+        paths,
+        ids,
+        nameContains,
+      }: {
+        paths?: string[];
+        ids?: string[];
+        nameContains?: string[];
+      }) =>
+        guard(ctx, "mechanical.edit", async (workspaceId) => {
+          if (
+            (!paths || paths.length === 0) &&
+            (!ids || ids.length === 0) &&
+            (!nameContains || nameContains.length === 0)
+          ) {
+            return { error: "Provide paths, ids, and/or nameContains" };
+          }
+          const idSet = new Set(ids ?? []);
+          const needles = (nameContains ?? []).map((n) => n.toLowerCase());
+          const pathKeys = paths ?? [];
+          let deleted: { id: string; path: string; kind: string; name: string }[] = [];
+          const data = await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) => {
+            const toDrop = new Set<string>();
+            for (const c of base.components) {
+              if (idSet.has(c.id)) toDrop.add(c.id);
+              else if (needles.some((n) => c.name.toLowerCase().includes(n))) toDrop.add(c.id);
+            }
+            for (const key of pathKeys) {
+              const hit = findAnyCadComponent(base, key);
+              if (hit) toDrop.add(hit.id);
+            }
+            deleted = base.components
+              .filter((c) => toDrop.has(c.id))
+              .map((c) => ({ id: c.id, path: c.path, kind: c.kind, name: c.name }));
+            return removeCadComponents(base, toDrop);
+          });
+          if (deleted.length === 0) {
+            return {
+              ok: true,
+              deleted: 0,
+              paths: data.components.map((c) => c.path),
+              hint: "No matching CAD components. Call get_project_state and check cad.components.",
+            };
+          }
+          const staled = await touchStage(ctx, workspaceId, "ENGINEER");
+          return {
+            ok: true,
+            deleted: deleted.length,
+            removed: deleted,
+            paths: data.components.map((c) => c.path),
+            staleStages: staled,
+          };
+        }),
+    },
+
     text_to_cad: {
       description:
-        "Generate parametric KCL parts via Zoo text-to-CAD and save them into the CAD workspace (parts/*). Prefer this for new geometry. To model several independent parts (enclosure + lid + bracket), pass parts:[{partName,prompt}…] — they generate concurrently and each lands in its own file, which is much faster than one call per part. Single-part form: prompt + optional partName (defaults to parts/main.kcl). Each generation can take ~10 minutes. After success, call render_model_views. NEVER invent zooOpId — omit it for new jobs; only pass a zooOpId copied exactly from a prior tool error. Fall back to save_cad_script only if Zoo failed.",
+        "Generate parametric KCL parts via Zoo Zookeeper (Agent API) and save them into the CAD workspace (parts/*). Prefer this for new geometry. To model several independent parts (enclosure + lid + bracket), pass parts:[{partName,prompt}…] — they generate concurrently and each lands in its own file, which is much faster than one call per part. Single-part form: prompt + optional partName (defaults to parts/main.kcl). Each generation can take several minutes. After success, call render_model_views. NEVER invent zooOpId — omit it for new jobs; only pass a zooOpId copied exactly from a prior tool error (legacy REST resume). Fall back to save_cad_script only if Zoo failed.",
       inputSchema: z
         .object({
           prompt: z
@@ -1366,7 +1451,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
     save_cad_script: {
       description:
-        "Write Zoo KCL (or instructions markdown) into the CAD workspace. Millimetres for KCL. Prefer text_to_cad for brand-new parts; use this to patch. Pass partName/path for non-main components (e.g. lid, assembly/product.kcl, docs/assembly-instructions.md). Declare key dimensions as top-level bindings (`width = 60`) for visual controls.",
+        "Write Zoo KCL (or instructions markdown) into the CAD workspace. Millimetres for KCL. Prefer text_to_cad for brand-new parts; use this to patch. Pass partName/path for non-main components (e.g. lid, docs/assembly-instructions.md). Assembly content MUST use path assembly/product.kcl (any other assembly/* path is rewritten there). Declare key dimensions as top-level bindings (`width = 60`) for visual controls.",
       inputSchema: z.object({
         script: z.string().min(8).max(40_000).describe("KCL or markdown source"),
         partName: z
@@ -1395,19 +1480,13 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
     add_part_to_assembly: {
       description:
-        "Compose assembly/product.kcl from existing parts via Zoo multi-file Text-to-CAD iteration (attaches prior part KCL files so Zoo reuses them), then validates with Zoo MCP execute_kcl. Includes parts/pcb when a PCB exists. Engineer > Assembly renders product.kcl. Use whenever the user asks to combine/assemble existing parts. Do NOT smash parts into one script or invent poses with save_cad_script.",
+        "Compose assembly/product.kcl (the ONLY valid assembly path) from existing parts via Zoo Zookeeper (Agent API WebSocket — attaches prior part KCL so Zoo reuses them), then validates with Zoo MCP execute_kcl. Includes parts/pcb when a PCB exists. Engineer > Assembly renders assembly/product.kcl only. Use whenever the user asks to combine/assemble existing parts. Do NOT smash parts into one script or invent poses with save_cad_script.",
       inputSchema: z.object({
         parts: z
           .array(z.string().min(1).max(128))
           .min(1)
           .max(20)
           .describe("Names or paths of existing parts, e.g. enclosure or parts/lid.kcl"),
-        assembly: z
-          .string()
-          .min(1)
-          .max(128)
-          .optional()
-          .describe("Assembly name or path. Defaults to assembly/product.kcl (first assembly)."),
         includePcb: z
           .boolean()
           .optional()
@@ -1424,12 +1503,10 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
       }),
       execute: async ({
         parts,
-        assembly,
         includePcb,
         prompt,
       }: {
         parts: string[];
-        assembly?: string;
         includePcb?: boolean;
         prompt?: string;
       }) =>
@@ -1445,16 +1522,14 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             where: { projectId_branchId_kind: { projectId, branchId, kind: "MODEL3D" } },
           });
           const base = normalizeCadDoc(modelRow?.data ?? null);
-          const target = assembly
-            ? findCadComponent(base, assembly, "assembly")
-            : (base.components.find(
-                (c) => c.kind === "assembly" && c.path === "assembly/product.kcl",
-              ) ?? base.components.find((c) => c.kind === "assembly"));
+          const target =
+            base.components.find(
+              (c) => c.kind === "assembly" && c.path === "assembly/product.kcl",
+            ) ?? base.components.find((c) => c.kind === "assembly");
           if (!target) {
             return {
-              error: assembly
-                ? `No assembly named "${assembly}" in the CAD workspace.`
-                : "The CAD workspace has no assembly yet. Create one with create_cad_component({ name: 'product', kind: 'assembly' }).",
+              error:
+                "The CAD workspace has no assembly/product.kcl yet. Create it with create_cad_component({ name: 'product', kind: 'assembly' }).",
             };
           }
 

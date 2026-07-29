@@ -9,15 +9,34 @@ import {
   Globe,
   LayoutTemplate,
   Loader2,
+  Pencil,
   ShoppingBag,
   Sparkles,
   Store,
+  Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { SignalGlowBackdrop } from "@/components/signal-glow-backdrop";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
+
+type SiteRow = {
+  id: string;
+  name: string;
+  slug: string;
+  projectId: string | null;
+};
 
 type WorkspaceProject = { id: string; name: string; slug: string };
 
@@ -65,6 +84,9 @@ export function SitesPanel({
   const [projectId, setProjectId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showOptions, setShowOptions] = useState(false);
+  const [renameSite, setRenameSite] = useState<SiteRow | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameProjectId, setRenameProjectId] = useState("");
 
   const create = trpc.site.create.useMutation({
     onSuccess: async (site) => {
@@ -76,8 +98,31 @@ export function SitesPanel({
     onError: (nextError) => setError(nextError.message),
   });
 
+  const update = trpc.site.update.useMutation({
+    onSuccess: async () => {
+      await utils.site.list.invalidate({ workspaceId });
+      setRenameSite(null);
+      setError(null);
+    },
+    onError: (nextError) => setError(nextError.message),
+  });
+
+  const remove = trpc.site.delete.useMutation({
+    onSuccess: async () => {
+      await utils.site.list.invalidate({ workspaceId });
+      setError(null);
+    },
+    onError: (nextError) => setError(nextError.message),
+  });
+
   const hasSites = Boolean(sites.data?.length);
   const simulated = builderStatus.data && !builderStatus.data.configured;
+
+  function openRename(site: SiteRow) {
+    setRenameSite(site);
+    setRenameValue(site.name);
+    setRenameProjectId(site.projectId ?? "");
+  }
 
   function submit() {
     if (!canEdit || !prompt.trim() || create.isPending) return;
@@ -209,7 +254,7 @@ export function SitesPanel({
       {sites.isLoading ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Loading sites">
           {Array.from({ length: 3 }, (_, index) => (
-            <div key={index} className="bg-card border-border h-64 animate-pulse border" />
+            <Card key={index} className="h-64 animate-pulse gap-0 py-0" />
           ))}
         </div>
       ) : hasSites ? (
@@ -222,10 +267,47 @@ export function SitesPanel({
           </div>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {sites.data!.map((site) => (
-              <article
-                key={site.id}
-                className="border-border bg-card group overflow-hidden border transition-colors hover:border-primary/40"
-              >
+              <Card key={site.id} className="gap-0 py-0 transition-colors hover:ring-primary/40">
+                {canEdit ? (
+                  <div className="absolute top-2 right-2 z-10 flex gap-1 opacity-0 transition group-hover/card:opacity-100 focus-within:opacity-100">
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="secondary"
+                      className="rounded-none border bg-background"
+                      aria-label={`Rename ${site.name}`}
+                      onClick={() =>
+                        openRename({
+                          id: site.id,
+                          name: site.name,
+                          slug: site.slug,
+                          projectId: site.projectId,
+                        })
+                      }
+                    >
+                      <Pencil className="size-3.5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="secondary"
+                      className="rounded-none border bg-background text-destructive hover:text-destructive"
+                      aria-label={`Delete ${site.name}`}
+                      disabled={remove.isPending}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Delete “${site.name}”? Listings and checkout config for this site are removed too.`,
+                          )
+                        ) {
+                          remove.mutate({ id: site.id });
+                        }
+                      }}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
+                ) : null}
                 <Link
                   href={`/w/${workspaceSlug}/sites/${site.slug}/editor`}
                   className="block focus-visible:outline-none"
@@ -273,7 +355,7 @@ export function SitesPanel({
                     <span
                       className={cn(
                         "bg-background absolute top-2 right-2 flex size-7 items-center justify-center border opacity-0 transition",
-                        "group-hover:opacity-100",
+                        canEdit ? "group-hover/card:opacity-0" : "group-hover/card:opacity-100",
                       )}
                     >
                       <ArrowUpRight className="size-3.5" />
@@ -319,11 +401,88 @@ export function SitesPanel({
                     </div>
                   </div>
                 </Link>
-              </article>
+              </Card>
             ))}
           </div>
         </div>
       ) : null}
+
+      <Dialog
+        open={Boolean(renameSite)}
+        onOpenChange={(open) => {
+          if (!open) setRenameSite(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Edit site</DialogTitle>
+            <DialogDescription>Rename this site or change its product context.</DialogDescription>
+          </DialogHeader>
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!renameSite || !renameValue.trim()) return;
+              update.mutate({
+                id: renameSite.id,
+                name: renameValue.trim(),
+                projectId: renameProjectId || null,
+              });
+            }}
+          >
+            <div>
+              <label
+                htmlFor="site-rename-name"
+                className="text-muted-foreground font-mono text-[10px] tracking-[0.14em] uppercase"
+              >
+                Site name
+              </label>
+              <Input
+                id="site-rename-name"
+                value={renameValue}
+                onChange={(event) => setRenameValue(event.target.value)}
+                maxLength={80}
+                required
+                className="mt-1.5 rounded-none"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="site-rename-project"
+                className="text-muted-foreground font-mono text-[10px] tracking-[0.14em] uppercase"
+              >
+                Product context
+              </label>
+              <select
+                id="site-rename-project"
+                className="border-input mt-1.5 h-9 w-full border bg-white px-3 text-sm outline-none dark:bg-card"
+                value={renameProjectId}
+                onChange={(event) => setRenameProjectId(event.target.value)}
+              >
+                <option value="">No product — generic site</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {update.error ? (
+              <p role="alert" className="text-destructive text-[12px]">
+                {update.error.message}
+              </p>
+            ) : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setRenameSite(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={update.isPending || !renameValue.trim()}>
+                {update.isPending ? "Saving…" : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

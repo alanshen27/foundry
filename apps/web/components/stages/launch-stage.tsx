@@ -233,9 +233,9 @@ export function LaunchStage({ projectId, branchId, canCreate, verifyApproved }: 
 
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="border-border rounded-none border p-2">
+    <Card size="sm" className="gap-0.5 p-2 py-2">
       <p className="text-xs uppercase">{label}</p>
       <p className="text-foreground text-base font-semibold">{value}</p>
-    </div>
+    </Card>
   );
 }

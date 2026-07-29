@@ -25,7 +25,7 @@ export function PipelineKickoffListener({ hasBrief }: { hasBrief: boolean }) {
     if (!pending?.trim()) return;
     kickedOff.current = true;
     send(
-      `Bootstrap this project end-to-end: ${pending.trim()}\n\nFill the brief, requirements, BOM, circuit, 3D model, and validation checks.`,
+      `@AI Bootstrap this project end-to-end: ${pending.trim()}\n\nFill the brief, requirements, BOM, circuit, 3D model, and validation checks.`,
     );
   }, [hasBrief, busy, send]);
 

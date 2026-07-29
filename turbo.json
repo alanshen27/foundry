@@ -15,6 +15,7 @@
     "REDIS_URL",
     "OPENAI_API_KEY",
     "AI_MODEL",
+    "AI_LIGHT_MODEL",
     "APP_ORIGIN",
     "ZOO_API_TOKEN",
     "V0_API_KEY",

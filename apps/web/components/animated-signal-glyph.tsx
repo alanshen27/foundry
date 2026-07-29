@@ -16,6 +16,7 @@ export function AnimatedSignalGlyph({
   cols = 24,
   fontSize = 12,
   color = "#faf9f5",
+  fill = false,
   className,
 }: {
   seed: string;
@@ -24,6 +25,8 @@ export function AnimatedSignalGlyph({
   /** Glyph cell font size in px (sets intrinsic canvas size). */
   fontSize?: number;
   color?: string;
+  /** Stretch to fill the parent instead of using intrinsic cell size. */
+  fill?: boolean;
   className?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -61,7 +64,7 @@ export function AnimatedSignalGlyph({
       const elapsed = (now - t0) / 1000;
 
       ctx!.clearRect(0, 0, w, h);
-      ctx!.fillStyle = color;
+      ctx!.fillStyle = color === "currentColor" ? getComputedStyle(canvas!).color : color;
       for (let y = 0; y < rows; y += 1) {
         const rowField = field[y]!;
         for (let x = 0; x < cols; x += 1) {
@@ -104,8 +107,12 @@ export function AnimatedSignalGlyph({
     <canvas
       ref={canvasRef}
       aria-hidden
-      className={cn("pointer-events-none h-auto max-w-full select-none", className)}
-      style={{ width: cssW, aspectRatio: `${cssW} / ${cssH}` }}
+      className={cn(
+        "pointer-events-none select-none",
+        fill ? "h-full w-full max-w-none" : "h-auto max-w-full",
+        className,
+      )}
+      style={fill ? undefined : { width: cssW, aspectRatio: `${cssW} / ${cssH}` }}
     />
   );
 }

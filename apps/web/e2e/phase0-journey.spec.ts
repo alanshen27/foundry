@@ -24,19 +24,25 @@ test("full Phase 0 journey", async ({ browser }) => {
 
   await signIn(builder, "builder@foundry.local");
 
-  // Optional extra workspace via manage list
+  // Optional extra workspace via manage list (separate from the project chatbar)
   await builder.goto("/workspaces?manage=1");
   const workspaceName = `E2E Workspace ${runId}`;
   await builder.getByLabel("Workspace name").fill(workspaceName);
   await builder.getByRole("button", { name: "Create" }).click();
   await builder.waitForURL("**/w/e2e-workspace-*");
   await expect(builder.getByRole("heading", { name: workspaceName })).toBeVisible();
+  const workspaceSlug = new URL(builder.url()).pathname.split("/")[2]!;
 
-  // Create project
+  // Large project chatbar → Project row under this workspace (not a new Workspace)
+  await builder.getByLabel("Describe the product to build").fill(
+    "A palm-sized two-wheel rover for phase 0 acceptance.",
+  );
+  await builder.getByRole("button", { name: "More" }).click();
   await builder.getByLabel("Project name").fill("Test Rover");
-  await builder.getByLabel("Project description").fill("Phase 0 acceptance project");
-  await builder.getByRole("button", { name: "Create project" }).click();
-  await builder.waitForURL("**/projects/test-rover/overview");
+  await builder.getByRole("button", { name: "Build" }).click();
+  await builder.waitForURL(`**/w/${workspaceSlug}/projects/test-rover/overview`);
+  expect(builder.url()).toMatch(new RegExp(`/w/${workspaceSlug}/projects/test-rover`));
+  expect(builder.url()).not.toMatch(/\/w\/test-rover(?:\/|$)/);
   await expect(builder.getByRole("heading", { name: "Test Rover" })).toBeVisible();
 
   // Walk the footer process bar and check the real editors render.
@@ -92,14 +98,20 @@ test("full Phase 0 journey", async ({ browser }) => {
 test("chat channels and visual CAD parameters", async ({ page }) => {
   await signIn(page, "builder@foundry.local");
 
-  // Fresh workspace + project for this test.
+  // Fresh workspace (manage form) + project via large chatbar — not workspace-named-as-project.
+  await page.goto("/workspaces?manage=1");
   await page.getByLabel("Workspace name").fill(`E2E Studio ${runId}`);
   await page.getByRole("button", { name: "Create" }).click();
   await page.waitForURL("**/w/e2e-studio-*");
+  const workspaceSlug = new URL(page.url()).pathname.split("/")[2]!;
+  await page.getByLabel("Describe the product to build").fill(
+    "A rig for testing CAD parameters and chat channels.",
+  );
+  await page.getByRole("button", { name: "More" }).click();
   await page.getByLabel("Project name").fill("Param Rig");
-  await page.getByLabel("Project description").fill("Channels + params test");
-  await page.getByRole("button", { name: "Create project" }).click();
-  await page.waitForURL("**/projects/param-rig/overview");
+  await page.getByRole("button", { name: "Build" }).click();
+  await page.waitForURL(`**/w/${workspaceSlug}/projects/param-rig/overview`);
+  expect(page.url()).not.toMatch(/\/w\/param-rig(?:\/|$)/);
 
   // --- Copilot channels: create one, switch, persist across reloads.
   await page.getByRole("button", { name: /General/ }).click();
@@ -132,6 +144,25 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
   await expect(page.locator('label:has-text("width") input[type="number"]')).toHaveValue("75", {
     timeout: 30_000,
   });
+});
+
+test("sites chatbar creates a Site under the workspace, not a Workspace", async ({ page }) => {
+  await signIn(page, "builder@foundry.local");
+
+  await page.goto("/workspaces?manage=1");
+  await page.getByLabel("Workspace name").fill(`E2E Sites ${runId}`);
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.waitForURL("**/w/e2e-sites-*");
+  const workspaceSlug = new URL(page.url()).pathname.split("/")[2]!;
+
+  await page.goto(`/w/${workspaceSlug}/sites`);
+  await page.getByLabel("Describe the site to build").fill("E2E Launch Site");
+  await page.getByRole("button", { name: "Build" }).click();
+  await page.waitForURL(`**/w/${workspaceSlug}/sites/e2e-launch-site/editor`, {
+    timeout: 60_000,
+  });
+  expect(page.url()).toContain(`/w/${workspaceSlug}/sites/`);
+  expect(page.url()).not.toMatch(/\/w\/e2e-launch-site(?:\/|$)/);
 });
 
 test("unauthenticated users are redirected to sign-in", async ({ page }) => {

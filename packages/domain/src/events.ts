@@ -46,6 +46,8 @@ export const DOMAIN_EVENT_TYPES = [
   // Launch
   "ReleaseCreated",
   "SiteCreated",
+  "SiteUpdated",
+  "SiteDeleted",
   "SiteRevised",
   "SitePublished",
   // Commerce

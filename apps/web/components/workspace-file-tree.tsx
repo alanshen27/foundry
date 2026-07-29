@@ -3,16 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useState, type FormEvent } from "react";
-import {
-  Boxes,
-  ChevronDown,
-  ChevronRight,
-  Folder,
-  FolderOpen,
-  FolderPlus,
-  MoreHorizontal,
-  Plus,
-} from "lucide-react";
+import { Boxes, Folder, FolderOpen, FolderPlus, MoreHorizontal, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -86,7 +77,8 @@ function FolderRow({
   const pathname = usePathname();
   const open = expanded.has(folder.id);
   const childProjects = projects.filter((p) => p.folderId === folder.id);
-  const pad = 8 + depth * 10;
+  // Match HomeShell nav / root project rows (px-2.5); nest without a caret gutter.
+  const pad = 10 + depth * 12;
   const href = `/w/${workspaceSlug}/folders/${folder.id}`;
   const active = activeFolderId === folder.id;
   const color = folderColorStyle(folder.color, folder.id);
@@ -95,37 +87,32 @@ function FolderRow({
     <div>
       <div
         className={cn(
-          "group flex w-full items-center gap-0.5 rounded-none py-[5px] pr-0.5 text-[13px] transition-colors",
+          "group flex w-full items-center gap-0.5 rounded-none py-[7px] pr-0.5 text-[13px] transition-colors",
           active
             ? "bg-sidebar-accent text-foreground font-medium"
             : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
         )}
         style={{ paddingLeft: pad }}
       >
-        <button
-          type="button"
-          onClick={() => onToggle(folder.id)}
-          className="hover:bg-muted flex size-5 shrink-0 items-center justify-center rounded"
-          aria-label={open ? "Collapse folder" : "Expand folder"}
-          aria-expanded={open}
-        >
-          {open ? (
-            <ChevronDown className="size-3 opacity-70" />
-          ) : (
-            <ChevronRight className="size-3 opacity-70" />
-          )}
-        </button>
-        <Link href={href} className="flex min-w-0 flex-1 items-center gap-1.5 py-0.5">
-          {open ? (
-            <FolderOpen className={cn("size-[15px] shrink-0", color.icon)} strokeWidth={1.75} />
-          ) : (
-            <Folder
-              className={cn("size-[15px] shrink-0 fill-current", color.icon)}
-              strokeWidth={1.5}
-            />
-          )}
-          <span className="min-w-0 flex-1 truncate">{folder.name}</span>
-        </Link>
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => onToggle(folder.id)}
+            className={cn("flex shrink-0 items-center justify-center", color.icon)}
+            aria-label={open ? "Collapse folder" : "Expand folder"}
+            aria-expanded={open}
+            title={open ? "Collapse" : "Expand"}
+          >
+            {open ? (
+              <FolderOpen className="size-[15px] fill-current" strokeWidth={1.75} />
+            ) : (
+              <Folder className="size-[15px] fill-current" strokeWidth={1.5} />
+            )}
+          </button>
+          <Link href={href} className="min-w-0 flex-1 truncate">
+            {folder.name}
+          </Link>
+        </div>
         <button
           type="button"
           title="New in folder"
@@ -257,14 +244,14 @@ function FolderRow({
               <div
                 key={project.id}
                 className={cn(
-                  "group flex items-center gap-1 rounded-none py-[5px] pr-0.5 text-[13px] transition-colors",
+                  "group flex items-center gap-1 rounded-none py-[7px] pr-0.5 text-[13px] transition-colors",
                   projectActive
                     ? "bg-sidebar-accent text-foreground font-medium"
                     : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
                 )}
-                style={{ paddingLeft: pad + 22 }}
+                style={{ paddingLeft: pad + 12 }}
               >
-                <Link href={projectHref} className="flex min-w-0 flex-1 items-center gap-2">
+                <Link href={projectHref} className="flex min-w-0 flex-1 items-center gap-2.5">
                   <Boxes className="size-[15px] shrink-0 opacity-70" strokeWidth={1.75} />
                   <span className="min-w-0 flex-1 truncate">{project.name}</span>
                 </Link>
@@ -335,8 +322,8 @@ function NewFolderInline({
   const [name, setName] = useState("");
   return (
     <form
-      className="flex items-center gap-1.5 py-1 pr-2"
-      style={{ paddingLeft: 8 + depth * 10 + 22 }}
+      className="flex items-center gap-2.5 py-1 pr-2"
+      style={{ paddingLeft: 10 + depth * 12 }}
       onSubmit={(e) => {
         e.preventDefault();
         if (name.trim()) onSubmit(name.trim());
@@ -541,7 +528,7 @@ export function WorkspaceFileTree({
           <div
             key={project.id}
             className={cn(
-              "group flex items-center gap-1 rounded-none px-2 py-[5px] text-[13px] transition-colors",
+              "group flex items-center gap-1 rounded-none px-2.5 py-[7px] text-[13px] transition-colors",
               active
                 ? "bg-sidebar-accent text-foreground font-medium"
                 : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",

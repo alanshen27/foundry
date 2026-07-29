@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
@@ -53,14 +54,14 @@ function Stat({
   detail: string;
 }) {
   return (
-    <div className="bg-card rounded-xl border p-3">
+    <Card size="sm" className="gap-1 p-3 py-3">
       <div className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
         <Icon className="size-3.5" />
         {label}
       </div>
-      <p className="mt-2 text-lg font-semibold tracking-tight">{value}</p>
-      <p className="text-muted-foreground mt-0.5 truncate text-[11px]">{detail}</p>
-    </div>
+      <p className="text-lg font-semibold tracking-tight">{value}</p>
+      <p className="text-muted-foreground truncate text-[11px]">{detail}</p>
+    </Card>
   );
 }
 
@@ -217,9 +218,9 @@ export function CommercePanel({ siteId, canManage }: { siteId: string; canManage
               />
             </div>
 
-            <section className="bg-card rounded-xl border p-4">
+            <Card className="gap-0 p-4 py-4">
               <div className="flex items-start gap-3">
-                <span className="bg-muted flex size-9 shrink-0 items-center justify-center rounded-lg">
+                <span className="bg-muted flex size-9 shrink-0 items-center justify-center rounded-none">
                   <PackageCheck className="size-4" />
                 </span>
                 <div>
@@ -231,7 +232,7 @@ export function CommercePanel({ siteId, canManage }: { siteId: string; canManage
                   </p>
                 </div>
               </div>
-            </section>
+            </Card>
           </div>
         ) : null}
 
@@ -245,51 +246,53 @@ export function CommercePanel({ siteId, canManage }: { siteId: string; canManage
             </div>
 
             {canManage && connected ? (
-              <form
-                className="bg-card flex flex-wrap items-end gap-2 rounded-xl border p-4"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  addListing.mutate({ siteId, externalHandle: handle, saleMode });
-                }}
-              >
-                <div className="min-w-[220px] flex-1 space-y-1.5">
-                  <Label htmlFor={`product-handle-${siteId}`}>Shopify product handle</Label>
-                  <Input
-                    id={`product-handle-${siteId}`}
-                    value={handle}
-                    onChange={(event) => setHandle(event.target.value)}
-                    placeholder="palm-rover"
-                    required
-                  />
-                </div>
-                <select
-                  aria-label="Sale mode"
-                  className="border-input bg-background h-9 rounded-lg border px-3 text-sm"
-                  value={saleMode}
-                  onChange={(event) =>
-                    setSaleMode(event.target.value as (typeof SALE_MODES)[number][0])
-                  }
+              <Card className="gap-0 p-4 py-4">
+                <form
+                  className="flex flex-wrap items-end gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    addListing.mutate({ siteId, externalHandle: handle, saleMode });
+                  }}
                 >
-                  {SALE_MODES.map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  type="submit"
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy || !handle.trim()}
-                >
-                  {addListing.isPending ? <Loader2 className="animate-spin" /> : null}
-                  Add listing
-                </Button>
-              </form>
+                  <div className="min-w-[220px] flex-1 space-y-1.5">
+                    <Label htmlFor={`product-handle-${siteId}`}>Shopify product handle</Label>
+                    <Input
+                      id={`product-handle-${siteId}`}
+                      value={handle}
+                      onChange={(event) => setHandle(event.target.value)}
+                      placeholder="palm-rover"
+                      required
+                    />
+                  </div>
+                  <select
+                    aria-label="Sale mode"
+                    className="border-input bg-background h-9 rounded-none border px-3 text-sm"
+                    value={saleMode}
+                    onChange={(event) =>
+                      setSaleMode(event.target.value as (typeof SALE_MODES)[number][0])
+                    }
+                  >
+                    {SALE_MODES.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    type="submit"
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy || !handle.trim()}
+                  >
+                    {addListing.isPending ? <Loader2 className="animate-spin" /> : null}
+                    Add listing
+                  </Button>
+                </form>
+              </Card>
             ) : null}
 
             {items.length ? (
-              <div className="overflow-hidden rounded-xl border">
+              <Card className="gap-0 overflow-hidden py-0">
                 <div className="bg-muted/40 text-muted-foreground grid grid-cols-[minmax(0,1fr)_110px_90px_120px] gap-3 border-b px-4 py-2 text-[10px] font-semibold tracking-wider uppercase">
                   <span>Product</span>
                   <span>Price</span>
@@ -343,9 +346,9 @@ export function CommercePanel({ siteId, canManage }: { siteId: string; canManage
                     </div>
                   </div>
                 ))}
-              </div>
+              </Card>
             ) : (
-              <div className="text-muted-foreground flex flex-col items-center rounded-xl border border-dashed px-6 py-12 text-center">
+              <Card className="text-muted-foreground flex flex-col items-center gap-0 px-6 py-12 text-center ring-dashed">
                 <ShoppingBag className="mb-3 size-5" />
                 <p className="text-foreground text-sm font-medium">No products yet</p>
                 <p className="mt-1 text-xs">
@@ -353,7 +356,7 @@ export function CommercePanel({ siteId, canManage }: { siteId: string; canManage
                     ? "Add a Shopify product handle above."
                     : "Connect Shopify in Settings before adding products."}
                 </p>
-              </div>
+              </Card>
             )}
           </div>
         ) : null}
@@ -388,51 +391,53 @@ export function CommercePanel({ siteId, canManage }: { siteId: string; canManage
               </p>
             </div>
             {canManage ? (
-              <form
-                className="bg-card grid max-w-3xl gap-4 rounded-xl border p-4 sm:grid-cols-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  configure.mutate({ siteId, shopDomain, storefrontToken, sellerName });
-                }}
-              >
-                <div className="space-y-1.5">
-                  <Label htmlFor={`shop-domain-${siteId}`}>Shop domain</Label>
-                  <Input
-                    id={`shop-domain-${siteId}`}
-                    value={shopDomain}
-                    onChange={(event) => setShopDomain(event.target.value)}
-                    placeholder={config.data?.shopDomain ?? "my-store.myshopify.com"}
-                    required
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor={`seller-name-${siteId}`}>Seller name</Label>
-                  <Input
-                    id={`seller-name-${siteId}`}
-                    value={sellerName}
-                    onChange={(event) => setSellerName(event.target.value)}
-                    placeholder={config.data?.sellerName ?? "Foundry Robotics Ltd"}
-                    required
-                  />
-                </div>
-                <div className="space-y-1.5 sm:col-span-2">
-                  <Label htmlFor={`storefront-token-${siteId}`}>Storefront API token</Label>
-                  <Input
-                    id={`storefront-token-${siteId}`}
-                    type="password"
-                    value={storefrontToken}
-                    onChange={(event) => setStorefrontToken(event.target.value)}
-                    placeholder="Storefront API access token"
-                    required
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <Button type="submit" disabled={busy}>
-                    {configure.isPending ? <Loader2 className="animate-spin" /> : null}
-                    {connected ? "Update connection" : "Connect Shopify"}
-                  </Button>
-                </div>
-              </form>
+              <Card className="max-w-3xl gap-0 p-4 py-4">
+                <form
+                  className="grid gap-4 sm:grid-cols-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    configure.mutate({ siteId, shopDomain, storefrontToken, sellerName });
+                  }}
+                >
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`shop-domain-${siteId}`}>Shop domain</Label>
+                    <Input
+                      id={`shop-domain-${siteId}`}
+                      value={shopDomain}
+                      onChange={(event) => setShopDomain(event.target.value)}
+                      placeholder={config.data?.shopDomain ?? "my-store.myshopify.com"}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`seller-name-${siteId}`}>Seller name</Label>
+                    <Input
+                      id={`seller-name-${siteId}`}
+                      value={sellerName}
+                      onChange={(event) => setSellerName(event.target.value)}
+                      placeholder={config.data?.sellerName ?? "Foundry Robotics Ltd"}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label htmlFor={`storefront-token-${siteId}`}>Storefront API token</Label>
+                    <Input
+                      id={`storefront-token-${siteId}`}
+                      type="password"
+                      value={storefrontToken}
+                      onChange={(event) => setStorefrontToken(event.target.value)}
+                      placeholder="Storefront API access token"
+                      required
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <Button type="submit" disabled={busy}>
+                      {configure.isPending ? <Loader2 className="animate-spin" /> : null}
+                      {connected ? "Update connection" : "Connect Shopify"}
+                    </Button>
+                  </div>
+                </form>
+              </Card>
             ) : (
               <p className="text-muted-foreground text-xs">
                 You do not have permission to manage commerce settings.

@@ -38,6 +38,7 @@ import {
   splitMentions,
   type MentionTarget,
 } from "@/lib/copilot/mentions";
+import { groupAssistantPartBlocks } from "@/lib/copilot/part-blocks";
 import { isAssistantFailureText } from "@/lib/copilot/messages";
 import { Markdown } from "./markdown";
 import { ChannelSwitcher } from "./channel-switcher";
@@ -119,6 +120,18 @@ const TOOL_META: Record<
     failed: "Failed to import schematic",
     icon: FileDown,
   },
+  save_pcb: {
+    doing: "Laying out PCB",
+    done: "Saved the PCB",
+    failed: "Failed to save PCB",
+    icon: CircuitBoard,
+  },
+  clear_pcb: {
+    doing: "Clearing PCB",
+    done: "Cleared the PCB",
+    failed: "Failed to clear PCB",
+    icon: CircuitBoard,
+  },
   web_search: {
     doing: "Searching the web",
     done: "Searched the web",
@@ -129,6 +142,12 @@ const TOOL_META: Record<
     doing: "Adding CAD component",
     done: "Added CAD component",
     failed: "Failed to add CAD component",
+    icon: Boxes,
+  },
+  delete_cad_component: {
+    doing: "Deleting CAD file",
+    done: "Deleted CAD file",
+    failed: "Failed to delete CAD file",
     icon: Boxes,
   },
   text_to_cad: {
@@ -144,8 +163,8 @@ const TOOL_META: Record<
     icon: Boxes,
   },
   add_part_to_assembly: {
-    doing: "Assembling with Zoo MCP",
-    done: "Assembled parts (Zoo MCP)",
+    doing: "Assembling (Zoo Zookeeper)",
+    done: "Assembled parts",
     failed: "Assembly failed",
     icon: Boxes,
   },
@@ -165,6 +184,12 @@ const TOOL_META: Record<
     doing: "Inspecting schematic",
     done: "Inspected the schematic",
     failed: "Schematic inspect failed",
+    icon: Camera,
+  },
+  render_pcb: {
+    doing: "Inspecting PCB",
+    done: "Inspected the PCB",
+    failed: "PCB inspect failed",
     icon: Camera,
   },
   add_repo_link: {
@@ -199,7 +224,28 @@ export type ToolPart = {
   output?: unknown;
   input?: unknown;
   errorText?: string;
+  toolName?: string;
+  toolCallId?: string;
 };
+
+function toolPartName(part: ToolPart): string {
+  if (part.type === "dynamic-tool" && typeof part.toolName === "string") {
+    return part.toolName;
+  }
+  return part.type.replace(/^tool-/, "");
+}
+
+function toolPartRunning(part: ToolPart): boolean {
+  return part.state === "input-streaming" || part.state === "input-available";
+}
+
+function toolPartFailed(part: ToolPart): boolean {
+  if (part.state === "output-error") return true;
+  return (
+    part.state === "output-available" &&
+    typeof (part.output as Record<string, unknown> | undefined)?.error === "string"
+  );
+}
 
 /** Compact detail line for an edit confirmation, derived from tool output. */
 function toolDetail(name: string, part: ToolPart): string | null {
@@ -216,7 +262,8 @@ function toolDetail(name: string, part: ToolPart): string | null {
     (name === "remove_requirements" ||
       name === "remove_components" ||
       name === "remove_validation_checks" ||
-      name === "delete_code_file") &&
+      name === "delete_code_file" ||
+      name === "delete_cad_component") &&
     typeof out.deleted === "number"
   )
     bits.push(`${out.deleted} deleted`);
@@ -236,6 +283,14 @@ function toolDetail(name: string, part: ToolPart): string | null {
     typeof out.wires === "number"
   )
     bits.push(`${out.parts} parts · ${out.wires} wires`);
+  if (name === "save_pcb") {
+    if (typeof out.footprints === "number") bits.push(`${out.footprints} footprints`);
+    if (typeof out.tracks === "number" && out.tracks > 0) bits.push(`${out.tracks} tracks`);
+    if (typeof out.routed === "string") bits.push(`routed ${out.routed}`);
+    const drc = out.drc as { errors?: number } | undefined;
+    if (drc && typeof drc.errors === "number" && drc.errors > 0)
+      bits.push(`${drc.errors} DRC errors`);
+  }
   if (name === "write_code_file" && typeof out.path === "string") bits.push(out.path);
   if (name === "add_validation_checks" && typeof out.created === "number")
     bits.push(`${out.created} checks`);
@@ -263,7 +318,7 @@ function toolImages(part: ToolPart): string[] {
 }
 
 export function ToolCard({ part }: { part: ToolPart }) {
-  const name = part.type.replace(/^tool-/, "");
+  const name = toolPartName(part);
   const meta = TOOL_META[name] ?? {
     doing: name.replaceAll("_", " "),
     done: name.replaceAll("_", " "),
@@ -271,7 +326,7 @@ export function ToolCard({ part }: { part: ToolPart }) {
     icon: Sparkles,
   };
   const Icon = meta.icon;
-  const running = part.state === "input-streaming" || part.state === "input-available";
+  const running = toolPartRunning(part);
   // Tools report soft failures as { error } outputs; show those as failures
   // too, not as a green check / success title.
   const softError =
@@ -279,7 +334,7 @@ export function ToolCard({ part }: { part: ToolPart }) {
     typeof (part.output as Record<string, unknown> | undefined)?.error === "string"
       ? String((part.output as Record<string, unknown>).error)
       : null;
-  const failed = part.state === "output-error" || softError !== null;
+  const failed = toolPartFailed(part);
   const detail =
     part.state === "output-error"
       ? (part.errorText ?? "failed")
@@ -323,6 +378,79 @@ export function ToolCard({ part }: { part: ToolPart }) {
         )}
       </div>
       {images.length > 0 ? (
+        <div className={cn("grid gap-1.5", images.length > 1 ? "grid-cols-2" : "grid-cols-1")}>
+          {images.map((src) => (
+            <img
+              key={src}
+              src={src}
+              alt="Copilot render"
+              className="w-full rounded-none object-cover"
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** One row for a parallel / consecutive batch of tool calls. */
+export function ToolCallGroup({ parts }: { parts: ToolPart[] }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (parts.length === 0) return null;
+  // Single tool keeps the detailed card; batches collapse to one summary row.
+  if (parts.length === 1) return <ToolCard part={parts[0]!} />;
+
+  const running = parts.some(toolPartRunning);
+  const failedCount = parts.filter(toolPartFailed).length;
+  const images = parts.flatMap(toolImages);
+  const n = parts.length;
+
+  let title: string;
+  if (running) title = `Working ${n} tools`;
+  else if (failedCount === n) title = `Failed ${n} tools`;
+  else if (failedCount > 0) title = `Worked ${n} tools · ${failedCount} failed`;
+  else title = `Worked ${n} tools`;
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-1 py-1.5 text-xs",
+        failedCount > 0 && !running
+          ? "border-destructive/30 bg-destructive/5 text-destructive border-l-2 pl-2"
+          : "text-muted-foreground",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-2 text-left"
+      >
+        <Wrench className="size-3.5 shrink-0 opacity-70" />
+        <span className={cn("min-w-0 flex-1 font-medium", failedCount === 0 && "text-foreground/70")}>
+          {title}
+        </span>
+        {running ? (
+          <Loader2 className="size-3.5 shrink-0 animate-spin opacity-60" />
+        ) : failedCount > 0 ? (
+          <XCircle className="size-3.5 shrink-0" />
+        ) : (
+          <CheckCircle2 className="size-3.5 shrink-0 opacity-50" />
+        )}
+      </button>
+      {expanded ? (
+        <div className="border-border/60 ml-1.5 flex flex-col border-l pl-2">
+          {parts.map((part, i) => (
+            <ToolCard
+              key={
+                typeof part.toolCallId === "string" ? part.toolCallId : `${toolPartName(part)}-${i}`
+              }
+              part={part}
+            />
+          ))}
+        </div>
+      ) : null}
+      {!expanded && images.length > 0 ? (
         <div className={cn("grid gap-1.5", images.length > 1 ? "grid-cols-2" : "grid-cols-1")}>
           {images.map((src) => (
             <img
@@ -389,36 +517,31 @@ export function Message({
 
   return (
     <div className="flex max-w-[95%] flex-col gap-1.5">
-      {message.parts.map((part, i) => {
-        const partKey =
-          "toolCallId" in part && typeof part.toolCallId === "string"
-            ? part.toolCallId
-            : `${part.type}-${i}`;
-        if (part.type === "text" && part.text.trim()) {
-          if (isAssistantFailureText(part.text)) {
+      {groupAssistantPartBlocks(message.parts, message.id).map((block) => {
+        if (block.type === "text") {
+          if (isAssistantFailureText(block.part.text)) {
             return (
               <div
-                key={partKey}
+                key={block.key}
                 className="border-destructive/40 bg-destructive/10 text-destructive flex items-start gap-2 rounded-none border px-3.5 py-2.5 text-xs leading-relaxed"
               >
                 <XCircle className="mt-0.5 size-3.5 shrink-0" />
-                <span className="min-w-0 whitespace-pre-wrap">{part.text}</span>
+                <span className="min-w-0 whitespace-pre-wrap">{block.part.text}</span>
               </div>
             );
           }
           return (
             <div
-              key={partKey}
+              key={block.key}
               className="bg-muted/60 text-foreground rounded-none px-3.5 py-2.5 text-sm leading-relaxed"
             >
-              <Markdown text={part.text} />
+              <Markdown text={block.part.text} />
             </div>
           );
         }
-        if (part.type.startsWith("tool-") || part.type === "dynamic-tool") {
-          return <ToolCard key={partKey} part={part as ToolPart} />;
-        }
-        return null;
+        return (
+          <ToolCallGroup key={block.key} parts={block.parts as ToolPart[]} />
+        );
       })}
       {!hasContent ? (
         showFailed ? (
@@ -506,9 +629,9 @@ export function ChatSidebar() {
     }
   }, [isResizing, width]);
 
-  // Allow send whenever @AI is present; provider.send() no-ops if a local
-  // stream is already in flight. Don't block on stuck server activeRun rows.
-  const canSend = mentionsAi(input) && status !== "submitted" && status !== "streaming";
+  // Send any non-empty message. @AI forces a reply; otherwise a light model
+  // decides. provider.send() no-ops if a local stream is already in flight.
+  const canSend = Boolean(input.trim()) && status !== "submitted" && status !== "streaming";
 
   const mentionActive = useMemo(() => mentionQueryAt(input, caret), [input, caret]);
   const mentionOptions = useMemo(
@@ -754,8 +877,8 @@ export function ChatSidebar() {
             </div>
             {!busy && input.trim() && !mentionsAi(input) ? (
               <p className="text-muted-foreground mt-1.5 px-1 text-[11px]">
-                Mention <span className="text-foreground font-medium">@AI</span> to send to the
-                copilot
+                Sends as a note — mention <span className="text-foreground font-medium">@AI</span>{" "}
+                to talk to the copilot
               </p>
             ) : null}
           </div>

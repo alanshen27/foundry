@@ -24,6 +24,12 @@ body = extrude(profile001, length = height)
 /** Marker comment — insertPartIntoAssembly replaces the stock envelope when present. */
 export const ASSEMBLY_ENVELOPE_MARKER = "assemblyEnvelope = extrude";
 
+/**
+ * Canonical product assembly path. Engineer > Assembly and Zoo assemble always
+ * target this file — never assembly/<other>.kcl.
+ */
+export const PRODUCT_ASSEMBLY_PATH = "assembly/product.kcl";
+
 export const DEFAULT_ASSEMBLY_KCL = `// Product assembly (mm) — import parts as …/main.kcl (Zoo subdirectory rule).
 // Drag a part onto Assembly in the tree to place it here.
 // Example:
@@ -106,7 +112,8 @@ function pathFor(kind: CadComponentKind, name: string): string {
     if (slug === "main") return "parts/main.kcl";
     return `parts/${slug}/main.kcl`;
   }
-  if (kind === "assembly") return `assembly/${slug}.kcl`;
+  // One product assembly only — ignore the requested name for pathing.
+  if (kind === "assembly") return PRODUCT_ASSEMBLY_PATH;
   return `docs/${slug}.md`;
 }
 
@@ -503,6 +510,18 @@ export function updateComponentContent(doc: CadDoc, id: string, content: string)
   return withMirror({ ...doc, components });
 }
 
+/** Drop components by id; reassigns activeId when the active one is removed. */
+export function removeCadComponents(doc: CadDoc, ids: Iterable<string>): CadDoc {
+  const drop = new Set(ids);
+  if (drop.size === 0) return doc;
+  const components = doc.components.filter((c) => !drop.has(c.id));
+  if (components.length === doc.components.length) return doc;
+  const activeId = drop.has(doc.activeId)
+    ? (components[0]?.id ?? doc.activeId)
+    : doc.activeId;
+  return withMirror({ ...doc, components, activeId });
+}
+
 export function addCadComponent(
   doc: CadDoc,
   input: { name: string; kind: CadComponentKind; content?: string },
@@ -521,6 +540,44 @@ export function addCadComponents(
   const used = new Set(components.map((c) => c.path));
 
   for (const input of inputs) {
+    // Product assembly is singular — update assembly/product.kcl in place.
+    if (input.kind === "assembly") {
+      const existing =
+        components.find((c) => c.path === PRODUCT_ASSEMBLY_PATH) ??
+        components.find((c) => c.kind === "assembly");
+      const content = input.content?.trim() || existing?.content || DEFAULT_ASSEMBLY_KCL;
+      if (existing) {
+        components = components.map((c) =>
+          c.id === existing.id
+            ? {
+                ...c,
+                name: "product",
+                path: PRODUCT_ASSEMBLY_PATH,
+                kind: "assembly" as const,
+                content,
+              }
+            : c,
+        );
+        activeId = existing.id;
+        used.add(PRODUCT_ASSEMBLY_PATH);
+        continue;
+      }
+      const id = newId();
+      components = [
+        ...components,
+        {
+          id,
+          name: "product",
+          path: PRODUCT_ASSEMBLY_PATH,
+          kind: "assembly",
+          content,
+        },
+      ];
+      used.add(PRODUCT_ASSEMBLY_PATH);
+      activeId = id;
+      continue;
+    }
+
     const id = newId();
     let path = pathFor(input.kind, input.name);
     if (used.has(path)) {
@@ -533,11 +590,7 @@ export function addCadComponents(
     used.add(path);
     const content =
       input.content?.trim() ||
-      (input.kind === "part"
-        ? DEFAULT_KCL
-        : input.kind === "assembly"
-          ? DEFAULT_ASSEMBLY_KCL
-          : DEFAULT_INSTRUCTIONS_MD);
+      (input.kind === "part" ? DEFAULT_KCL : DEFAULT_INSTRUCTIONS_MD);
     components = [
       ...components,
       {
@@ -617,14 +670,40 @@ export function upsertCadContent(
 ): CadDoc {
   const key = (pathOrName ?? "parts/main.kcl").trim();
   let kind: CadComponentKind = "part";
-  if (key.startsWith("assembly/") || key.includes("assembly")) kind = "assembly";
-  else if (key.startsWith("docs/") || key.endsWith(".md") || key.includes("instruction")) {
+  if (key.startsWith("assembly/") || key.includes("assembly") || key === "product") {
+    kind = "assembly";
+  } else if (key.startsWith("docs/") || key.endsWith(".md") || key.includes("instruction")) {
     kind = "instructions";
   }
 
-  const existing = matchComponent(doc, key) ?? matchComponent(doc, key, kind);
+  // Any assembly write lands on the canonical product path.
+  const resolveKey = kind === "assembly" ? PRODUCT_ASSEMBLY_PATH : key;
+  const existing =
+    kind === "assembly"
+      ? (matchComponent(doc, PRODUCT_ASSEMBLY_PATH, "assembly") ??
+        doc.components.find((c) => c.kind === "assembly"))
+      : (matchComponent(doc, resolveKey) ?? matchComponent(doc, resolveKey, kind));
   if (existing) {
-    return setActiveComponent(updateComponentContent(doc, existing.id, content), existing.id);
+    const updated =
+      kind === "assembly" && existing.path !== PRODUCT_ASSEMBLY_PATH
+        ? {
+            ...doc,
+            components: doc.components.map((c) =>
+              c.id === existing.id
+                ? { ...c, name: "product", path: PRODUCT_ASSEMBLY_PATH, content }
+                : c,
+            ),
+          }
+        : updateComponentContent(doc, existing.id, content);
+    return setActiveComponent(
+      kind === "assembly" && existing.path !== PRODUCT_ASSEMBLY_PATH
+        ? withMirror(updated)
+        : updated,
+      existing.id,
+    );
+  }
+  if (kind === "assembly") {
+    return addCadComponent(doc, { name: "product", kind: "assembly", content });
   }
   const name = key.includes("/") ? displayNameFromCadPath(key) : key.replace(/\.(kcl|md)$/, "");
   return addCadComponent(doc, { name, kind, content });

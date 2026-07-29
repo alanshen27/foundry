@@ -1,7 +1,8 @@
-import { ApiError, Client, ml, api_calls, type TextToCadResponse } from "@kittycad/lib";
+import { ApiError, Client, ml, type TextToCadResponse } from "@kittycad/lib";
 import type { CadPort, CadProjectIterateOptions, CadResult } from "./port";
 import { ZooMcpClient } from "./mcp";
 import { isPlausibleZooOpId } from "./op-id";
+import { zookeeperPrompt } from "./zookeeper";
 
 export { isPlausibleZooOpId } from "./op-id";
 
@@ -141,17 +142,6 @@ async function pollTextToCad(
   };
 }
 
-function extractOutputs(op: unknown): Record<string, string> | null {
-  if (!op || typeof op !== "object") return null;
-  const outputs = "outputs" in op ? (op as { outputs?: unknown }).outputs : undefined;
-  if (!outputs || typeof outputs !== "object") return null;
-  const out: Record<string, string> = {};
-  for (const [path, content] of Object.entries(outputs as Record<string, unknown>)) {
-    if (typeof content === "string" && content.trim()) out[path] = content;
-  }
-  return Object.keys(out).length > 0 ? out : null;
-}
-
 /**
  * Whole-file Zoo source range. Trailing newlines must not create a phantom
  * last line — Zoo rejects `end.line` past the last real line with
@@ -173,82 +163,20 @@ export function wholeFileSourceRange(text: string): {
   };
 }
 
-/** Iteration jobs are async ops; poll the generic async endpoint for those. */
-async function pollAsyncOp(
-  client: Client,
-  id: string,
-  signal?: AbortSignal,
-): Promise<CadResult<{ kcl: string; id: string }>> {
-  console.log(`[zoo] polling async op=${id}`);
-  for (let i = 0; i < MAX_POLLS; i++) {
-    if (signal?.aborted) {
-      return { ok: false, error: "CAD generation cancelled" };
-    }
-    const op = await api_calls.get_async_operation({ client, id });
-    if (op.status === "failed") {
-      return { ok: false, error: op.error ?? "Zoo CAD operation failed" };
-    }
-    if (op.status === "completed") {
-      const kcl = extractKcl(op);
-      if (!kcl) {
-        return { ok: false, error: "Zoo completed without KCL code" };
-      }
-      return { ok: true, data: { kcl, id } };
-    }
-    if (i > 0 && i % 8 === 0) {
-      console.log(`[zoo] still waiting op=${id} status=${op.status} ~${(i * POLL_MS) / 1000}s`);
-    }
-    await sleep(POLL_MS, signal);
-  }
-  return {
-    ok: false,
-    error: "Zoo CAD operation timed out after ~10 minutes. Retry or simplify the prompt.",
-  };
-}
-
-async function pollMultiFileOp(
-  client: Client,
-  id: string,
-  signal?: AbortSignal,
-): Promise<CadResult<{ files: Record<string, string>; id: string }>> {
-  console.log(`[zoo] polling multi-file iteration op=${id}`);
-  for (let i = 0; i < MAX_POLLS; i++) {
-    if (signal?.aborted) {
-      return { ok: false, error: "CAD generation cancelled" };
-    }
-    const op = await api_calls.get_async_operation({ client, id });
-    if (op.status === "failed") {
-      return { ok: false, error: op.error ?? "Zoo multi-file iteration failed" };
-    }
-    if (op.status === "completed") {
-      const files = extractOutputs(op);
-      if (!files) {
-        return { ok: false, error: "Zoo multi-file iteration completed without KCL outputs" };
-      }
-      console.log(
-        `[zoo] multi-file op=${id} completed files=${Object.keys(files).length} after ~${(i + 1) * POLL_MS}ms`,
-      );
-      return { ok: true, data: { files, id } };
-    }
-    if (i > 0 && i % 8 === 0) {
-      console.log(
-        `[zoo] still waiting multi-file op=${id} status=${op.status} ~${(i * POLL_MS) / 1000}s`,
-      );
-    }
-    await sleep(POLL_MS, signal);
-  }
-  return {
-    ok: false,
-    error: `Zoo multi-file iteration timed out after ~10 minutes (zooOpId=${id}).`,
-  };
-}
-
 export type ZooCadAdapterOptions = {
   token: string;
   baseUrl?: string;
 };
 
-/** Zoo / KittyCAD adapter — ML text-to-CAD, KCL iteration, and Zoo MCP tools. */
+function pickMainKcl(files: Record<string, string>): string | null {
+  if (typeof files["main.kcl"] === "string" && files["main.kcl"].trim()) {
+    return files["main.kcl"];
+  }
+  const first = Object.values(files).find((c) => c.trim());
+  return first?.trim() ? first : null;
+}
+
+/** Zoo / KittyCAD adapter — Zookeeper ML + Zoo MCP tools. */
 export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
   const token = opts.token.trim();
   if (!token) {
@@ -266,7 +194,7 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
     multiviewSnapshotKcl: (input) => mcp.multiviewSnapshotKcl(input),
 
     async textToCad(prompt, options) {
-      const create = async (): Promise<CadResult<{ kcl: string; id: string }>> => {
+      try {
         if (options?.signal?.aborted) {
           return { ok: false, error: "CAD generation cancelled" };
         }
@@ -277,47 +205,34 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
               "text_to_cad needs a prompt (do not invent zooOpId — only reuse ids from prior tool errors)",
           };
         }
-        const res = await ml.create_text_to_cad({
-          client,
-          output_format: "step",
-          kcl: true,
-          body: {
-            prompt,
-            ...(options?.projectName ? { project_name: options.projectName } : {}),
-          },
-        });
-        if (res.status === "failed") {
-          return { ok: false, error: res.error ?? "text-to-CAD failed" };
-        }
-        if (res.status === "completed") {
-          const kcl = extractKcl(res);
-          if (!kcl) return { ok: false, error: "text-to-CAD completed without KCL" };
-          console.log(`[zoo] text-to-CAD completed immediately id=${res.id}`);
-          return { ok: true, data: { kcl, id: res.id } };
-        }
-        console.log(`[zoo] text-to-CAD queued id=${res.id} status=${res.status}`);
-        return pollTextToCad(client, res.id, options?.signal);
-      };
 
-      try {
+        // Legacy resume: older runs used REST async ops. Still poll those.
         const resumeId = options?.existingOpId?.trim();
         if (resumeId && isPlausibleZooOpId(resumeId)) {
-          console.log(`[zoo] resuming text-to-CAD id=${resumeId}`);
+          console.log(`[zoo] resuming legacy text-to-CAD id=${resumeId}`);
           const resumed = await pollTextToCad(client, resumeId, options?.signal);
           if (resumed.ok) return resumed;
-          // Stale/wrong id: if the caller also sent a prompt, start a real job.
-          if (isNotFoundError(resumed.error) && prompt.trim()) {
-            console.warn(
-              `[zoo] resume id=${resumeId} not found — creating new text-to-CAD from prompt`,
-            );
-            return create();
-          }
-          return resumed;
-        }
-        if (resumeId && !isPlausibleZooOpId(resumeId)) {
+          if (!isNotFoundError(resumed.error)) return resumed;
+          console.warn(`[zoo] resume id=${resumeId} not found — starting Zookeeper turn`);
+        } else if (resumeId && !isPlausibleZooOpId(resumeId)) {
           console.warn(`[zoo] ignoring implausible zooOpId=${resumeId}`);
         }
-        return create();
+
+        const zk = await zookeeperPrompt({
+          token,
+          prompt,
+          currentFiles: { "main.kcl": "" },
+          projectName: options?.projectName,
+          forcedTools: ["text_to_cad"],
+          signal: options?.signal,
+        });
+        if (!zk.ok) return zk;
+        const kcl = pickMainKcl(zk.data.files);
+        if (!kcl) return { ok: false, error: "Zookeeper text-to-CAD returned no main.kcl" };
+        return {
+          ok: true,
+          data: { kcl, id: zk.data.promptId ?? zk.data.conversationId },
+        };
       } catch (err) {
         return { ok: false, error: asError(err) };
       }
@@ -328,25 +243,24 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
         if (options?.signal?.aborted) {
           return { ok: false, error: "CAD generation cancelled" };
         }
-        const res = await ml.create_text_to_cad_iteration({
-          client,
-          body: {
-            original_source_code: kcl,
-            prompt,
-            source_ranges: [],
-            ...(options?.projectName ? { project_name: options.projectName } : {}),
-          },
+        if (!prompt.trim()) {
+          return { ok: false, error: "iterateCad needs a prompt" };
+        }
+        const zk = await zookeeperPrompt({
+          token,
+          prompt,
+          currentFiles: { "main.kcl": kcl },
+          projectName: options?.projectName,
+          forcedTools: ["edit_kcl_code"],
+          signal: options?.signal,
         });
-        if (res.status === "failed") {
-          return { ok: false, error: res.error ?? "CAD iteration failed" };
-        }
-        if (res.status === "completed") {
-          if (!res.code?.trim()) {
-            return { ok: false, error: "CAD iteration completed without KCL" };
-          }
-          return { ok: true, data: { kcl: res.code, id: res.id } };
-        }
-        return pollAsyncOp(client, res.id, options?.signal);
+        if (!zk.ok) return zk;
+        const next = pickMainKcl(zk.data.files);
+        if (!next) return { ok: false, error: "Zookeeper iteration returned no main.kcl" };
+        return {
+          ok: true,
+          data: { kcl: next, id: zk.data.promptId ?? zk.data.conversationId },
+        };
       } catch (err) {
         return { ok: false, error: asError(err) };
       }
@@ -365,41 +279,33 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
           return { ok: false, error: "iterateCadProject needs a prompt" };
         }
 
+        const currentFiles = Object.fromEntries(entries);
         const focusPath = options?.focusPath?.trim();
-        // Always send empty source_ranges — same as single-file iterateCad.
-        // Zoo's multi-file endpoint rejects whole-file ranges we compute
-        // ("Source range out of bounds") even after clamping trailing newlines.
-        // The top-level prompt + attached files are enough; focusPath is logged.
-        const source_ranges: [] = [];
-
-        const attached = entries.map(([name, content]) => ({
-          name,
-          data: new Blob([content], { type: "text/plain" }),
-        }));
-
         console.log(
-          `[zoo] multi-file iteration files=${attached.length} focus=${focusPath ?? "(all)"} source_ranges=0`,
+          `[zoo] zookeeper multi-file files=${entries.length} focus=${focusPath ?? "(all)"}`,
         );
-        const res = await ml.create_text_to_cad_multi_file_iteration({
-          client,
-          files: attached,
-          body: {
-            prompt,
-            source_ranges,
-            ...(options?.projectName ? { project_name: options.projectName } : {}),
-          },
+
+        const zk = await zookeeperPrompt({
+          token,
+          prompt,
+          currentFiles,
+          projectName: options?.projectName,
+          forcedTools: ["edit_kcl_code"],
+          signal: options?.signal,
         });
-        if (res.status === "failed") {
-          return { ok: false, error: res.error ?? "Zoo multi-file iteration failed" };
+        if (!zk.ok) return zk;
+        if (Object.keys(zk.data.files).length === 0) {
+          return { ok: false, error: "Zookeeper multi-file edit returned no KCL outputs" };
         }
-        if (res.status === "completed") {
-          const out = extractOutputs(res);
-          if (!out) {
-            return { ok: false, error: "Zoo multi-file iteration completed without KCL outputs" };
-          }
-          return { ok: true, data: { files: out, id: res.id } };
-        }
-        return pollMultiFileOp(client, res.id, options?.signal);
+        // Merge so unchanged attachments stay present when Zoo only returns diffs.
+        const merged = { ...currentFiles, ...zk.data.files };
+        return {
+          ok: true,
+          data: {
+            files: merged,
+            id: zk.data.promptId ?? zk.data.conversationId,
+          },
+        };
       } catch (err) {
         return { ok: false, error: asError(err) };
       }

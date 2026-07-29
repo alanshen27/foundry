@@ -180,14 +180,19 @@ export function stripOrphanToolCalls(messages: ModelMessage[]): ModelMessage[] {
 
 /** Drop empty assistant placeholders left behind by successful/aborted runs. */
 export function pruneEmptyAssistantMessages(messages: UIMessage[]): UIMessage[] {
-  return messages.filter((message) => {
+  let changed = false;
+  const next = messages.filter((message) => {
     if (message.role !== "assistant") return true;
-    return message.parts.some((part) => {
+    const keep = message.parts.some((part) => {
       if (part.type === "text") return part.text.trim().length > 0;
       if (isToolPart(part)) return true;
       return false;
     });
+    if (!keep) changed = true;
+    return keep;
   });
+  // Same reference when nothing was removed — avoids chat re-render flashes.
+  return changed ? next : messages;
 }
 
 /** Marker prefix for failed assistant turns — kept in the transcript, styled in UI. */
@@ -209,8 +214,16 @@ const INCOMPLETE_TOOL_STATES = new Set([
  * Keep the last assistant turn on failure and stamp a visible failure note
  * instead of deleting the empty "Working…" placeholder. Also flip in-flight
  * tool cards to output-error so they stop spinning forever.
+ *
+ * If the transcript ends on a user turn with no assistant reply yet (stream
+ * died before the model spoke, or the client dropped the assistant bubble),
+ * append a synthetic failed assistant message so the user's text stays paired
+ * with a visible error instead of looking like it vanished.
  */
 export function markFailedAssistantMessages(messages: UIMessage[], reason?: string): UIMessage[] {
+  const detail = (reason ?? "request failed").trim() || "request failed";
+  const label = `${ASSISTANT_FAILURE_PREFIX}${detail}`;
+
   let lastAssistantIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]!.role === "assistant") {
@@ -218,10 +231,34 @@ export function markFailedAssistantMessages(messages: UIMessage[], reason?: stri
       break;
     }
   }
-  if (lastAssistantIdx < 0) return messages;
 
-  const detail = (reason ?? "request failed").trim() || "request failed";
-  const label = `${ASSISTANT_FAILURE_PREFIX}${detail}`;
+  if (lastAssistantIdx < 0) {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "user") return messages;
+    return [
+      ...messages,
+      {
+        id: `fail_${last.id}`,
+        role: "assistant",
+        parts: [{ type: "text", text: label }],
+      } as UIMessage,
+    ];
+  }
+
+  // User sent another turn after the last assistant — failure belongs to that
+  // unanswered user message, not the previous assistant.
+  const trailingUser = messages.slice(lastAssistantIdx + 1).some((m) => m.role === "user");
+  if (trailingUser) {
+    const last = messages[messages.length - 1]!;
+    return [
+      ...messages,
+      {
+        id: `fail_${last.id}`,
+        role: "assistant",
+        parts: [{ type: "text", text: label }],
+      } as UIMessage,
+    ];
+  }
 
   return messages.map((message, i) => {
     if (i !== lastAssistantIdx) return message;
@@ -259,4 +296,56 @@ export function markFailedAssistantMessages(messages: UIMessage[], reason?: stri
       parts: [...parts, { type: "text", text: label }],
     };
   });
+}
+
+/** Plain text body of a UI message (concatenated text parts). */
+export function messagePlainText(message: UIMessage): string {
+  return message.parts
+    .filter((p): p is Extract<UIMessage["parts"][number], { type: "text" }> => p.type === "text")
+    .map((p) => p.text.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Merge server history with a local snapshot so a failed client never drops sent user turns. */
+export function mergeTranscriptPreferringUserTurns(
+  server: UIMessage[],
+  local: UIMessage[],
+): UIMessage[] {
+  const byId = new Map<string, UIMessage>();
+  for (const message of server) {
+    if (message.id) byId.set(message.id, message);
+  }
+  for (const message of local) {
+    if (!message.id) continue;
+    const prev = byId.get(message.id);
+    if (!prev) {
+      byId.set(message.id, message);
+      continue;
+    }
+    // Prefer the richer body; never let an empty local stub wipe a stored user turn.
+    const prevScore =
+      prev.parts.length +
+      prev.parts.reduce((n, p) => n + (p.type === "text" ? p.text.length : 10), 0);
+    const nextScore =
+      message.parts.length +
+      message.parts.reduce((n, p) => n + (p.type === "text" ? p.text.length : 10), 0);
+    if (nextScore > prevScore) byId.set(message.id, message);
+  }
+
+  const serverIds = new Set(server.map((m) => m.id).filter(Boolean));
+  // Same user text may get a new client id after a failed POST — don't double-append.
+  const serverUserTexts = new Set(
+    server.filter((m) => m.role === "user").map(messagePlainText).filter(Boolean),
+  );
+  const extras = local.filter((m) => {
+    if (!m.id || serverIds.has(m.id)) return false;
+    if (m.role === "user") {
+      const text = messagePlainText(m);
+      if (text && serverUserTexts.has(text)) return false;
+    }
+    return true;
+  });
+  // Keep server order, then any local-only messages (optimistic user turns not yet loaded).
+  return [...server.map((m) => byId.get(m.id) ?? m), ...extras];
 }

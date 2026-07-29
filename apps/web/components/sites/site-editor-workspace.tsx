@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createOffBroadcastPort,
@@ -18,14 +19,25 @@ import {
   Loader2,
   Monitor,
   PanelRight,
+  Pencil,
   Rocket,
   Send,
   ShoppingBag,
   Smartphone,
   Tablet,
+  Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { FoundryMarkIcon } from "@/components/foundry-mark";
 import { PresenceBar } from "@/components/presence-bar";
@@ -99,6 +111,7 @@ export function SiteEditorWorkspace({
   canPublish: boolean;
   canManageCommerce: boolean;
 }) {
+  const router = useRouter();
   const utils = trpc.useUtils();
   const site = trpc.site.get.useQuery({ id: siteId });
   const workspace = trpc.site.workspace.useQuery({ id: siteId });
@@ -114,6 +127,8 @@ export function SiteEditorWorkspace({
   const [previewSize, setPreviewSize] = useState<PreviewSize>("desktop");
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState(siteName);
   const [stream, setStream] = useState<StreamState | null>(null);
   /** Shown immediately on send so status never races ahead of the user bubble. */
   const [optimisticUser, setOptimisticUser] = useState<{
@@ -150,6 +165,28 @@ export function SiteEditorWorkspace({
     onSuccess: async () => {
       setError(null);
       await refresh();
+    },
+    onError: (nextError) => setError(nextError.message),
+  });
+
+  const update = trpc.site.update.useMutation({
+    onSuccess: async (updated) => {
+      setError(null);
+      setRenameOpen(false);
+      await refresh();
+      if (updated.slug !== siteSlug) {
+        router.replace(`/w/${workspaceSlug}/sites/${updated.slug}/editor`);
+      } else {
+        router.refresh();
+      }
+    },
+    onError: (nextError) => setError(nextError.message),
+  });
+
+  const remove = trpc.site.delete.useMutation({
+    onSuccess: () => {
+      router.push(`/w/${workspaceSlug}/sites`);
+      router.refresh();
     },
     onError: (nextError) => setError(nextError.message),
   });
@@ -270,7 +307,7 @@ export function SiteEditorWorkspace({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h1 className="truncate font-mono text-sm font-medium tracking-[-0.02em]">
-              {siteName}
+              {currentSite?.name ?? siteName}
             </h1>
             <Badge
               variant={currentSite?.status === "PUBLISHED" ? "default" : "secondary"}
@@ -289,7 +326,9 @@ export function SiteEditorWorkspace({
               </Badge>
             ) : null}
           </div>
-          <p className="text-muted-foreground truncate font-mono text-[10px]">/{siteSlug}</p>
+          <p className="text-muted-foreground truncate font-mono text-[10px]">
+            /{currentSite?.slug ?? siteSlug}
+          </p>
         </div>
 
         <nav className="bg-muted ml-4 hidden items-center border p-0.5 sm:flex">
@@ -312,6 +351,41 @@ export function SiteEditorWorkspace({
         </nav>
 
         <div className="ml-auto flex items-center gap-1.5">
+          {canEdit ? (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Rename site"
+                onClick={() => {
+                  setRenameValue(currentSite?.name ?? siteName);
+                  setRenameOpen(true);
+                }}
+              >
+                <Pencil className="size-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Delete site"
+                className="text-destructive hover:text-destructive"
+                disabled={remove.isPending}
+                onClick={() => {
+                  if (
+                    confirm(
+                      `Delete “${currentSite?.name ?? siteName}”? Listings and checkout config for this site are removed too.`,
+                    )
+                  ) {
+                    remove.mutate({ id: siteId });
+                  }
+                }}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </>
+          ) : null}
           <PresenceBar
             channel={sitePresenceChannel(siteId)}
             self={{ userId: user.id, name: user.name, avatarUrl: user.avatarUrl }}
@@ -643,6 +717,40 @@ export function SiteEditorWorkspace({
           ) : null}
         </section>
       </div>
+
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rename site</DialogTitle>
+            <DialogDescription>Updates the display name and URL slug.</DialogDescription>
+          </DialogHeader>
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!renameValue.trim()) return;
+              update.mutate({ id: siteId, name: renameValue.trim() });
+            }}
+          >
+            <Input
+              value={renameValue}
+              onChange={(event) => setRenameValue(event.target.value)}
+              maxLength={80}
+              required
+              aria-label="Site name"
+              className="rounded-none"
+            />
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setRenameOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={update.isPending || !renameValue.trim()}>
+                {update.isPending ? "Saving…" : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

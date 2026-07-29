@@ -55,10 +55,10 @@ function mergeProjectOutputs(doc: CadDoc, outputs: Record<string, string>): CadD
 }
 
 /**
- * Rebuild `assembly/product.kcl` with Zoo multi-file Text-to-CAD iteration:
+ * Rebuild `assembly/product.kcl` with Zoo Zookeeper (Agent API WebSocket):
  * 1. Attach existing part KCL files (no re-bootstrap of geometry)
  * 2. Seed product.kcl with imports only
- * 3. Ask Zoo ML to orient + position parts in the assembly file
+ * 3. Ask Zookeeper to orient + position parts in the assembly file
  * 4. Validate with Zoo MCP execute_kcl
  */
 export async function assembleProductWithZooMcp(params: {
@@ -116,7 +116,7 @@ export async function assembleProductWithZooMcp(params: {
     signal: params.signal,
   });
   if (!iterated.ok) {
-    throw new Error(`Zoo multi-file iteration failed: ${iterated.error}`);
+    throw new Error(`Zoo Zookeeper assembly failed: ${iterated.error}`);
   }
 
   doc = mergeProjectOutputs(doc, iterated.data.files);
@@ -128,7 +128,7 @@ export async function assembleProductWithZooMcp(params: {
     iterated.data.files[params.assembly.path] ??
     doc.components.find((c) => c.id === params.assembly.id)?.content;
   if (!assemblyOut?.trim()) {
-    throw new Error("Zoo multi-file iteration returned no assembly KCL");
+    throw new Error("Zoo Zookeeper returned no assembly KCL");
   }
   doc = setActiveComponent(
     updateComponentContent(doc, params.assembly.id, assemblyOut),

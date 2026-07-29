@@ -4,6 +4,7 @@ import { ArrowUpRight, Users } from "lucide-react";
 import { prisma } from "@foundry/db";
 import { HomeShell } from "@/components/home-shell";
 import { SignalIconTile } from "@/components/signal-icons";
+import { Card } from "@/components/ui/card";
 import { getCurrentUser } from "@/server/session";
 import { resolveWorkspaceHomePath } from "@/server/workspace-home";
 import { CreateWorkspaceForm } from "./create-workspace-form";
@@ -65,8 +66,8 @@ export default async function WorkspacesPage({
 
       <section className="mb-10 grid gap-2 sm:grid-cols-2">
         {workspaces.map((workspace) => (
-          <Link key={workspace.id} href={`/w/${workspace.slug}`} className="group">
-            <div className="border-border bg-card hover:border-foreground/30 flex overflow-hidden border transition-colors">
+          <Link key={workspace.id} href={`/w/${workspace.slug}`} className="block">
+            <Card className="flex-row gap-0 py-0 transition-colors hover:ring-foreground/30">
               <SignalIconTile
                 kind="workspace"
                 seed={workspace.id}
@@ -86,9 +87,9 @@ export default async function WorkspacesPage({
                     {workspace._count.memberships}
                   </p>
                 </div>
-                <ArrowUpRight className="text-muted-foreground size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+                <ArrowUpRight className="text-muted-foreground size-3.5 shrink-0 opacity-0 transition-opacity group-hover/card:opacity-100" />
               </div>
-            </div>
+            </Card>
           </Link>
         ))}
       </section>
