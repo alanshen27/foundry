@@ -317,6 +317,28 @@ function toolImages(part: ToolPart): string[] {
   return urls;
 }
 
+/**
+ * Optimistic "AI is working" row shown between sending an @AI message and the
+ * first streamed chunk (also on reload while a run is still warming up).
+ */
+export function CopilotThinkingRow({ className }: { className?: string }) {
+  return (
+    <div className={cn("text-muted-foreground flex items-center gap-2.5", className)}>
+      <AnimatedSignalGlyph
+        seed="copilot-thinking"
+        rows={3}
+        cols={16}
+        fontSize={8}
+        color="currentColor"
+        className="opacity-80"
+      />
+      <span className="animate-pulse font-mono text-[11px] tracking-[0.08em] uppercase">
+        thinking…
+      </span>
+    </div>
+  );
+}
+
 export function ToolCard({ part }: { part: ToolPart }) {
   const name = toolPartName(part);
   const meta = TOOL_META[name] ?? {
@@ -347,7 +369,7 @@ export function ToolCard({ part }: { part: ToolPart }) {
       className={cn(
         "flex flex-col gap-1.5 py-1.5 text-xs",
         failed
-          ? "border-destructive/30 bg-destructive/5 text-destructive border-l-2 pl-2"
+          ? "border-destructive/30 bg-destructive/5 text-destructive border-l-2 px-2"
           : "text-muted-foreground",
       )}
     >
@@ -417,7 +439,7 @@ export function ToolCallGroup({ parts }: { parts: ToolPart[] }) {
       className={cn(
         "flex flex-col gap-1 py-1.5 text-xs",
         failedCount > 0 && !running
-          ? "border-destructive/30 bg-destructive/5 text-destructive border-l-2 pl-2"
+          ? "border-destructive/30 bg-destructive/5 text-destructive border-l-2 px-2"
           : "text-muted-foreground",
       )}
     >
@@ -646,7 +668,8 @@ export function ChatSidebar() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, status]);
+    // busy: keep the optimistic thinking row in view before the first chunk.
+  }, [messages, status, busy]);
 
   function applyMention(target: MentionTarget) {
     const next = insertMention(input, caret, target);
@@ -784,6 +807,9 @@ export function ChatSidebar() {
               />
             ))
           )}
+          {busy && messages[messages.length - 1]?.role === "user" ? (
+            <CopilotThinkingRow className="py-1" />
+          ) : null}
           {error ? (
             <p className="text-destructive text-xs leading-relaxed">
               {error.message.includes("OPENAI_API_KEY") || error.message.includes("not configured")

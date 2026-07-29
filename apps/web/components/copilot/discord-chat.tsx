@@ -17,7 +17,7 @@ import {
 import { isAssistantFailureText } from "@/lib/copilot/messages";
 import { groupAssistantPartBlocks } from "@/lib/copilot/part-blocks";
 import { ChannelRail } from "./channel-rail";
-import { ToolCallGroup, type ToolPart } from "./chat-sidebar";
+import { CopilotThinkingRow, ToolCallGroup, type ToolPart } from "./chat-sidebar";
 import { Markdown } from "./markdown";
 import { useCopilot } from "./copilot-provider";
 
@@ -222,7 +222,8 @@ export function DiscordChat({
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, status]);
+    // busy: keep the optimistic thinking row in view before the first chunk.
+  }, [messages, status, busy]);
 
   function applyMention(target: MentionTarget) {
     const next = insertMention(input, caret, target);
@@ -349,6 +350,14 @@ export function DiscordChat({
               />
             ))
           )}
+          {busy && messages[messages.length - 1]?.role === "user" ? (
+            <div className="mt-4 flex items-center gap-3 px-5 py-0.5">
+              <div className="bg-primary/10 border-border flex size-9 shrink-0 items-center justify-center overflow-hidden border">
+                <FoundryMarkIcon className="size-5" />
+              </div>
+              <CopilotThinkingRow />
+            </div>
+          ) : null}
           {error ? (
             <p className="text-destructive mt-4 px-6 text-sm">
               {error.message.includes("OPENAI_API_KEY") || error.message.includes("not configured")
