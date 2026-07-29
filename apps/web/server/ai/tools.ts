@@ -1490,9 +1490,14 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
               prompt,
             });
           } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            const sourceRangeBug = /source range out of bounds/i.test(message);
             return {
-              error: err instanceof Error ? err.message : String(err),
-              hint: "Fix part KCL (or PCB), then retry add_part_to_assembly. Do not invent assembly poses with save_cad_script.",
+              error: message,
+              hint: sourceRangeBug
+                ? "This was a Zoo source_ranges client bug (trailing newline), not bad part KCL. Do NOT pad the assembly scaffold with save_cad_script or isolate parts — call add_part_to_assembly once more after deploy, or tell the user to retry. Never invent poses."
+                : "Fix part KCL (or PCB), then retry add_part_to_assembly once. Do not invent assembly poses with save_cad_script, and do not pad the assembly file to chase source-map errors.",
+              retryable: !sourceRangeBug,
             };
           }
 
