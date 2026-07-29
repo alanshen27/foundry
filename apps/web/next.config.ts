@@ -18,6 +18,9 @@ const nextConfig: NextConfig = {
   // flat config plugins and fails deploys on eslint-disable comments for
   // @next/* / react-hooks/* rules that aren't registered there.
   eslint: { ignoreDuringBuilds: true },
+  // Hide the floating Next.js dev-tools badge (bottom corner "N" logo) so
+  // dev-server screen recordings look like production.
+  devIndicators: false,
   transpilePackages: [
     "@foundry/auth",
     "@foundry/cad",

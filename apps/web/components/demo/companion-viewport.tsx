@@ -5,7 +5,7 @@
  * e-ink desk companion rendered locally (no Zoo engine, no DB). Parameters
  * rebuild the model live so the demo reads like a working parametric CAD.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
@@ -30,7 +30,7 @@ export const DEFAULT_COMPANION_PARAMS: CompanionParams = {
   showKickstand: true,
 };
 
-export type CompanionView = "iso" | "front" | "top" | "right";
+export type CompanionView = "iso" | "front" | "back" | "left" | "right" | "top" | "bottom";
 
 const SHELL = 0xe8e4dc;
 const SHELL_DARK = 0x2b2b2b;
@@ -252,8 +252,17 @@ const VIEWS: Record<
 > = {
   iso: { pos: [170, 130, 190] },
   front: { pos: [0, 70, 260] },
-  top: { pos: [0, 300, 0.01] },
+  back: { pos: [0, 70, -260] },
+  left: { pos: [-260, 70, 0] },
   right: { pos: [260, 70, 0] },
+  top: { pos: [0, 300, 0.01] },
+  bottom: { pos: [0, -300, 0.01] },
+};
+
+export type CompanionViewportApi = {
+  fit: () => void;
+  zoomBy: (factor: number) => void;
+  applyView: (v: CompanionView) => void;
 };
 
 export function CompanionViewport({
@@ -261,6 +270,7 @@ export function CompanionViewport({
   view,
   spin,
   stage = 3,
+  apiRef,
 }: {
   params: CompanionParams;
   view: CompanionView;
@@ -268,6 +278,8 @@ export function CompanionViewport({
   spin: boolean;
   /** Scripted build progress: 0 = empty desk, 3 = finished product. */
   stage?: number;
+  /** Camera controls for the toolbar (fit / zoom / view). */
+  apiRef?: MutableRefObject<CompanionViewportApi | null>;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const { theme } = useTheme();
@@ -276,6 +288,8 @@ export function CompanionViewport({
     applyView: (v: CompanionView) => void;
     setBg: (mode: "dark" | "light") => void;
     setSpin: (on: boolean) => void;
+    fit: () => void;
+    zoomBy: (factor: number) => void;
   } | null>(null);
 
   useEffect(() => {
@@ -323,7 +337,19 @@ export function CompanionViewport({
     const applyView = (v: CompanionView) => {
       const def = VIEWS[v];
       camera.position.set(...def.pos);
-      controls.target.set(0, v === "top" ? 0 : 45, 0);
+      controls.target.set(0, v === "top" || v === "bottom" ? 0 : 45, 0);
+      controls.update();
+    };
+
+    const fit = () => {
+      camera.position.set(...VIEWS.iso.pos).multiplyScalar(0.85);
+      controls.target.set(0, 45, 0);
+      controls.update();
+    };
+
+    const zoomBy = (factor: number) => {
+      const dir = camera.position.clone().sub(controls.target);
+      camera.position.copy(controls.target).add(dir.multiplyScalar(factor));
       controls.update();
     };
 
@@ -340,7 +366,10 @@ export function CompanionViewport({
       setSpin: (on) => {
         spinning = on;
       },
+      fit,
+      zoomBy,
     };
+    if (apiRef) apiRef.current = { fit, zoomBy, applyView };
     runtime.current.setBg(theme.mode);
     rebuild(params, stage);
     applyView(view);
@@ -375,6 +404,7 @@ export function CompanionViewport({
       screenTex.dispose();
       renderer.dispose();
       runtime.current = null;
+      if (apiRef) apiRef.current = null;
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
     };
     // params/view/theme applied in sibling effects; mount is once.

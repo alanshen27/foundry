@@ -62,6 +62,17 @@ const CompanionViewport = dynamic(
   },
 );
 
+// The real Zoo WebRTC viewport (same component as the Engineer stage).
+const CadViewport = dynamic(
+  () => import("@/components/engineer/cad-viewport").then((m) => m.CadViewport),
+  {
+    ssr: false,
+    loading: () => <DotMatrixLoader className="absolute inset-0" label="Loading CAD" />,
+  },
+);
+
+export type DemoEngineSession = { token: string; baseUrl?: string };
+
 type DemoComponent = {
   id: string;
   name: string;
@@ -70,96 +81,100 @@ type DemoComponent = {
   content: string;
 };
 
-const KCL_ENCLOSURE = `// e-ink desk companion — front enclosure (rev C)
+// Real Zoo KCL (same dialect as packages/cad DEFAULT_KCL) — these scripts
+// are submitted to the actual engine, so they must compile.
+function enclosureKcl(p: CompanionParams): string {
+  return `// e-ink desk companion — front enclosure (rev C)
 // Units: mm. Printed in matte PA12, bead-blasted.
-
-bodyWidth = 148
-bodyHeight = 98
+bodyWidth = ${p.bodyWidthMm}
+bodyHeight = ${p.bodyHeightMm}
 bodyThickness = 14
-cornerRadius = 6
-wallThickness = 2.4
 
-shell = startSketchOn(XY)
-  |> startProfileAt([-bodyWidth / 2, -bodyHeight / 2], %)
+bodySketch = startSketchOn(XY)
+bodyProfile = startProfile(bodySketch, at = [-bodyWidth / 2, -bodyHeight / 2])
   |> line(end = [bodyWidth, 0])
   |> line(end = [0, bodyHeight])
   |> line(end = [-bodyWidth, 0])
+  |> line(endAbsolute = [profileStartX(%), profileStartY(%)])
   |> close()
-  |> extrude(length = bodyThickness)
-  |> fillet(radius = cornerRadius, tags = [getNextAdjacentEdge(%)])
-
-cavity = startSketchOn(offsetPlane(XY, offset = wallThickness))
-  |> startProfileAt([
-       -bodyWidth / 2 + wallThickness,
-       -bodyHeight / 2 + wallThickness,
-     ], %)
-  |> line(end = [bodyWidth - wallThickness * 2, 0])
-  |> line(end = [0, bodyHeight - wallThickness * 2])
-  |> line(end = [-(bodyWidth - wallThickness * 2), 0])
-  |> close()
-  |> extrude(length = bodyThickness - wallThickness * 2)
-
-enclosure = subtract([shell], tools = [cavity])
+export body = extrude(bodyProfile, length = bodyThickness)
 `;
+}
 
-const KCL_DISPLAY = `// 7.5" e-ink display module pocket + bezel
-// Panel: GDEY075T7, 800x480, SPI
-
+const KCL_DISPLAY = `// 7.5" e-ink display module — GDEY075T7, 800x480, SPI
 panelWidth = 132
 panelHeight = 74
-panelDepth = 1.2
-bezelLip = 2.0
+panelDepth = 3
 
-pocket = startSketchOn(XZ)
-  |> startProfileAt([-panelWidth / 2, -panelHeight / 2], %)
+panelSketch = startSketchOn(XY)
+panelProfile = startProfile(panelSketch, at = [-panelWidth / 2, -panelHeight / 2])
   |> line(end = [panelWidth, 0])
   |> line(end = [0, panelHeight])
   |> line(end = [-panelWidth, 0])
+  |> line(endAbsolute = [profileStartX(%), profileStartY(%)])
   |> close()
-  |> extrude(length = panelDepth + 0.3)
-
-bezel = startSketchOn(XZ)
-  |> startProfileAt([
-       -panelWidth / 2 - bezelLip,
-       -panelHeight / 2 - bezelLip,
-     ], %)
-  |> line(end = [panelWidth + bezelLip * 2, 0])
-  |> line(end = [0, panelHeight + bezelLip * 2])
-  |> line(end = [-(panelWidth + bezelLip * 2), 0])
-  |> close()
-  |> extrude(length = 2.4)
+export panel = extrude(panelProfile, length = panelDepth)
 `;
 
-const KCL_KICKSTAND = `// Kickstand leg — 22° desk tilt
-// CNC 6061, tumbled. Friction hinge: 90mm torque bar.
-
-legLength = 61
+const KCL_KICKSTAND = `// Kickstand leg — CNC 6061, tumbled. Friction hinge: 90mm torque bar.
 legWidth = 74
+legLength = 61
 legThickness = 3
-standAngle = 22
 
-leg = startSketchOn(YZ)
-  |> startProfileAt([-legWidth / 2, 0], %)
+legSketch = startSketchOn(XY)
+legProfile = startProfile(legSketch, at = [-legWidth / 2, -legLength / 2])
   |> line(end = [legWidth, 0])
-  |> line(end = [0, -legLength])
+  |> line(end = [0, legLength])
   |> line(end = [-legWidth, 0])
+  |> line(endAbsolute = [profileStartX(%), profileStartY(%)])
   |> close()
-  |> extrude(length = legThickness)
-  |> rotate(axis = X, angle = standAngle)
+export leg = extrude(legProfile, length = legThickness)
 `;
 
-const KCL_ASSEMBLY = `// Product preview assembly — e-ink desk companion
-import "parts/enclosure/main.kcl" as enclosure
-import "parts/display-module/main.kcl" as display
-import "parts/kickstand/main.kcl" as kickstand
+/**
+ * What actually gets submitted to the Zoo engine — one combined script
+ * (parts inlined + posed) so the browser executor needs no module imports.
+ * Stage 1: enclosure only · stage 2: + display · stage 3: + kickstand.
+ */
+function combinedZooKcl(p: CompanionParams, stage: number): string {
+  const parts = [enclosureKcl(p)];
+  if (stage >= 2) {
+    parts.push(KCL_DISPLAY, "displayPlaced = translate(panel, z = 14)\n");
+  }
+  if (stage >= 3 && p.showKickstand) {
+    parts.push(
+      KCL_KICKSTAND,
+      `kickstandPlaced = translate(rotate(leg, pitch = ${p.standAngleDeg}deg), y = ${-(
+        p.bodyHeightMm / 2 +
+        24
+      )}, z = 6)\n`,
+    );
+  }
+  return parts.join("\n");
+}
 
-standAngle = 22
-
-product = assembly()
-  |> place(enclosure, at = [0, 0, 0], rotate = [-standAngle, 0, 0])
-  |> place(display, at = [0, 4, 7], rotate = [-standAngle, 0, 0])
-  |> place(kickstand, at = [0, 29, -7])
-`;
+/** Product preview — stage 2 stops before the kickstand lands. */
+function assemblyKcl(p: CompanionParams, stage: number): string {
+  const lines = [
+    "// Product assembly (mm) — poses from the copilot run.",
+    "// Subdirectory imports use …/main.kcl (Zoo rule).",
+    'import body as enclosure from "parts/enclosure/main.kcl"',
+    'import panel as displayModule from "parts/display-module/main.kcl"',
+  ];
+  if (stage >= 3 && p.showKickstand) {
+    lines.push('import leg as kickstand from "parts/kickstand/main.kcl"');
+  }
+  lines.push("", "enclosure", "translate(displayModule, z = 14)");
+  if (stage >= 3 && p.showKickstand) {
+    lines.push(
+      `translate(rotate(kickstand, pitch = ${p.standAngleDeg}deg), y = ${-(
+        p.bodyHeightMm / 2 +
+        24
+      )}, z = 6)`,
+    );
+  }
+  return lines.join("\n") + "\n";
+}
 
 const INSTRUCTIONS_MD = `# Assembly instructions — rev C
 
@@ -173,45 +188,45 @@ const INSTRUCTIONS_MD = `# Assembly instructions — rev C
 5. Attach the kickstand torque bar with the two M2.5 shoulder screws.
 `;
 
-const ENCLOSURE_COMPONENT: DemoComponent = {
-  id: "enclosure",
-  name: "enclosure",
-  kind: "part",
-  path: "parts/enclosure/main.kcl",
-  content: KCL_ENCLOSURE,
-};
-
-const COMPONENTS: DemoComponent[] = [
-  ENCLOSURE_COMPONENT,
-  {
-    id: "display-module",
-    name: "display-module",
-    kind: "part",
-    path: "parts/display-module/main.kcl",
-    content: KCL_DISPLAY,
-  },
-  {
-    id: "kickstand",
-    name: "kickstand",
-    kind: "part",
-    path: "parts/kickstand/main.kcl",
-    content: KCL_KICKSTAND,
-  },
-  {
-    id: "product",
-    name: "product",
-    kind: "assembly",
-    path: "assembly/product.kcl",
-    content: KCL_ASSEMBLY,
-  },
-  {
-    id: "assembly-guide",
-    name: "assembly-guide",
-    kind: "instructions",
-    path: "docs/assembly-guide.md",
-    content: INSTRUCTIONS_MD,
-  },
-];
+function buildComponents(p: CompanionParams, stage: number): DemoComponent[] {
+  return [
+    {
+      id: "enclosure",
+      name: "enclosure",
+      kind: "part",
+      path: "parts/enclosure/main.kcl",
+      content: enclosureKcl(p),
+    },
+    {
+      id: "display-module",
+      name: "display-module",
+      kind: "part",
+      path: "parts/display-module/main.kcl",
+      content: KCL_DISPLAY,
+    },
+    {
+      id: "kickstand",
+      name: "kickstand",
+      kind: "part",
+      path: "parts/kickstand/main.kcl",
+      content: KCL_KICKSTAND,
+    },
+    {
+      id: "product",
+      name: "product",
+      kind: "assembly",
+      path: "assembly/product.kcl",
+      content: assemblyKcl(p, Math.max(stage, 3)),
+    },
+    {
+      id: "assembly-guide",
+      name: "assembly-guide",
+      kind: "instructions",
+      path: "docs/assembly-guide.md",
+      content: INSTRUCTIONS_MD,
+    },
+  ];
+}
 
 const KIND_META = {
   part: { label: "Manufacturing", icon: Puzzle },
@@ -436,7 +451,7 @@ function ProcessFooterDemo() {
   );
 }
 
-export function EngineerDemo() {
+export function EngineerDemo({ engine }: { engine: DemoEngineSession | null }) {
   const { theme } = useTheme();
   const monacoTheme = monacoThemeFor(theme.mode);
 
@@ -495,12 +510,20 @@ export function EngineerDemo() {
     setRunId((n) => n + 1);
   }
 
+  const components = useMemo(() => buildComponents(params, modelStage), [params, modelStage]);
   const active: DemoComponent = useMemo(
-    () => COMPONENTS.find((c) => c.id === activeId) ?? ENCLOSURE_COMPONENT,
-    [activeId],
+    () => components.find((c) => c.id === activeId) ?? components[0]!,
+    [components, activeId],
   );
   const isKcl = active.kind !== "instructions";
-  const visibleComponents = COMPONENTS.filter((c) => visibleIds.includes(c.id));
+  const visibleComponents = components.filter((c) => visibleIds.includes(c.id));
+
+  // What the Zoo engine is asked to build at each scripted stage: the first
+  // generated part alone, then the growing product assembly.
+  const zooSubmit = useMemo(() => {
+    if (modelStage <= 0) return null;
+    return { script: combinedZooKcl(params, modelStage) };
+  }, [modelStage, params]);
 
   function setParam(key: keyof CompanionParams, value: number | boolean) {
     setParams((prev) => ({ ...prev, [key]: value }));
@@ -678,6 +701,28 @@ export function EngineerDemo() {
                       {active.content}
                     </article>
                   </div>
+                ) : engine ? (
+                  <>
+                    {zooSubmit ? (
+                      <CadViewport script={zooSubmit.script} engine={engine} />
+                    ) : (
+                      <div className="text-muted-foreground absolute inset-0 flex items-center justify-center">
+                        <span className="animate-pulse font-mono text-[11px] tracking-[0.08em] uppercase">
+                          waiting for copilot…
+                        </span>
+                      </div>
+                    )}
+
+                    {modelStage > 0 ? <DemoParamsPanel params={params} onSet={setParam} /> : null}
+
+                    {engineBusy ? (
+                      <DotMatrixLoader
+                        className="pointer-events-none absolute inset-0 z-30"
+                        tone="signal"
+                        label="Building model in Zoo engine"
+                      />
+                    ) : null}
+                  </>
                 ) : (
                   <>
                     <CompanionViewport params={params} view={view} spin={spin} stage={modelStage} />
