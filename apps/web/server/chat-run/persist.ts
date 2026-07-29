@@ -39,12 +39,11 @@ function metaFromMessage(message: UIMessage): {
   return {
     authorUserId:
       message.role === "user"
-        ? (typeof meta.authorUserId === "string" && meta.authorUserId
-            ? meta.authorUserId
-            : null)
+        ? typeof meta.authorUserId === "string" && meta.authorUserId
+          ? meta.authorUserId
+          : null
         : null,
-    replyToId:
-      typeof meta.replyToId === "string" && meta.replyToId ? meta.replyToId : null,
+    replyToId: typeof meta.replyToId === "string" && meta.replyToId ? meta.replyToId : null,
   };
 }
 
@@ -125,9 +124,10 @@ export async function loadChannelHistory(
         ? {
             id: replyTo.id,
             authorName:
-              replyTo.author?.name ??
-              (replyTo.role === "assistant" ? "Foundry Copilot" : "Member"),
-            text: replyTo.deletedAt ? "Message deleted" : previewTextFromParts(replyTo.parts) || "…",
+              replyTo.author?.name ?? (replyTo.role === "assistant" ? "Foundry Copilot" : "Member"),
+            text: replyTo.deletedAt
+              ? "Message deleted"
+              : previewTextFromParts(replyTo.parts) || "…",
           }
         : null,
       editedAt: row.editedAt?.toISOString() ?? null,

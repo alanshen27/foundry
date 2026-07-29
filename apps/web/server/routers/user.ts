@@ -65,9 +65,7 @@ export const userRouter = router({
   uploadAvatar: protectedProcedure
     .input(
       z.object({
-        mimeType: z.enum(
-          Object.keys(AVATAR_MIME_TYPES) as [AvatarMimeType, ...AvatarMimeType[]],
-        ),
+        mimeType: z.enum(Object.keys(AVATAR_MIME_TYPES) as [AvatarMimeType, ...AvatarMimeType[]]),
         // Base64 body; keep avatars small (~2 MB decoded).
         contentBase64: z.string().max(3_000_000),
       }),
@@ -96,7 +94,9 @@ export const userRouter = router({
       if (previousUrl?.startsWith("/api/files/users/")) {
         const previousKey = previousUrl.slice("/api/files/".length);
         if (previousKey.startsWith(`users/${ctx.user.id}/`)) {
-          await getObjectStorage().delete(previousKey).catch(() => undefined);
+          await getObjectStorage()
+            .delete(previousKey)
+            .catch(() => undefined);
         }
       }
 
@@ -133,7 +133,9 @@ export const userRouter = router({
     if (previousUrl?.startsWith("/api/files/users/")) {
       const previousKey = previousUrl.slice("/api/files/".length);
       if (previousKey.startsWith(`users/${ctx.user.id}/`)) {
-        await getObjectStorage().delete(previousKey).catch(() => undefined);
+        await getObjectStorage()
+          .delete(previousKey)
+          .catch(() => undefined);
       }
     }
 

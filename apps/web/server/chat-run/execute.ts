@@ -115,8 +115,7 @@ async function failDeadRunningAttempt(
   run: { id: string; channelId: string; inputMessages: unknown },
   scope: ChannelScope,
 ): Promise<void> {
-  const error =
-    "The chat worker restarted while this reply was in flight. Send the message again.";
+  const error = "The chat worker restarted while this reply was in flight. Send the message again.";
   const takeover = await prisma.chatRun.updateMany({
     where: {
       id: run.id,

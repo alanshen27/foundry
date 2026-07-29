@@ -125,37 +125,37 @@ See `.env.example` for the full configuration and
 
 ## External service configuration
 
-| Capability | Configuration |
-|---|---|
-| Database | `DATABASE_URL`, optionally `DIRECT_URL` |
-| Authentication | `AUTH_MODE`, Supabase variables, `AUTH_SECRET` for local mode |
-| Storage | Supabase variables and `STORAGE_BUCKET` |
-| AI copilot | OpenAI credentials, `AI_MODEL`, `AI_LIGHT_MODEL` |
-| Background jobs | `REDIS_URL` |
-| Realtime presence | `NEXT_PUBLIC_REALTIME_MODE` |
-| Collaborative code | `NEXT_PUBLIC_COLLAB_URL` |
-| Mechanical CAD | `ZOO_API_TOKEN` |
-| Media video | `MEDIA_VIDEO_MODEL` |
-| Storefront generation | `V0_API_KEY` |
-| Public callbacks and rendering | `APP_ORIGIN` |
+| Capability                     | Configuration                                                 |
+| ------------------------------ | ------------------------------------------------------------- |
+| Database                       | `DATABASE_URL`, optionally `DIRECT_URL`                       |
+| Authentication                 | `AUTH_MODE`, Supabase variables, `AUTH_SECRET` for local mode |
+| Storage                        | Supabase variables and `STORAGE_BUCKET`                       |
+| AI copilot                     | OpenAI credentials, `AI_MODEL`, `AI_LIGHT_MODEL`              |
+| Background jobs                | `REDIS_URL`                                                   |
+| Realtime presence              | `NEXT_PUBLIC_REALTIME_MODE`                                   |
+| Collaborative code             | `NEXT_PUBLIC_COLLAB_URL`                                      |
+| Mechanical CAD                 | `ZOO_API_TOKEN`                                               |
+| Media video                    | `MEDIA_VIDEO_MODEL`                                           |
+| Storefront generation          | `V0_API_KEY`                                                  |
+| Public callbacks and rendering | `APP_ORIGIN`                                                  |
 
 Shopify credentials are configured per site rather than as shared environment
 variables because each workspace may sell through a different store.
 
 ## Commands
 
-| Command | Purpose |
-|---|---|
-| `pnpm dev` | Run the web app, chat worker, and collaboration server |
-| `pnpm build` | Build the monorepo |
-| `pnpm format:check` | Check formatting |
-| `pnpm lint` | Run ESLint |
-| `pnpm typecheck` | Type-check all packages |
-| `pnpm test` | Run Vitest tests |
-| `pnpm e2e` | Run the Playwright end-to-end journey |
-| `pnpm db:generate` | Generate the Prisma client |
-| `pnpm db:push` | Apply the schema to the database |
-| `pnpm db:seed` | Seed local demonstration data |
+| Command             | Purpose                                                |
+| ------------------- | ------------------------------------------------------ |
+| `pnpm dev`          | Run the web app, chat worker, and collaboration server |
+| `pnpm build`        | Build the monorepo                                     |
+| `pnpm format:check` | Check formatting                                       |
+| `pnpm lint`         | Run ESLint                                             |
+| `pnpm typecheck`    | Type-check all packages                                |
+| `pnpm test`         | Run Vitest tests                                       |
+| `pnpm e2e`          | Run the Playwright end-to-end journey                  |
+| `pnpm db:generate`  | Generate the Prisma client                             |
+| `pnpm db:push`      | Apply the schema to the database                       |
+| `pnpm db:seed`      | Seed local demonstration data                          |
 
 ## Repository layout
 

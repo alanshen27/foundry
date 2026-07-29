@@ -123,7 +123,9 @@ export async function resolveHoverLabel(
 
     let entityType: string | null = null;
     try {
-      entityType = entityTypeFromResult(await send({ type: "get_entity_type", entity_id: current }));
+      entityType = entityTypeFromResult(
+        await send({ type: "get_entity_type", entity_id: current }),
+      );
     } catch {
       break;
     }

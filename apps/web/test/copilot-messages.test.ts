@@ -26,7 +26,9 @@ describe("markFailedAssistantMessages", () => {
       "boom",
     );
     expect(out).toHaveLength(2);
-    const texts = out[1]!.parts.filter((p) => p.type === "text").map((p) => (p as { text: string }).text);
+    const texts = out[1]!.parts
+      .filter((p) => p.type === "text")
+      .map((p) => (p as { text: string }).text);
     expect(texts.some((t) => t.startsWith(ASSISTANT_FAILURE_PREFIX) && t.includes("boom"))).toBe(
       true,
     );

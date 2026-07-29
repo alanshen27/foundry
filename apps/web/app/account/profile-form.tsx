@@ -206,13 +206,7 @@ export function ProfileForm({
               <Label htmlFor="email" className="font-mono text-[11px] tracking-[0.1em] uppercase">
                 Email
               </Label>
-              <Input
-                id="email"
-                type="email"
-                value={user.email}
-                disabled
-                className="rounded-none"
-              />
+              <Input id="email" type="email" value={user.email} disabled className="rounded-none" />
               <p className="text-muted-foreground text-[12px]">
                 Email is managed by your sign-in provider.
               </p>

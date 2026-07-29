@@ -23,7 +23,8 @@ export function ReplyPreviewBar({
   onClear: () => void;
 }) {
   const meta = readChatMeta(message);
-  const author = meta.authorName?.trim() || (message.role === "assistant" ? "Foundry Copilot" : "Member");
+  const author =
+    meta.authorName?.trim() || (message.role === "assistant" ? "Foundry Copilot" : "Member");
   return (
     <div className="border-border bg-muted/50 mb-2 flex items-start gap-2 border-l-2 px-2 py-1.5">
       <div className="min-w-0 flex-1">

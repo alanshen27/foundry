@@ -439,9 +439,7 @@ export function CadViewport({
   const [status, setStatus] = useState<ViewportStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [rtcReady, setRtcReady] = useState(false);
-  const [hoverLabel, setHoverLabel] = useState<{ name: string; x: number; y: number } | null>(
-    null,
-  );
+  const [hoverLabel, setHoverLabel] = useState<{ name: string; x: number; y: number } | null>(null);
   const solidNamesRef = useRef<Map<string, string>>(new Map());
   const labelCacheRef = useRef<Map<string, string | null>>(new Map());
   const hoverSeqRef = useRef(0);

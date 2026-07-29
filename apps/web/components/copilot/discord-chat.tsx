@@ -124,9 +124,7 @@ function ChatMessage({
         grouped ? "py-0.5" : "mt-4 py-0.5 first:mt-0",
       )}
     >
-      <div className="w-9 shrink-0">
-        {grouped ? null : <Avatar message={message} />}
-      </div>
+      <div className="w-9 shrink-0">{grouped ? null : <Avatar message={message} />}</div>
 
       <div className="relative flex min-w-0 flex-1 flex-col gap-1 pb-0.5">
         {!deleted ? (
@@ -221,9 +219,7 @@ function ChatMessage({
           })
         )}
 
-        {!editing && !deleted ? (
-          <MessageReactions message={message} onToggle={onReact} />
-        ) : null}
+        {!editing && !deleted ? <MessageReactions message={message} onToggle={onReact} /> : null}
 
         {!editing && !deleted ? (
           hasContent ? (
@@ -550,8 +546,8 @@ export function DiscordChat({
                 </span>
               ) : input.trim() && !mentionsAi(input) ? (
                 <>
-                  Note by default — mention{" "}
-                  <span className="text-foreground font-medium">@AI</span> for the copilot
+                  Note by default — mention <span className="text-foreground font-medium">@AI</span>{" "}
+                  for the copilot
                 </>
               ) : (
                 <>

@@ -27,11 +27,7 @@ async function publishSiteEvent(siteId: string, status: string, payload: object 
 }
 
 /** Unique-per-workspace slug: `rover`, `rover-2`, `rover-3`, … */
-async function uniqueSlug(
-  workspaceId: string,
-  name: string,
-  excludeId?: string,
-): Promise<string> {
+async function uniqueSlug(workspaceId: string, name: string, excludeId?: string): Promise<string> {
   const base = slugify(name);
   const taken = await prisma.site.findMany({
     where: {

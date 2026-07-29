@@ -15,12 +15,8 @@ vi.mock("@foundry/config", () => ({
   getServerEnv: () => getServerEnv(),
 }));
 
-const {
-  shouldInvokeAi,
-  shouldSuggestAiPing,
-  buildAiPingTip,
-  lastUserText,
-} = await import("@/server/chat-run/should-respond");
+const { shouldInvokeAi, shouldSuggestAiPing, buildAiPingTip, lastUserText } =
+  await import("@/server/chat-run/should-respond");
 
 beforeEach(() => {
   generateObject.mockReset();

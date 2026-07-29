@@ -81,17 +81,13 @@ export async function POST(request: Request) {
           text: uiMessageText(tipMessage),
         };
       }
-      return NextResponse.json(
-        { runId: null, channelId, invoked: false, tip },
-        { status: 202 },
-      );
+      return NextResponse.json({ runId: null, channelId, invoked: false, tip }, { status: 202 });
     }
 
     if (!env.OPENAI_API_KEY) {
       return NextResponse.json(
         {
-          error:
-            "AI is not configured. Set OPENAI_API_KEY in the root .env to enable the copilot.",
+          error: "AI is not configured. Set OPENAI_API_KEY in the root .env to enable the copilot.",
         },
         { status: 503 },
       );

@@ -518,9 +518,7 @@ export function removeCadComponents(doc: CadDoc, ids: Iterable<string>): CadDoc 
   if (drop.size === 0) return doc;
   const components = doc.components.filter((c) => !drop.has(c.id));
   if (components.length === doc.components.length) return doc;
-  const activeId = drop.has(doc.activeId)
-    ? (components[0]?.id ?? doc.activeId)
-    : doc.activeId;
+  const activeId = drop.has(doc.activeId) ? (components[0]?.id ?? doc.activeId) : doc.activeId;
   return withMirror({ ...doc, components, activeId });
 }
 
@@ -591,8 +589,7 @@ export function addCadComponents(
     }
     used.add(path);
     const content =
-      input.content?.trim() ||
-      (input.kind === "part" ? DEFAULT_KCL : DEFAULT_INSTRUCTIONS_MD);
+      input.content?.trim() || (input.kind === "part" ? DEFAULT_KCL : DEFAULT_INSTRUCTIONS_MD);
     components = [
       ...components,
       {

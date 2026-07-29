@@ -51,7 +51,10 @@
       noteTitle: "Will Sun — approximately 55 seconds",
       notes:
         "Physical products are built across different disciplines, and every discipline has its own tool. Requirements live in documents, mechanical work in CAD, electronics in PCB software, firmware in a repository, verification in checklists, and launch information in a site builder. Each tool can store its own artifact, but the handoff between tools is where context disappears. The design may survive, but the reason for the design, the requirement it satisfies, and the test that proves it become separate conversations. Our problem was therefore not simply file management. It was maintaining one understandable thread across the whole product.",
-      sources: [`${sourceRoot}/docs/proposal.md — Project Goal`, `${sourceRoot}/Foundry_PRD_Cursor.md — Problem`],
+      sources: [
+        `${sourceRoot}/docs/proposal.md — Project Goal`,
+        `${sourceRoot}/Foundry_PRD_Cursor.md — Problem`,
+      ],
     },
     {
       kind: "content",
@@ -82,7 +85,10 @@
       noteTitle: "Will Sun — approximately 55 seconds",
       notes:
         "FOUNDRY keeps that thread alive by organizing a project into four connected stages. Ideate turns an initial prompt into a brief and requirements. Engineer brings assembly, CAD, circuits, PCB, code, and repository work into the same project. Verify connects checks, evidence, waivers, approvals, and releases. Launch carries approved work into media, a storefront, and commerce. These are not four separate applications. They share the same project, permissions, audit history, files, and AI context. That shared context is the product: a change can move forward without asking the team to reconstruct everything that happened before it.",
-      sources: [`${sourceRoot}/README.md — Product overview`, `${sourceRoot}/apps/web/components/project-shell.tsx`],
+      sources: [
+        `${sourceRoot}/README.md — Product overview`,
+        `${sourceRoot}/apps/web/components/project-shell.tsx`,
+      ],
     },
     {
       kind: "content",
@@ -119,7 +125,10 @@
       noteTitle: "Will Sun — approximately 55 seconds",
       notes:
         "This is an HTML reconstruction of the deployed FOUNDRY homepage, built from the current home component rather than a presentation mockup. The product introduces the four stages immediately and uses the same visual system that continues inside the application: sharp edges, signal orange, dot matrices, and dense technical information without a generic dashboard feel. That consistency matters because the user should not feel that Ideate, Engineer, Verify, and Launch are unrelated modules. The public product communicates one promise: describe it, engineer it, build it, and sell it without losing the thread. The remaining slides show how the implementation delivers that promise behind the interface.",
-      sources: ["https://foundry-web-3wiy.onrender.com/", `${sourceRoot}/apps/web/components/home-shell.tsx`],
+      sources: [
+        "https://foundry-web-3wiy.onrender.com/",
+        `${sourceRoot}/apps/web/components/home-shell.tsx`,
+      ],
     },
     {
       kind: "content",
@@ -143,7 +152,11 @@
       noteTitle: "Alan Shen — approximately 55 seconds",
       notes:
         "We implemented FOUNDRY as a TypeScript modular monolith. The user sees one Next.js application, while tRPC and the domain layer enforce permissions, stage rules, and audit events. External systems are isolated behind typed ports: Supabase for identity and storage, Zoo for CAD, OpenAI for media and the copilot, v0 for storefronts, and Shopify for checkout. PostgreSQL stores the product state, Redis and BullMQ handle background work, and Hocuspocus supports collaborative editing. This architecture kept four workstreams integrable and made vendor behavior replaceable without moving product rules into SDK code.",
-      sources: [`${sourceRoot}/AGENTS.md — Current architecture`, `${sourceRoot}/README.md — Architecture`, `${sourceRoot}/render.yaml`],
+      sources: [
+        `${sourceRoot}/AGENTS.md — Current architecture`,
+        `${sourceRoot}/README.md — Architecture`,
+        `${sourceRoot}/render.yaml`,
+      ],
     },
     {
       kind: "content",
@@ -174,7 +187,11 @@
       noteTitle: "Alan Shen — approximately 60 seconds",
       notes:
         "The copilot is part of the project workspace rather than a separate prompt box. It can read project context, call scoped tools, and stream results back into persistent channels. Messages retain their authors, users can reply and react, and long work runs in a background queue. We added cancellation, heartbeat, retry, duplicate delivery protection, orphan-run recovery, and transcript merging so a page refresh does not erase the result. This interface is reconstructed directly from the current chat components. The point is not only that AI can generate text; it can participate in the same accountable project history as the team.",
-      sources: [`${sourceRoot}/apps/web/components/copilot/discord-chat.tsx`, `${sourceRoot}/apps/web/components/copilot/message-actions.tsx`, `${sourceRoot}/apps/web/worker/chat-run-worker.ts`],
+      sources: [
+        `${sourceRoot}/apps/web/components/copilot/discord-chat.tsx`,
+        `${sourceRoot}/apps/web/components/copilot/message-actions.tsx`,
+        `${sourceRoot}/apps/web/worker/chat-run-worker.ts`,
+      ],
     },
     {
       kind: "content",
@@ -200,7 +217,12 @@
       noteTitle: "Alan Shen — approximately 60 seconds",
       notes:
         "Engineer is where FOUNDRY becomes more than project management. The workspace includes assembly, KCL mechanical CAD, schematic and PCB canvases, a repository file tree, Monaco code editing, BOM data, and design documents. Zoo powers live CAD generation and viewport rendering, while entity labels and hover selection make geometry inspectable. Code can synchronize through Yjs and Hocuspocus, with autosave when collaborative service is unavailable. This reconstruction follows the current Assembly and CAD components. The disciplines remain specialized, but they live inside the same product project instead of forcing the team to reassemble the context outside the system.",
-      sources: [`${sourceRoot}/apps/web/components/stages/engineer-stage.tsx`, `${sourceRoot}/apps/web/components/engineer/assembly-view.tsx`, `${sourceRoot}/apps/web/components/engineer/cad-viewport.tsx`, `${sourceRoot}/apps/web/components/engineer/code-workspace.tsx`],
+      sources: [
+        `${sourceRoot}/apps/web/components/stages/engineer-stage.tsx`,
+        `${sourceRoot}/apps/web/components/engineer/assembly-view.tsx`,
+        `${sourceRoot}/apps/web/components/engineer/cad-viewport.tsx`,
+        `${sourceRoot}/apps/web/components/engineer/code-workspace.tsx`,
+      ],
     },
     {
       kind: "content",
@@ -231,7 +253,11 @@
       noteTitle: "Jason Xiao — approximately 55 seconds",
       notes:
         "Verify turns engineering output into a release decision. A check can record its status, evidence, and reviewer context. Exceptions are visible as waivers rather than silently ignored, and release gates require the right capability before approval. Every protected mutation also creates an audit event. This product-page reconstruction follows the current Verify stage. The important design choice is separation: a polished render or AI result is not engineering evidence. Release readiness depends on checks and approval, so the interface tells the team what has passed, what still needs review, and who is responsible for the final decision.",
-      sources: [`${sourceRoot}/apps/web/components/stages/verify-stage.tsx`, `${sourceRoot}/apps/web/server/routers/verify.ts`, `${sourceRoot}/packages/db/prisma/schema.prisma`],
+      sources: [
+        `${sourceRoot}/apps/web/components/stages/verify-stage.tsx`,
+        `${sourceRoot}/apps/web/server/routers/verify.ts`,
+        `${sourceRoot}/packages/db/prisma/schema.prisma`,
+      ],
     },
     {
       kind: "content",
@@ -254,7 +280,12 @@
       noteTitle: "Jason Xiao — approximately 60 seconds",
       notes:
         "Launch carries a verified release into a public product story. The media library can generate still images and video through an asynchronous job, track approval separately from engineering verification, and attach approved assets to a site. The v0 adapter creates, previews, edits, and deploys the storefront. Shopify provides the listing and hosted checkout, with credentials stored per site because each workspace may sell through a different store. This view combines the current media, site editor, and commerce components. The result is that launch data stays connected to the same release instead of becoming unrelated marketing copy.",
-      sources: [`${sourceRoot}/apps/web/components/stages/launch-stage.tsx`, `${sourceRoot}/apps/web/components/media/media-library.tsx`, `${sourceRoot}/apps/web/components/sites/site-editor-workspace.tsx`, `${sourceRoot}/apps/web/components/sites/commerce-panel.tsx`],
+      sources: [
+        `${sourceRoot}/apps/web/components/stages/launch-stage.tsx`,
+        `${sourceRoot}/apps/web/components/media/media-library.tsx`,
+        `${sourceRoot}/apps/web/components/sites/site-editor-workspace.tsx`,
+        `${sourceRoot}/apps/web/components/sites/commerce-panel.tsx`,
+      ],
     },
     {
       kind: "content",
@@ -277,7 +308,12 @@
       noteTitle: "Jason Xiao — approximately 55 seconds",
       notes:
         "Our biggest engineering difficulty was coordinating services that are slow, credential-dependent, and sometimes unavailable. CAD, media generation, site building, and checkout all have different failure modes. We addressed this with explicit ports, background jobs, retries, heartbeat recovery, and strict status boundaries. When a real provider is unavailable, local or simulated behavior is visibly labeled. Simulated media cannot be approved or attached to a site, and a simulated site cannot publish. The system can therefore keep the development experience usable without telling the user that a mocked result is real. We degrade the capability, not the truth.",
-      sources: [`${sourceRoot}/AGENTS.md — Hard rules and service boundaries`, `${sourceRoot}/packages/media`, `${sourceRoot}/packages/sites`, `${sourceRoot}/packages/cad`],
+      sources: [
+        `${sourceRoot}/AGENTS.md — Hard rules and service boundaries`,
+        `${sourceRoot}/packages/media`,
+        `${sourceRoot}/packages/sites`,
+        `${sourceRoot}/packages/cad`,
+      ],
     },
     {
       kind: "content",
@@ -301,7 +337,10 @@
       noteTitle: "Zhiheng Li — approximately 55 seconds",
       notes:
         "The final sprint was not another isolated feature push. It closed integration gaps across the product. The first commit added product media, CAD preview assembly, profile support, and viewport labels. The second made collaboration human by attributing messages and adding replies and reactions. The third restored the Repository workspace after it was removed during integration. The final commit connected media generation to asynchronous jobs and completed the final merge. Across those four commits, ninety-three files changed. The important result is that product surfaces that previously existed as separate slices now participate in the same workflow.",
-      sources: ["Local Git history at final commit 8ffa8dd2d2ef4270dc72ff0a3fcde2da5df09df4", `${sourceRoot}/README.md`],
+      sources: [
+        "Local Git history at final commit 8ffa8dd2d2ef4270dc72ff0a3fcde2da5df09df4",
+        `${sourceRoot}/README.md`,
+      ],
     },
     {
       kind: "content",
@@ -326,7 +365,11 @@
       noteTitle: "Zhiheng Li — approximately 55 seconds",
       notes:
         "The result is one project that can survive the whole journey. Ideate stores the brief and requirements. Engineer turns that intent into mechanical, electrical, and software artifacts. Verify records the evidence and release decision. Launch converts the release into media, a site, a listing, and checkout. Under that journey are thirty-one database models, nineteen application routers, and fifty-nine test files containing roughly four hundred seventy-four test declarations. Those numbers are not the product by themselves; they show the implementation depth behind the visible workflow. Our real result is continuity: the project remains recognizable from the first sentence to the storefront.",
-      sources: [`${sourceRoot}/packages/db/prisma/schema.prisma`, `${sourceRoot}/apps/web/server/routers`, "Static repository inventory inspected 2026-07-29"],
+      sources: [
+        `${sourceRoot}/packages/db/prisma/schema.prisma`,
+        `${sourceRoot}/apps/web/server/routers`,
+        "Static repository inventory inspected 2026-07-29",
+      ],
     },
     {
       kind: "content",
@@ -350,7 +393,10 @@
       noteTitle: "Zhiheng Li — approximately 55 seconds, then demo",
       notes:
         "Our live demo uses the same project from start to finish and gives every member an equal two-minute segment. Will opens the workspace and updates the brief. Alan shows the project-aware copilot and the Engineer surfaces. Jason attaches evidence and prepares a release. I finish by showing approved media, the storefront, and the checkout handoff. We will use a preloaded project with a deterministic starting state, so the audience sees the workflow rather than setup time. Together with three minutes of slides per person, this gives each member approximately five minutes of the twenty-minute presentation.",
-      sources: ["Professor-provided final presentation guidelines — time allocation and live demo guidance", `${sourceRoot}/README.md — product workflow`],
+      sources: [
+        "Professor-provided final presentation guidelines — time allocation and live demo guidance",
+        `${sourceRoot}/README.md — product workflow`,
+      ],
     },
     {
       kind: "closing",
@@ -363,7 +409,8 @@
         <div class="closing-copy"><p class="eyebrow">FOUNDRY</p><h2>The product stays connected<br/>because the project does.</h2><p>Describe it. Engineer it. Build it. Sell it.</p><a href="https://foundry-web-3wiy.onrender.com/" target="_blank" rel="noreferrer">foundry-web-3wiy.onrender.com <b>↗</b></a></div>`,
       footer: ["FOUNDRY", "LIVE DEMO", "READY"],
       noteTitle: "Transition to demo — 15 seconds",
-      notes: "FOUNDRY keeps the product connected because it keeps the project connected. We will now show that complete journey live.",
+      notes:
+        "FOUNDRY keeps the product connected because it keeps the project connected. We will now show that complete journey live.",
       sources: ["https://foundry-web-3wiy.onrender.com/", `${sourceRoot}/README.md`],
     },
   ];
@@ -407,7 +454,8 @@
   let touchStartX = null;
 
   const hashIndex = Number.parseInt(window.location.hash.replace("#", ""), 10);
-  if (Number.isFinite(hashIndex) && hashIndex >= 1 && hashIndex <= slides.length) index = hashIndex - 1;
+  if (Number.isFinite(hashIndex) && hashIndex >= 1 && hashIndex <= slides.length)
+    index = hashIndex - 1;
 
   function updateSlide(nextIndex) {
     index = Math.max(0, Math.min(slides.length - 1, nextIndex));
@@ -442,7 +490,9 @@
   document.querySelector(".nav.prev").addEventListener("click", () => updateSlide(index - 1));
   document.querySelector(".nav.next").addEventListener("click", () => updateSlide(index + 1));
   document.querySelector(".help").addEventListener("click", toggleHelp);
-  document.querySelectorAll(".overlay-close").forEach((button) => button.addEventListener("click", closeOverlays));
+  document
+    .querySelectorAll(".overlay-close")
+    .forEach((button) => button.addEventListener("click", closeOverlays));
   document.querySelectorAll(".overlay").forEach((overlay) =>
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay) closeOverlays();
@@ -470,15 +520,23 @@
     } else if (event.key === "?") toggleHelp();
   });
 
-  window.addEventListener("touchstart", (event) => {
-    touchStartX = event.touches[0]?.clientX ?? null;
-  }, { passive: true });
-  window.addEventListener("touchend", (event) => {
-    if (touchStartX === null) return;
-    const delta = (event.changedTouches[0]?.clientX ?? touchStartX) - touchStartX;
-    if (Math.abs(delta) > 50) updateSlide(index + (delta < 0 ? 1 : -1));
-    touchStartX = null;
-  }, { passive: true });
+  window.addEventListener(
+    "touchstart",
+    (event) => {
+      touchStartX = event.touches[0]?.clientX ?? null;
+    },
+    { passive: true },
+  );
+  window.addEventListener(
+    "touchend",
+    (event) => {
+      if (touchStartX === null) return;
+      const delta = (event.changedTouches[0]?.clientX ?? touchStartX) - touchStartX;
+      if (Math.abs(delta) > 50) updateSlide(index + (delta < 0 ? 1 : -1));
+      touchStartX = null;
+    },
+    { passive: true },
+  );
   window.addEventListener("pointermove", (event) => {
     pointer.x = event.clientX;
     pointer.y = event.clientY;
@@ -526,7 +584,11 @@
     const darkLocation = gl.getUniformLocation(program, "u_dark");
     const buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+      gl.STATIC_DRAW,
+    );
 
     function renderWebGL(timestamp) {
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
@@ -540,9 +602,16 @@
       gl.enableVertexAttribArray(positionLocation);
       gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
       gl.uniform2f(resolutionLocation, glCanvas.width, glCanvas.height);
-      gl.uniform2f(pointerLocation, pointer.active ? pointer.x * ratio : -9999, pointer.active ? pointer.y * ratio : -9999);
+      gl.uniform2f(
+        pointerLocation,
+        pointer.active ? pointer.x * ratio : -9999,
+        pointer.active ? pointer.y * ratio : -9999,
+      );
       gl.uniform1f(timeLocation, reduceMotion ? 0 : timestamp * 0.001);
-      gl.uniform1f(darkLocation, ["dark", "cover", "closing"].some((name) => slides[index].classList.contains(name)) ? 1 : 0);
+      gl.uniform1f(
+        darkLocation,
+        ["dark", "cover", "closing"].some((name) => slides[index].classList.contains(name)) ? 1 : 0,
+      );
       gl.drawArrays(gl.TRIANGLES, 0, 6);
       requestAnimationFrame(renderWebGL);
     }
@@ -617,10 +686,17 @@
           const y = (row + 0.5) * cellHeight;
           const distance = Math.hypot(x - (pointer.x - rect.left), y - (pointer.y - rect.top));
           const disturbance = pointer.active ? Math.max(0, 1 - distance / 125) : 0;
-          const value = density[row][col] + Math.sin(col * 0.31 + row * 0.23 + timestamp * 0.0012) * 0.11 + disturbance * 0.5;
+          const value =
+            density[row][col] +
+            Math.sin(col * 0.31 + row * 0.23 + timestamp * 0.0012) * 0.11 +
+            disturbance * 0.5;
           if (value < 0.18) continue;
           context.globalAlpha = Math.min(0.82, 0.15 + value * 0.62);
-          context.fillText(glyphChars[Math.min(glyphChars.length - 1, Math.max(1, Math.floor(value * 8)))], x, y);
+          context.fillText(
+            glyphChars[Math.min(glyphChars.length - 1, Math.max(1, Math.floor(value * 8)))],
+            x,
+            y,
+          );
         }
       }
       context.globalAlpha = 1;

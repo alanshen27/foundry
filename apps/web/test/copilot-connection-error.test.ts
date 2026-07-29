@@ -19,7 +19,9 @@ describe("isConnectionError", () => {
     expect(isConnectionError(new Error("Failed to start copilot run"))).toBe(false);
     expect(
       isConnectionError(
-        new Error("The chat worker restarted while this reply was in flight. Send the message again."),
+        new Error(
+          "The chat worker restarted while this reply was in flight. Send the message again.",
+        ),
       ),
     ).toBe(false);
     expect(isConnectionError("network error")).toBe(false); // non-Error values

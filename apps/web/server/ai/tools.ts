@@ -1213,7 +1213,11 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           .max(40)
           .optional()
           .describe("Paths or names, e.g. parts/lid.kcl, lid, assembly/product.kcl"),
-        ids: z.array(z.string()).max(40).optional().describe("Component ids from get_project_state"),
+        ids: z
+          .array(z.string())
+          .max(40)
+          .optional()
+          .describe("Component ids from get_project_state"),
         nameContains: z
           .array(z.string().min(1).max(200))
           .max(20)
@@ -1491,7 +1495,9 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           .boolean()
           .optional()
           .default(true)
-          .describe("Include the PCB board (parts/pcb.kcl) as a manufacturing reference when a PCB doc exists."),
+          .describe(
+            "Include the PCB board (parts/pcb.kcl) as a manufacturing reference when a PCB doc exists.",
+          ),
         prompt: z
           .string()
           .min(8)

@@ -151,9 +151,7 @@ describe("media.generateStills", () => {
     });
     expect(enqueueMediaJob).toHaveBeenCalledWith("job1");
     expect(mediaCreate).not.toHaveBeenCalled();
-    expect(recordAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "MediaJobStarted" }),
-    );
+    expect(recordAudit).toHaveBeenCalledWith(expect.objectContaining({ type: "MediaJobStarted" }));
   });
 
   it("fails the job row when the queue is unreachable", async () => {

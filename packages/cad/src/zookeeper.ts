@@ -185,9 +185,7 @@ export async function zookeeperPrompt(
           const block = msg.conversation_id;
           if (typeof block === "string") conversationId = block;
           else if (block && typeof block === "object" && "conversation_id" in block) {
-            conversationId = String(
-              (block as { conversation_id?: unknown }).conversation_id ?? "",
-            );
+            conversationId = String((block as { conversation_id?: unknown }).conversation_id ?? "");
           }
           if (conversationId) console.log(`[zookeeper] conversation=${conversationId}`);
           return;

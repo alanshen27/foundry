@@ -49,7 +49,9 @@ function syncAwarenessStyles(awareness: {
     const user = state.user as AwarenessUser | undefined;
     if (!user?.color) return;
     const color = String(user.color);
-    const name = String(user.name ?? "Collaborator").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const name = String(user.name ?? "Collaborator")
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"');
     rules.push(`
 .yRemoteSelection-${clientId} {
   background-color: ${color};

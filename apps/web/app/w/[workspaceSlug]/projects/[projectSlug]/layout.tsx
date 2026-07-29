@@ -4,10 +4,7 @@ import { prisma } from "@foundry/db";
 import type { Stage } from "@foundry/domain";
 import { getCurrentUser } from "@/server/session";
 import { ensureDefaultChannel } from "@/server/chat";
-import {
-  loadChannelHistory,
-  storedMessageToUIMessage,
-} from "@/server/chat-run/persist";
+import { loadChannelHistory, storedMessageToUIMessage } from "@/server/chat-run/persist";
 import { ProjectShell } from "@/components/project-shell";
 
 export default async function ProjectShellLayout({

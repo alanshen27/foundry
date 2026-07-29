@@ -62,7 +62,8 @@ async function main() {
   const r = await zookeeperPrompt({
     token,
     baseWsUrl: "wss://api.zoo.dev/ws/ml/copilot",
-    prompt: "Add a single-line KCL comment at the top that says hello-foundry. Do not change geometry.",
+    prompt:
+      "Add a single-line KCL comment at the top that says hello-foundry. Do not change geometry.",
     currentFiles: {
       "main.kcl":
         "width = 10\ns = startSketchOn(XY)\np = startProfile(s, at = [0,0])\n  |> line(end = [width,0])\n  |> line(end = [0,10])\n  |> line(end = [-width,0])\n  |> close()\nextrude(p, length = 3)\n",

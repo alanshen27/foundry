@@ -134,21 +134,25 @@ export function useCursors(
     }
 
     const channel = cursorChannel(projectId, branchId);
-    const handle = port.join(channel, { userId: self.userId, name: self.name, color, surface }, (incoming) => {
-      const active = activeCursors(incoming, surface);
-      if (peersEqual(surfacePeersRef.current, active)) return;
-      surfacePeersRef.current = active;
+    const handle = port.join(
+      channel,
+      { userId: self.userId, name: self.name, color, surface },
+      (incoming) => {
+        const active = activeCursors(incoming, surface);
+        if (peersEqual(surfacePeersRef.current, active)) return;
+        surfacePeersRef.current = active;
 
-      const nextTargets = new Map<string, CursorState>();
-      for (const peer of active) {
-        nextTargets.set(peer.userId, peer);
-        if (!displayRef.current.has(peer.userId)) {
-          displayRef.current.set(peer.userId, { x: peer.x, y: peer.y });
+        const nextTargets = new Map<string, CursorState>();
+        for (const peer of active) {
+          nextTargets.set(peer.userId, peer);
+          if (!displayRef.current.has(peer.userId)) {
+            displayRef.current.set(peer.userId, { x: peer.x, y: peer.y });
+          }
         }
-      }
-      targetsRef.current = nextTargets;
-      ensureRaf();
-    });
+        targetsRef.current = nextTargets;
+        ensureRaf();
+      },
+    );
     handleRef.current = handle;
 
     const onUnload = () => handle.leave();

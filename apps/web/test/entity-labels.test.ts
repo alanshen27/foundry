@@ -19,17 +19,15 @@ function okModeling(type: string, data: unknown) {
 
 describe("entity label parsing", () => {
   it("reads entity_id from highlight responses", () => {
-    expect(
-      entityIdFromHighlight(okModeling("highlight_set_entity", { entity_id: "abc" })),
-    ).toBe("abc");
+    expect(entityIdFromHighlight(okModeling("highlight_set_entity", { entity_id: "abc" }))).toBe(
+      "abc",
+    );
     expect(entityIdFromHighlight(okModeling("highlight_set_entity", {}))).toBeNull();
   });
 
   it("flattens scene_get_entity_ids groups", () => {
     expect(
-      solidIdsFromSceneGet(
-        okModeling("scene_get_entity_ids", { entity_ids: [["a", "b"], ["c"]] }),
-      ),
+      solidIdsFromSceneGet(okModeling("scene_get_entity_ids", { entity_ids: [["a", "b"], ["c"]] })),
     ).toEqual(["a", "b", "c"]);
   });
 

@@ -596,9 +596,7 @@ export function Message({
               )}
             </div>
           )}
-          {!editing && !deleted ? (
-            <MessageReactions message={message} onToggle={onReact} />
-          ) : null}
+          {!editing && !deleted ? <MessageReactions message={message} onToggle={onReact} /> : null}
         </div>
       </div>
     );

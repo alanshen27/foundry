@@ -336,7 +336,10 @@ export function mergeTranscriptPreferringUserTurns(
   const serverIds = new Set(server.map((m) => m.id).filter(Boolean));
   // Same user text may get a new client id after a failed POST — don't double-append.
   const serverUserTexts = new Set(
-    server.filter((m) => m.role === "user").map(messagePlainText).filter(Boolean),
+    server
+      .filter((m) => m.role === "user")
+      .map(messagePlainText)
+      .filter(Boolean),
   );
   const extras = local.filter((m) => {
     if (!m.id || serverIds.has(m.id)) return false;

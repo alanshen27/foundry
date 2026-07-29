@@ -488,8 +488,7 @@ function ChatEngine({
         setLocalBusy(true);
         void utils.chat.activeRun.invalidate({ projectId, channelId });
         const startedRunId = (message.payload as { runId?: string } | undefined)?.runId ?? null;
-        const streaming =
-          statusRef.current === "submitted" || statusRef.current === "streaming";
+        const streaming = statusRef.current === "submitted" || statusRef.current === "streaming";
         // Other tabs / reloads only — never open a second SSE for our own
         // send, and never attach twice to the same run (the resume effect
         // above may have already claimed it).
@@ -606,9 +605,7 @@ function ChatEngine({
 
       const replyToId = options?.replyToId ?? replyingTo?.id;
       const replyTarget =
-        (replyToId
-          ? messagesRef.current.find((m) => m.id === replyToId)
-          : null) ?? replyingTo;
+        (replyToId ? messagesRef.current.find((m) => m.id === replyToId) : null) ?? replyingTo;
       const metadata = {
         authorUserId: shell.viewer.id,
         authorName: shell.viewer.name,
@@ -868,13 +865,8 @@ export function CopilotProvider({
       void utils.client.chat.messages
         .query({ projectId, channelId })
         .then((rows) => {
-          const fromServer = pruneEmptyAssistantMessages(
-            rowsToMessages(rows as ChatHistoryRow[]),
-          );
-          cacheRef.current.set(
-            channelId,
-            seedTranscriptWithLocalBackup(channelId, fromServer),
-          );
+          const fromServer = pruneEmptyAssistantMessages(rowsToMessages(rows as ChatHistoryRow[]));
+          cacheRef.current.set(channelId, seedTranscriptWithLocalBackup(channelId, fromServer));
           setActiveChannelId(channelId);
         })
         // Stay put rather than opening a channel whose history failed to load:

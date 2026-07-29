@@ -110,7 +110,10 @@ export const chatRouter = router({
         actorId: ctx.user.id,
         payload: { messageId: message.id, channelId: message.channelId },
       });
-      return { id: updated.id, editedAt: updated.editedAt?.toISOString() ?? editedAt.toISOString() };
+      return {
+        id: updated.id,
+        editedAt: updated.editedAt?.toISOString() ?? editedAt.toISOString(),
+      };
     }),
 
   deleteMessage: protectedProcedure
@@ -139,7 +142,8 @@ export const chatRouter = router({
           message: "You can only delete your own messages",
         });
       }
-      if (message.deletedAt) return { ok: true as const, deletedAt: message.deletedAt.toISOString() };
+      if (message.deletedAt)
+        return { ok: true as const, deletedAt: message.deletedAt.toISOString() };
       const deletedAt = new Date();
       await prisma.chatMessage.update({
         where: { id: message.id },
