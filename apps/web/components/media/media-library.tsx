@@ -161,7 +161,6 @@ export function MediaLibrary({
     setPendingSlots([]);
     void refresh();
     // Only the job outcome should drive this cleanup.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeJobId, jobStatus, job.data?.error]);
 
   const onQueued = (

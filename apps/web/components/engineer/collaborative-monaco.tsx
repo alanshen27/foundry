@@ -117,8 +117,8 @@ export function CollaborativeMonaco({ session, language, theme, className }: Pro
       ydocRef.current = null;
       providerRef.current = null;
     };
-    // Token rotation shouldn't tear the live session; auth is checked on connect.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- session.token omitted on purpose
+    // Token rotation shouldn't tear the live session; auth is checked on
+    // connect, so session.token is omitted on purpose.
   }, [session.url, session.documentName, session.user.id, session.user.name]);
 
   // Bind Monaco ↔ Yjs whenever both the editor and a live provider exist.
