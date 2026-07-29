@@ -2,18 +2,13 @@
 # https://dashboard.render.com/blueprint/new
 #
 # Hosted Postgres / Auth / Storage stay on Supabase. Redis is external
-# (e.g. Upstash) — set REDIS_URL in the foundry-shared env group.
-# This Blueprint deploys the Next.js app, BullMQ chat worker, and Yjs
-# collab WebSocket service.
+# (e.g. Upstash). All env lives in foundry-shared — services only link the group.
 #
 # After the first sync:
-# 1. Fill every sync:false env var in the foundry-shared group (+ web-only).
-#    REDIS_URL MUST be your Upstash rediss:// URL — unset/localhost causes
-#    AggregateError ECONNREFUSED loops and Render SIGTERM on the web service.
+# 1. Fill every sync:false secret in foundry-shared (see comments below).
 # 2. Set Supabase Auth Site URL + redirect allowlist to APP_ORIGIN
 #    (and APP_ORIGIN/auth/confirm, APP_ORIGIN/auth/callback).
 # 3. Paste supabase/templates/*.html into Supabase Auth email templates.
-# 4. Set NEXT_PUBLIC_COLLAB_URL (web) to wss://<foundry-collab-host>
 #
 # Build notes:
 # - Do NOT run `corepack enable` — Render's Node image ships pnpm on a
@@ -24,7 +19,11 @@
 envVarGroups:
   - name: foundry-shared
     envVars:
+      - key: NODE_VERSION
+        value: "22"
       - key: AUTH_MODE
+        value: supabase
+      - key: NEXT_PUBLIC_REALTIME_MODE
         value: supabase
       - key: STORAGE_BUCKET
         value: artifacts
@@ -32,6 +31,9 @@ envVarGroups:
         value: gpt-5.6
       - key: AUTH_SECRET
         generateValue: true
+      # Public web URL (https://foundry-web-….onrender.com or custom domain).
+      - key: APP_ORIGIN
+        sync: false
       # Supabase Postgres (pooled + direct for DDL)
       - key: DATABASE_URL
         sync: false
@@ -46,11 +48,16 @@ envVarGroups:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      # Browser WebSocket for Engineer > Code (wss://<foundry-collab-host>).
+      - key: NEXT_PUBLIC_COLLAB_URL
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: ZOO_API_TOKEN
         sync: false
       - key: V0_API_KEY
+        sync: false
+      - key: FOUNDRY_DEFAULT_WORKSPACE_SLUG
         sync: false
 
 services:
@@ -73,19 +80,6 @@ services:
         - render.yaml
     envVars:
       - fromGroup: foundry-shared
-      - key: NODE_VERSION
-        value: "22"
-      - key: NEXT_PUBLIC_REALTIME_MODE
-        value: supabase
-      - key: APP_ORIGIN
-        fromService:
-          name: foundry-web
-          type: web
-          envVarKey: RENDER_EXTERNAL_URL
-      - key: NEXT_PUBLIC_COLLAB_URL
-        sync: false
-      - key: FOUNDRY_DEFAULT_WORKSPACE_SLUG
-        sync: false
 
   - type: worker
     name: foundry-chat-worker
@@ -105,17 +99,6 @@ services:
         - render.yaml
     envVars:
       - fromGroup: foundry-shared
-      - key: NODE_VERSION
-        value: "22"
-      # Must match web — worker publishes run chunks via Supabase broadcast.
-      # SSE still polls Postgres, but busy/cancel signals need this on.
-      - key: NEXT_PUBLIC_REALTIME_MODE
-        value: supabase
-      - key: APP_ORIGIN
-        fromService:
-          name: foundry-web
-          type: web
-          envVarKey: RENDER_EXTERNAL_URL
 
   - type: web
     name: foundry-collab
@@ -136,7 +119,3 @@ services:
         - render.yaml
     envVars:
       - fromGroup: foundry-shared
-      - key: NODE_VERSION
-        value: "22"
-      - key: NEXT_PUBLIC_REALTIME_MODE
-        value: off

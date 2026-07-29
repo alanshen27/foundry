@@ -5,8 +5,7 @@ Auth, and object storage stay on Supabase; Redis is your own (e.g. Upstash).
 Render runs the web app, chat worker, and collaboration WebSocket service.
 
 Shared secrets live in the **`foundry-shared`** environment group (linked to
-every service). Web-only vars (`NEXT_PUBLIC_COLLAB_URL`,
-`FOUNDRY_DEFAULT_WORKSPACE_SLUG`) stay on `foundry-web`.
+every service). There are no per-service env vars beyond that link.
 
 ## One-shot setup
 
@@ -14,19 +13,20 @@ every service). Web-only vars (`NEXT_PUBLIC_COLLAB_URL`,
 2. Open [Render Blueprint](https://dashboard.render.com/blueprint/new) and
    point it at the repo (file: `render.yaml`).
 3. Fill every prompted (`sync: false`) secret in **foundry-shared**:
+   - `APP_ORIGIN` — public web URL (`https://foundry-web-….onrender.com`)
    - `DATABASE_URL` / `DIRECT_URL` — Supabase Postgres (session/direct for DDL)
    - `REDIS_URL` — **required** Upstash `rediss://…` (TLS). If unset, the app
      defaults to `localhost:6379` and Render logs endless `ECONNREFUSED` /
      `AggregateError` until the service is SIGTERM'd.
    - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
      `SUPABASE_SERVICE_ROLE_KEY`
-   - Optional: `OPENAI_API_KEY`, `ZOO_API_TOKEN`, `V0_API_KEY`
-4. On **foundry-web**, set `NEXT_PUBLIC_COLLAB_URL` to
-   `wss://<foundry-collab hostname>`.
-5. Apply schema against production Postgres (`pnpm db:push` locally with
+   - `NEXT_PUBLIC_COLLAB_URL` — `wss://<foundry-collab hostname>`
+   - Optional: `OPENAI_API_KEY`, `ZOO_API_TOKEN`, `V0_API_KEY`,
+     `FOUNDRY_DEFAULT_WORKSPACE_SLUG`
+4. Apply schema against production Postgres (`pnpm db:push` locally with
    production `DIRECT_URL`, or run Prisma from a one-off shell).
-6. Create the private Supabase Storage bucket named `artifacts`.
-7. Configure custom auth email (see `docs/runbooks/auth-email.md`).
+5. Create the private Supabase Storage bucket named `artifacts`.
+6. Configure custom auth email (see `docs/runbooks/auth-email.md`).
 
 ## Services
 
@@ -36,7 +36,7 @@ every service). Web-only vars (`NEXT_PUBLIC_COLLAB_URL`,
 | `foundry-chat-worker` | BullMQ worker for AI chat runs      |
 | `foundry-collab`      | Hocuspocus Yjs WebSocket server     |
 
-`APP_ORIGIN` is wired from `RENDER_EXTERNAL_URL` on `foundry-web`. Auth email
+`APP_ORIGIN` is set in `foundry-shared` to the public web URL. Auth email
 redirects and screenshot tools both use it. `AUTH_SECRET` is generated once in
 `foundry-shared` so web / worker / collab share the same value.
 
