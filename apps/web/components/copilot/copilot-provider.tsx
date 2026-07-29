@@ -180,6 +180,17 @@ function ChatEngine({
       setLocalBusy(false);
       void utils.chat.activeRun.invalidate({ projectId, channelId });
       const reason = err instanceof Error ? err.message : String(err);
+      // Don't double-stamp the lock message as a failed assistant turn — that
+      // is a send rejection, not a mid-run crash. Still release any dead lock.
+      if (/workspace is locked/i.test(reason)) {
+        void cancelMutation
+          .mutateAsync({ projectId, branchId, channelId })
+          .catch(() => undefined)
+          .finally(() => {
+            void utils.chat.activeRun.invalidate({ projectId, channelId });
+          });
+        return;
+      }
       setMessages((prev) => {
         const next = markFailedAssistantMessages(prev, reason);
         void persistMutation
@@ -187,10 +198,16 @@ function ChatEngine({
           .catch((e) => console.error("failed to persist chat transcript", e));
         return next;
       });
+      void cancelMutation
+        .mutateAsync({ projectId, branchId, channelId })
+        .catch(() => undefined)
+        .finally(() => {
+          void utils.chat.activeRun.invalidate({ projectId, channelId });
+        });
     },
   });
 
-  /** Stamp a failure note and persist the transcript so refresh keeps it. */
+  /** Stamp a failure note, persist transcript, and release the branch lock. */
   const stampAndPersistFailure = useCallback(
     (reason?: string) => {
       setMessages((prev) => {
@@ -200,8 +217,24 @@ function ChatEngine({
           .catch((err) => console.error("failed to persist chat transcript", err));
         return next;
       });
+      // Client-side stream death (network error, tab blip) used to leave the
+      // ChatRun PENDING/RUNNING forever → every later send 409'd "locked".
+      void cancelMutation
+        .mutateAsync({ projectId, branchId, channelId })
+        .catch(() => undefined)
+        .finally(() => {
+          void utils.chat.activeRun.invalidate({ projectId, channelId });
+        });
     },
-    [setMessages, persistMutation, projectId, branchId, channelId],
+    [
+      setMessages,
+      persistMutation,
+      cancelMutation,
+      utils,
+      projectId,
+      branchId,
+      channelId,
+    ],
   );
 
   statusRef.current = status;
@@ -288,6 +321,21 @@ function ChatEngine({
     onMessages(channelId, messages);
   }, [channelId, messages, onMessages]);
 
+  const stopRun = useCallback(() => {
+    selfRunRef.current = false;
+    stop();
+    setLocalBusy(false);
+    busyRef.current = false;
+    // Keep whatever streamed before stop — only prune empty placeholders.
+    setMessages((prev) => pruneEmptyAssistantMessages(prev));
+    void cancelMutation
+      .mutateAsync({ projectId, branchId, channelId })
+      .catch(() => undefined)
+      .finally(() => {
+        void utils.chat.activeRun.invalidate({ projectId, channelId });
+      });
+  }, [cancelMutation, projectId, branchId, channelId, stop, utils, setMessages]);
+
   const send = useCallback(
     (text: string) => {
       const trimmed = text.trim();
@@ -298,32 +346,47 @@ function ChatEngine({
       selfRunRef.current = true;
       setLocalBusy(true);
       busyRef.current = true;
-      void sendMessage({ text: trimmed }).catch((err) => {
-        selfRunRef.current = false;
-        setLocalBusy(false);
-        busyRef.current = false;
-        stampAndPersistFailure(err instanceof Error ? err.message : "request failed");
-      });
+
+      const start = () =>
+        sendMessage({ text: trimmed }).catch(async (err) => {
+          const reason = err instanceof Error ? err.message : "request failed";
+          // Dead lock from a prior crashed run — clear it and retry once.
+          if (/workspace is locked/i.test(reason)) {
+            try {
+              await cancelMutation.mutateAsync({ projectId, branchId, channelId });
+              await utils.chat.activeRun.invalidate({ projectId, channelId });
+              await sendMessage({ text: trimmed });
+              return;
+            } catch (retryErr) {
+              selfRunRef.current = false;
+              setLocalBusy(false);
+              busyRef.current = false;
+              stampAndPersistFailure(
+                retryErr instanceof Error ? retryErr.message : reason,
+              );
+              return;
+            }
+          }
+          selfRunRef.current = false;
+          setLocalBusy(false);
+          busyRef.current = false;
+          stampAndPersistFailure(reason);
+        });
+
+      void start();
       void utils.chat.activeRun.invalidate({ projectId, channelId });
     },
-    [sendMessage, shell, utils, projectId, channelId, stampAndPersistFailure],
+    [
+      sendMessage,
+      shell,
+      utils,
+      projectId,
+      branchId,
+      channelId,
+      cancelMutation,
+      stampAndPersistFailure,
+    ],
   );
-
-  const stopRun = useCallback(() => {
-    selfRunRef.current = false;
-    stop();
-    setLocalBusy(false);
-    busyRef.current = false;
-    // Keep whatever streamed before stop — only prune empty placeholders.
-    setMessages((prev) => pruneEmptyAssistantMessages(prev));
-    void cancelMutation
-      .mutateAsync({ projectId, channelId })
-      .catch(() => undefined)
-      .finally(() => {
-        void utils.chat.activeRun.invalidate({ projectId, channelId });
-      });
-  }, [cancelMutation, projectId, channelId, stop, utils, setMessages]);
-
   const value = useMemo(
     () => ({ ...shell, messages, status, busy, error, send, stop: stopRun }),
     [shell, messages, status, busy, error, send, stopRun],

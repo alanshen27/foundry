@@ -122,28 +122,40 @@ export const chatRouter = router({
     }),
 
   cancelActiveRun: protectedProcedure
-    .input(z.object({ projectId: z.string(), channelId: z.string() }))
+    .input(
+      z.object({
+        projectId: z.string(),
+        channelId: z.string().optional(),
+        branchId: z.string().optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       await requireProjectCapability(ctx.user.id, input.projectId, "agent.invoke");
+      // Lock is branch-wide; prefer clearing the whole branch so a dead run on
+      // any channel can't 409 the next send.
+      const where: {
+        projectId: string;
+        status: { in: ("PENDING" | "RUNNING")[] };
+        branchId?: string;
+        channelId?: string;
+      } = {
+        projectId: input.projectId,
+        status: { in: ["PENDING", "RUNNING"] },
+      };
+      if (input.branchId) where.branchId = input.branchId;
+      else if (input.channelId) where.channelId = input.channelId;
+
       const active = await prisma.chatRun.findMany({
-        where: {
-          projectId: input.projectId,
-          channelId: input.channelId,
-          status: { in: ["PENDING", "RUNNING"] },
-        },
-        select: { id: true },
+        where,
+        select: { id: true, channelId: true },
       });
       if (active.length === 0) return { ok: true };
       await prisma.chatRun.updateMany({
-        where: {
-          projectId: input.projectId,
-          channelId: input.channelId,
-          status: { in: ["PENDING", "RUNNING"] },
-        },
+        where: { id: { in: active.map((run) => run.id) } },
         data: { status: "CANCELLED", finishedAt: new Date(), error: "cancelled" },
       });
       await Promise.all(
-        active.map((run) => publishRunFinished(run.id, input.channelId, "cancelled")),
+        active.map((run) => publishRunFinished(run.id, run.channelId, "cancelled")),
       );
       return { ok: true };
     }),
