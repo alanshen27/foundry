@@ -151,7 +151,7 @@ export function ProjectCreateBar({
                 <span className="sr-only">Folder</span>
                 <select
                   id="project-create-folder"
-                  className="text-foreground min-w-0 flex-1 truncate bg-transparent font-mono text-[11px] tracking-[0.04em] outline-none"
+                  className="text-foreground min-w-0 flex-1 appearance-none truncate bg-transparent font-mono text-[11px] tracking-[0.04em] outline-none"
                   value={targetFolderId}
                   onChange={(event) => setTargetFolderId(event.target.value)}
                   disabled={create.isPending}

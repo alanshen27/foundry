@@ -41,9 +41,7 @@ async function reconnectPrisma(): Promise<void> {
 
 function assertProdRedis(redisUrl: string) {
   const isLocal =
-    redisUrl.includes("localhost") ||
-    redisUrl.includes("127.0.0.1") ||
-    redisUrl.includes("::1");
+    redisUrl.includes("localhost") || redisUrl.includes("127.0.0.1") || redisUrl.includes("::1");
   if (process.env.RENDER || process.env.NODE_ENV === "production") {
     if (isLocal) {
       console.error(
@@ -100,9 +98,7 @@ const worker = new Worker(
     } catch (err) {
       console.error(`[chat-worker] run ${runId} failed`, err);
       if (isPrismaDisconnect(err)) {
-        await reconnectPrisma().catch((e) =>
-          console.error("[chat-worker] reconnect failed", e),
-        );
+        await reconnectPrisma().catch((e) => console.error("[chat-worker] reconnect failed", e));
         throw err; // Let BullMQ retry
       }
       throw err;
@@ -157,9 +153,7 @@ async function reclaimPendingRuns() {
 }
 
 const reclaimTimer = setInterval(() => {
-  void reclaimPendingRuns().catch((err) =>
-    console.error("[chat-worker] reclaim loop failed", err),
-  );
+  void reclaimPendingRuns().catch((err) => console.error("[chat-worker] reclaim loop failed", err));
 }, 5_000);
 reclaimTimer.unref?.();
 
