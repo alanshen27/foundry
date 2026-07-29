@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 config({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../../../.env") });
 
 import { prisma } from "@foundry/db";
+import { getServerEnv } from "@foundry/config";
 import { executeChatRun } from "../server/chat-run/execute";
 import { Worker, type Job } from "bullmq";
 import { getRedisConnection, CHAT_RUN_QUEUE_NAME } from "../server/chat-run/queue";
@@ -38,7 +39,33 @@ async function reconnectPrisma(): Promise<void> {
   console.log("[chat-worker] prisma reconnected");
 }
 
-console.log("[chat-worker] starting BullMQ worker…");
+function assertProdRedis(redisUrl: string) {
+  const isLocal =
+    redisUrl.includes("localhost") ||
+    redisUrl.includes("127.0.0.1") ||
+    redisUrl.includes("::1");
+  if (process.env.RENDER || process.env.NODE_ENV === "production") {
+    if (isLocal) {
+      console.error(
+        "[chat-worker] REDIS_URL points at localhost. On Render set foundry-shared REDIS_URL to your Upstash rediss:// URL.",
+      );
+      process.exit(1);
+    }
+  }
+}
+
+const env = getServerEnv();
+assertProdRedis(env.REDIS_URL);
+
+const redisHost = (() => {
+  try {
+    return new URL(env.REDIS_URL).host;
+  } catch {
+    return "(unparseable REDIS_URL)";
+  }
+})();
+
+console.log(`[chat-worker] starting BullMQ worker… redis=${redisHost}`);
 
 const worker = new Worker(
   CHAT_RUN_QUEUE_NAME,
@@ -51,7 +78,9 @@ const worker = new Worker(
     } catch (err) {
       console.error(`[chat-worker] run ${runId} failed`, err);
       if (isPrismaDisconnect(err)) {
-        await reconnectPrisma().catch((e) => console.error("[chat-worker] reconnect failed", e));
+        await reconnectPrisma().catch((e) =>
+          console.error("[chat-worker] reconnect failed", e),
+        );
         throw err; // Let BullMQ retry
       }
       throw err;
@@ -63,6 +92,28 @@ const worker = new Worker(
   },
 );
 
+worker.on("ready", () => {
+  console.log(`[chat-worker] ready on queue "${CHAT_RUN_QUEUE_NAME}"`);
+});
+
 worker.on("error", (err) => {
   console.error("[chat-worker] queue error", err);
 });
+
+async function shutdown(signal: string) {
+  console.log(`[chat-worker] ${signal} — closing worker`);
+  try {
+    await worker.close();
+  } catch (err) {
+    console.error("[chat-worker] close failed", err);
+  }
+  try {
+    await prisma.$disconnect();
+  } catch {
+    // ignore
+  }
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
