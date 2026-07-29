@@ -13,6 +13,7 @@ import {
   Eye,
   FileDown,
   FileText,
+  GitBranch,
   Globe,
   Image as ImageIcon,
   ListChecks,
@@ -206,6 +207,12 @@ const TOOL_META: Record<
     done: "Inspected the PCB",
     failed: "PCB inspect failed",
     icon: Camera,
+  },
+  add_repo_link: {
+    doing: "Linking repository",
+    done: "Linked repository",
+    failed: "Failed to link repository",
+    icon: GitBranch,
   },
   write_code_file: {
     doing: "Writing code",

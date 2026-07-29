@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronsUpDown,
   Combine,
+  FolderGit2,
   LayoutDashboard,
   Lightbulb,
   PanelRightClose,
@@ -138,7 +139,9 @@ export function WorkspaceSwitcher({
   );
 }
 
-/** Process stages. CAD / Schematic / PCB open as Engineer top tabs. */
+/**
+ * Process stages + Repository. CAD / Schematic / PCB open as Engineer top tabs.
+ */
 type ProcessStep = {
   key: string;
   label: string;
@@ -164,6 +167,13 @@ function processSteps(base: string): ProcessStep[] {
       href: `${base}/engineer`,
       stage: "ENGINEER",
     },
+    {
+      key: "repository",
+      label: "Repository",
+      icon: FolderGit2,
+      href: `${base}/engineer?view=code`,
+      stage: "ENGINEER",
+    },
     { key: "verify", label: "Verify", icon: ShieldCheck, href: `${base}/verify`, stage: "VERIFY" },
     { key: "launch", label: "Launch", icon: Rocket, href: `${base}/launch`, stage: "LAUNCH" },
   ];
@@ -179,6 +189,8 @@ function ProcessFooter({
   workspaceSlug: string;
 }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const viewParam = searchParams.get("view");
   const steps = processSteps(base);
 
   return (
@@ -187,7 +199,12 @@ function ProcessFooter({
         {steps.map((step) => {
           const stepPath = step.href.split("?")[0] ?? step.href;
           const onPath = Boolean(pathname?.startsWith(stepPath));
-          const active = onPath;
+          const active =
+            step.key === "repository"
+              ? onPath && viewParam === "code"
+              : step.key === "engineer"
+                ? onPath && viewParam !== "code"
+                : onPath;
           const status = step.stage ? (stageStatuses[step.stage] ?? "NOT_STARTED") : null;
           const Icon = step.icon;
           const phase = step.stage ? STAGE_THEME[step.stage] : null;
@@ -213,7 +230,7 @@ function ProcessFooter({
                 strokeWidth={1.75}
               />
               <span className="hidden md:inline">{step.label}</span>
-              {status ? (
+              {status && step.key !== "repository" ? (
                 <span
                   title={status.replaceAll("_", " ").toLowerCase()}
                   className={cn("size-1.5 rounded-full", STATUS_DOT[status])}
@@ -310,7 +327,9 @@ function ShellInner({
         <ChatSidebar />
       </div>
 
-      <ProcessFooter base={base} stageStatuses={stageStatuses} workspaceSlug={workspace.slug} />
+      <Suspense fallback={<footer className="bg-card/60 h-11 shrink-0 border-t" />}>
+        <ProcessFooter base={base} stageStatuses={stageStatuses} workspaceSlug={workspace.slug} />
+      </Suspense>
     </div>
   );
 }

@@ -1845,6 +1845,32 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
       },
     },
 
+    add_repo_link: {
+      description: "Link a source repository (Engineer > Repository), e.g. firmware or app code.",
+      inputSchema: z.object({
+        role: z.string().min(1).max(80).describe("e.g. firmware, mobile-app, tooling"),
+        url: z.string().url().max(500),
+        notes: z.string().max(1000).optional(),
+      }),
+      execute: async (input: { role: string; url: string; notes?: string }) =>
+        guard(ctx, "github.connect", async (workspaceId) => {
+          const repo = await prisma.repoLink.create({
+            data: { projectId, branchId, createdById: ctx.userId, ...input },
+          });
+          await recordAudit({
+            type: "RepoLinkCreated",
+            workspaceId,
+            projectId,
+            branchId,
+            actorId: ctx.userId,
+            actorType: "AGENT",
+            payload: { repoLinkId: repo.id, url: repo.url },
+          });
+          const staled = await touchStage(ctx, workspaceId, "ENGINEER");
+          return { ok: true, staleStages: staled };
+        }),
+    },
+
     add_validation_checks: {
       description:
         "Add validation checks to the Verify stage checklist. Derive them from the requirements (each MUST requirement should have at least one check).",
@@ -1895,15 +1921,17 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
     write_code_file: {
       description:
-        "Create or overwrite a project code file (firmware, configs, sim sketches). Stored in Foundry; not synced to GitHub yet.",
+        "Create or overwrite a file in the project's code workspace (Engineer > Repository). Files belong to a linked repository; if none is linked yet, one is created automatically with role 'firmware'. Use for firmware, configs, or app scaffolding.",
       inputSchema: z.object({
-        path: z.string().min(1).max(300).describe("Project-relative path, e.g. src/main.cpp"),
+        path: z.string().min(1).max(300).describe("Repo-relative path, e.g. src/main.cpp"),
         content: z.string().max(200_000),
         repoRole: z
           .string()
           .max(80)
           .optional()
-          .describe("Internal file bucket role; defaults to project-files"),
+          .describe(
+            "Which linked repo to write into (matches the repo's role); defaults to the first repo",
+          ),
       }),
       execute: async ({
         path,
@@ -1918,7 +1946,6 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           if (path.includes("..") || path.startsWith("/")) {
             return { error: "Invalid path" };
           }
-          const role = repoRole ?? "project-files";
           let repo = await prisma.repoLink.findFirst({
             where: { projectId, branchId, ...(repoRole ? { role: repoRole } : {}) },
             orderBy: { createdAt: "asc" },
@@ -1927,9 +1954,9 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             data: {
               projectId,
               branchId,
-              role,
-              url: "foundry://local/project-files",
-              notes: "Internal project files — GitHub sync not enabled",
+              role: repoRole ?? "firmware",
+              url: "https://github.com/link-me/placeholder",
+              notes: "Created by copilot — replace with the real repository URL",
               createdById: ctx.userId,
             },
           });

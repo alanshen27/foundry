@@ -2,7 +2,8 @@
 
 /**
  * Engineer workspace: Assembly is the pinned home viewport. CAD / Schematic /
- * PCB open via the + dropdown as closable top tabs.
+ * PCB open via the + dropdown as closable top tabs. Repository lives in the
+ * process footer (`?view=code`) as its own full surface.
  */
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -52,9 +53,17 @@ const PcbCanvas = dynamic(
   },
 );
 
+const CodeWorkspace = dynamic(
+  () => import("@/components/engineer/code-workspace").then((m) => m.CodeWorkspace),
+  {
+    ssr: false,
+    loading: () => <DotMatrixLoader className="absolute inset-0" label="Loading code" />,
+  },
+);
+
 /** Views the stage page may still pass (legacy deep links). */
 export type EngineerView =
-  "sourcing" | "schematic" | "pcb" | "model" | "design" | "assembly";
+  "sourcing" | "schematic" | "pcb" | "model" | "code" | "design" | "assembly";
 
 type Props = {
   projectId: string;
@@ -63,7 +72,7 @@ type Props = {
   view: EngineerView;
 };
 
-/** Windows the + menu can open inside Engineer. */
+/** Windows the + menu can open inside Engineer (not Repository — that is a footer tab). */
 type OpenableKind = "model" | "schematic" | "pcb";
 
 const OPENABLE: { kind: OpenableKind; label: string; icon: typeof Boxes }[] = [
@@ -72,7 +81,7 @@ const OPENABLE: { kind: OpenableKind; label: string; icon: typeof Boxes }[] = [
   { kind: "pcb", label: "PCB", icon: CircuitBoard },
 ];
 
-function TabIcon({ kind }: { kind: EngineerDocKind }) {
+function TabIcon({ kind }: { kind: Exclude<EngineerDocKind, "code"> }) {
   if (kind === "assembly") return <Combine className="size-3" strokeWidth={2} />;
   if (kind === "model") return <Boxes className="size-3" strokeWidth={2} />;
   if (kind === "pcb") return <CircuitBoard className="size-3" strokeWidth={2} />;
@@ -84,6 +93,15 @@ export function EngineerStage({ projectId, branchId, canEdit, view }: Props) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const partParam = searchParams.get("part");
+
+  // Repository is a process-footer peer, not an Engineer document tab.
+  if (view === "code") {
+    return (
+      <div className="relative h-full overflow-hidden">
+        <CodeWorkspace projectId={projectId} branchId={branchId} canEdit={canEdit} />
+      </div>
+    );
+  }
 
   return (
     <EngineerDocWorkspace
@@ -110,7 +128,7 @@ function EngineerDocWorkspace({
   projectId: string;
   branchId: string;
   canEdit: boolean;
-  view: EngineerView;
+  view: Exclude<EngineerView, "code">;
   partParam: string | null;
   pathname: string;
   router: ReturnType<typeof useRouter>;
@@ -125,6 +143,7 @@ function EngineerDocWorkspace({
 
   useEffect(() => {
     const next = tabFromViewParam(view, partParam);
+    if (next.kind === "code") return;
     setTabs((prev) => {
       if (prev.some((t) => t.key === next.key)) return prev;
       return [...prev, next];
@@ -191,11 +210,13 @@ function EngineerDocWorkspace({
     return lastModel?.kind === "model" ? lastModel.componentId : undefined;
   }, [active, tabs]);
 
+  const docTabs = tabs.filter((t) => t.kind !== "code");
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="bg-card/60 flex h-9 shrink-0 items-center border-b px-1">
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-          {tabs.map((tab) => (
+          {docTabs.map((tab) => (
             <div
               key={tab.key}
               className={cn(
@@ -206,7 +227,7 @@ function EngineerDocWorkspace({
               )}
               onClick={() => activate(tab)}
             >
-              <TabIcon kind={tab.kind} />
+              <TabIcon kind={tab.kind as Exclude<EngineerDocKind, "code">} />
               <span className="max-w-36 truncate">{tab.label}</span>
               {!tab.pinned ? (
                 <button

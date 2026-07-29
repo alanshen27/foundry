@@ -131,8 +131,8 @@ export function LaunchStage({
         <CardHeader>
           <CardTitle>Cut a release</CardTitle>
           <p className="text-muted-foreground text-sm">
-            A release freezes an immutable snapshot of the brief, requirements, BOM, and validation
-            results. Snapshots are never modified after creation.
+            A release freezes an immutable snapshot of the brief, requirements, BOM, repositories,
+            and validation results. Snapshots are never modified after creation.
           </p>
         </CardHeader>
         <CardContent>
@@ -223,6 +223,7 @@ export function LaunchStage({
                       <div className="text-muted-foreground mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
                         <Stat label="Requirements" value={summary.requirements} />
                         <Stat label="Components" value={summary.components} />
+                        <Stat label="Repos" value={summary.repos} />
                         <Stat
                           label="Checks passed"
                           value={`${summary.checksPassed}/${summary.checks}`}

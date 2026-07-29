@@ -47,11 +47,14 @@ describe("engineer-tabs", () => {
     expect(tabFromViewParam("design")).toEqual(ASSEMBLY_TAB);
   });
 
-  it("opens model / pcb / schematic from view params", () => {
+  it("opens model / pcb / schematic / repository from view params", () => {
     expect(tabFromViewParam("pcb").kind).toBe("pcb");
     expect(tabFromViewParam("schematic").kind).toBe("schematic");
-    // Legacy ?view=code (removed GitHub repo surface) falls back to assembly.
-    expect(tabFromViewParam("code")).toEqual(ASSEMBLY_TAB);
+    expect(tabFromViewParam("code")).toMatchObject({
+      kind: "code",
+      label: "Repository",
+      key: "code",
+    });
     expect(tabFromViewParam("model", "comp1")).toMatchObject({
       kind: "model",
       componentId: "comp1",
