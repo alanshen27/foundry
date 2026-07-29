@@ -6,6 +6,11 @@ export const metadata: Metadata = {
 };
 
 /** Title-card page for demo video openers. Public, purely visual. */
-export default function DemoIntroPage() {
-  return <DemoIntro />;
+export default async function DemoIntroPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ text?: string }>;
+}) {
+  const { text } = await searchParams;
+  return <DemoIntro initialText={text?.trim() || "Foundry"} />;
 }
