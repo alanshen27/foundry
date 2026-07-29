@@ -22,13 +22,14 @@ export function DemoIntro({ initialText = "Foundry" }: { initialText?: string })
     <div className="bg-primary text-primary-foreground fixed inset-0 overflow-hidden">
       <InteractiveDotField tone="signal" className="absolute inset-0" gap={12} radius={64} />
 
-      <div className="absolute inset-0 z-10 flex items-center justify-center">
+      <div className="absolute inset-0 z-10">
         <AnimatedSignalGlyph
           seed="foundry-pulse"
-          rows={34}
-          cols={52}
+          rows={48}
+          cols={96}
           fontSize={15}
-          className="opacity-95"
+          fill
+          className="size-full opacity-95"
         />
       </div>
 
