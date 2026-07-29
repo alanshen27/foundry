@@ -132,7 +132,6 @@ export async function zookeeperPrompt(
 
   return new Promise<CadResult<ZookeeperPromptResult>>((resolve) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
 
     const ws = new WebSocket(wsUrl, {
       headers: {
@@ -144,7 +143,7 @@ export async function zookeeperPrompt(
     const finish = (result: CadResult<ZookeeperPromptResult>) => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
+      clearTimeout(timer);
       opts.signal?.removeEventListener("abort", onAbort);
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close();
@@ -163,7 +162,7 @@ export async function zookeeperPrompt(
       finish({ ok: false, error: "CAD generation cancelled" });
     };
 
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       finish({
         ok: false,
         error: `Zoo Zookeeper timed out after ~${Math.round(timeoutMs / 1000)}s`,

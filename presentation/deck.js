@@ -666,7 +666,7 @@
   });
 
   function renderGlyphs(timestamp) {
-    glyphModels.forEach(({ canvas, cols, rows, density, random }) => {
+    glyphModels.forEach(({ canvas, cols, rows, density }) => {
       const rect = canvas.getBoundingClientRect();
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.max(1, Math.floor(rect.width * ratio));
