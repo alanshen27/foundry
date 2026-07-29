@@ -53,6 +53,7 @@ import {
   type CompanionView,
 } from "@/components/demo/companion-viewport";
 import { DemoChatSidebar, type DemoChatItem } from "@/components/demo/demo-chat-sidebar";
+import { MACRO_KEYBOARD_KCL, macroKeyboardKclForStage } from "@/components/demo/macro-keyboard-kcl";
 
 const CompanionViewport = dynamic(
   () => import("@/components/demo/companion-viewport").then((m) => m.CompanionViewport),
@@ -81,142 +82,58 @@ type DemoComponent = {
   content: string;
 };
 
-// Real Zoo KCL (same dialect as packages/cad DEFAULT_KCL) — these scripts
-// are submitted to the actual engine, so they must compile.
-function enclosureKcl(p: CompanionParams): string {
-  return `// e-ink desk companion — front enclosure (rev C)
-// Units: mm. Printed in matte PA12, bead-blasted.
-bodyWidth = ${p.bodyWidthMm}
-bodyHeight = ${p.bodyHeightMm}
-bodyThickness = 14
+// Logical sections of the single-file Aquarium model, shown as tree entries.
+const SHELL_MARK = "// ============================================================ frosted shell";
+const DECK_MARK = "// ============================================================ switch housings";
+const KCL_BASE = macroKeyboardKclForStage(1);
+const KCL_SHELL = MACRO_KEYBOARD_KCL.slice(
+  MACRO_KEYBOARD_KCL.indexOf(SHELL_MARK),
+  MACRO_KEYBOARD_KCL.indexOf(DECK_MARK),
+);
+const KCL_DECK = MACRO_KEYBOARD_KCL.slice(MACRO_KEYBOARD_KCL.indexOf(DECK_MARK));
 
-bodySketch = startSketchOn(XY)
-bodyProfile = startProfile(bodySketch, at = [-bodyWidth / 2, -bodyHeight / 2])
-  |> line(end = [bodyWidth, 0])
-  |> line(end = [0, bodyHeight])
-  |> line(end = [-bodyWidth, 0])
-  |> line(endAbsolute = [profileStartX(%), profileStartY(%)])
-  |> close()
-export body = extrude(bodyProfile, length = bodyThickness)
-`;
-}
+const INSTRUCTIONS_MD = `# Assembly instructions — rev A
 
-const KCL_DISPLAY = `// 7.5" e-ink display module — GDEY075T7, 800x480, SPI
-panelWidth = 132
-panelHeight = 74
-panelDepth = 3
-
-panelSketch = startSketchOn(XY)
-panelProfile = startProfile(panelSketch, at = [-panelWidth / 2, -panelHeight / 2])
-  |> line(end = [panelWidth, 0])
-  |> line(end = [0, panelHeight])
-  |> line(end = [-panelWidth, 0])
-  |> line(endAbsolute = [profileStartX(%), profileStartY(%)])
-  |> close()
-export panel = extrude(panelProfile, length = panelDepth)
+1. Bolt the sandblasted polycarbonate shell to the aluminum base disc
+   with the four M3 hex screws (0.6 N·m) — USB-C port faces north.
+2. Seat the 13 low-profile switches into the recessed key deck, master
+   switch at row 1 / column 2.
+3. Press the keycaps home: 6 macro caps, agent-control row (launch,
+   confirm, kill, share, cloud), then the mic key.
+4. Clip the dial knob onto the encoder shaft and the joystick cap onto
+   the hat switch — both index on the flat.
+5. Connect the touch sensor FPC, then run the deck engrave-side up.
 `;
 
-const KCL_KICKSTAND = `// Kickstand leg — CNC 6061, tumbled. Friction hinge: 90mm torque bar.
-legWidth = 74
-legLength = 61
-legThickness = 3
-
-legSketch = startSketchOn(XY)
-legProfile = startProfile(legSketch, at = [-legWidth / 2, -legLength / 2])
-  |> line(end = [legWidth, 0])
-  |> line(end = [0, legLength])
-  |> line(end = [-legWidth, 0])
-  |> line(endAbsolute = [profileStartX(%), profileStartY(%)])
-  |> close()
-export leg = extrude(legProfile, length = legThickness)
-`;
-
-/**
- * What actually gets submitted to the Zoo engine — one combined script
- * (parts inlined + posed) so the browser executor needs no module imports.
- * Stage 1: enclosure only · stage 2: + display · stage 3: + kickstand.
- */
-function combinedZooKcl(p: CompanionParams, stage: number): string {
-  const parts = [enclosureKcl(p)];
-  if (stage >= 2) {
-    parts.push(KCL_DISPLAY, "displayPlaced = translate(panel, z = 14)\n");
-  }
-  if (stage >= 3 && p.showKickstand) {
-    parts.push(
-      KCL_KICKSTAND,
-      `kickstandPlaced = translate(rotate(leg, pitch = ${p.standAngleDeg}deg), y = ${-(
-        p.bodyHeightMm / 2 +
-        24
-      )}, z = 6)\n`,
-    );
-  }
-  return parts.join("\n");
-}
-
-/** Product preview — stage 2 stops before the kickstand lands. */
-function assemblyKcl(p: CompanionParams, stage: number): string {
-  const lines = [
-    "// Product assembly (mm) — poses from the copilot run.",
-    "// Subdirectory imports use …/main.kcl (Zoo rule).",
-    'import body as enclosure from "parts/enclosure/main.kcl"',
-    'import panel as displayModule from "parts/display-module/main.kcl"',
-  ];
-  if (stage >= 3 && p.showKickstand) {
-    lines.push('import leg as kickstand from "parts/kickstand/main.kcl"');
-  }
-  lines.push("", "enclosure", "translate(displayModule, z = 14)");
-  if (stage >= 3 && p.showKickstand) {
-    lines.push(
-      `translate(rotate(kickstand, pitch = ${p.standAngleDeg}deg), y = ${-(
-        p.bodyHeightMm / 2 +
-        24
-      )}, z = 6)`,
-    );
-  }
-  return lines.join("\n") + "\n";
-}
-
-const INSTRUCTIONS_MD = `# Assembly instructions — rev C
-
-1. Seat the 7.5" e-ink panel into the front bezel pocket. Route the FPC
-   through the left channel before pressing the panel home.
-2. Fasten the driver PCB to the four M2 bosses (0.4 N·m).
-3. Clip the rotary encoder into the right-side cutout; the detent tab
-   faces up.
-4. Connect the 2000 mAh cell, then close the rear shell — snap fits
-   engage bottom edge first.
-5. Attach the kickstand torque bar with the two M2.5 shoulder screws.
-`;
-
-function buildComponents(p: CompanionParams, stage: number): DemoComponent[] {
+function buildComponents(): DemoComponent[] {
   return [
     {
-      id: "enclosure",
-      name: "enclosure",
+      id: "aluminum-base",
+      name: "aluminum-base",
       kind: "part",
-      path: "parts/enclosure/main.kcl",
-      content: enclosureKcl(p),
+      path: "parts/aluminum-base/main.kcl",
+      content: KCL_BASE,
     },
     {
-      id: "display-module",
-      name: "display-module",
+      id: "shell",
+      name: "shell",
       kind: "part",
-      path: "parts/display-module/main.kcl",
-      content: KCL_DISPLAY,
+      path: "parts/shell/main.kcl",
+      content: KCL_SHELL,
     },
     {
-      id: "kickstand",
-      name: "kickstand",
+      id: "keydeck",
+      name: "keydeck",
       kind: "part",
-      path: "parts/kickstand/main.kcl",
-      content: KCL_KICKSTAND,
+      path: "parts/keydeck/main.kcl",
+      content: KCL_DECK,
     },
     {
       id: "product",
       name: "product",
       kind: "assembly",
       path: "assembly/product.kcl",
-      content: assemblyKcl(p, Math.max(stage, 3)),
+      content: MACRO_KEYBOARD_KCL,
     },
     {
       id: "assembly-guide",
@@ -331,7 +248,7 @@ type DemoScriptApi = {
 };
 
 const USER_PROMPT =
-  "@AI I would like to build an e-ink desk companion that shows my calendar, tasks and the weather. Model it.";
+  "@AI I would like to build a macro keyboard for controlling AI agents — dedicated agent controls, 6 programmable macros, a dial and a joystick. Model it.";
 
 const SCRIPT: ScriptStep[] = [
   {
@@ -345,7 +262,7 @@ const SCRIPT: ScriptStep[] = [
       s.push({
         kind: "assistant-text",
         id: "a1",
-        text: "On it — I'll model the desk companion now: enclosure, e-ink display module and kickstand as manufacturing parts, then wire them into the product assembly for the preview.",
+        text: "On it — I'll model the macro keyboard now: aluminum base disc, sandblasted shell with recessed key deck, then the 13 keys, dial and joystick — and wire everything into the product preview.",
       }),
   },
   {
@@ -363,8 +280,11 @@ const SCRIPT: ScriptStep[] = [
   {
     after: 3000,
     apply: (s) => {
-      s.finishTool("t2", "3 parts in parallel · 2,841 chars KCL");
-      s.revealComponents(["enclosure", "display-module", "kickstand"]);
+      s.finishTool(
+        "t2",
+        `base + shell + key deck · ${MACRO_KEYBOARD_KCL.length.toLocaleString()} chars KCL`,
+      );
+      s.revealComponents(["aluminum-base", "shell", "keydeck"]);
       s.setEngineBusy(false);
       s.setModelStage(1);
     },
@@ -387,7 +307,7 @@ const SCRIPT: ScriptStep[] = [
   {
     after: 900,
     apply: (s) => {
-      s.finishTool("t3", "3 mfg refs · assembly/product.kcl");
+      s.finishTool("t3", "13 keys · dial · joystick · assembly/product.kcl");
       s.revealComponents(["product", "assembly-guide"]);
     },
   },
@@ -397,7 +317,7 @@ const SCRIPT: ScriptStep[] = [
       s.push({
         kind: "assistant-text",
         id: "a2",
-        text: 'Done — assembly/product.kcl renders the finished companion: tilted enclosure, 7.5" e-ink dashboard, rotary encoder and kickstand. Tweak the parameters panel (standAngle, bodyWidth…) and the model rebuilds live.',
+        text: "Done — the finished Agentic Macro Keyboard is rendering in the Zoo engine: aluminum base, sandblasted shell, recessed deck with 13 engraved keys, dial and joystick. Orbit the viewport or use the toolbar views to inspect it.",
       });
       s.setBusy(false);
       s.setSpin(true);
@@ -510,7 +430,7 @@ export function EngineerDemo({ engine }: { engine: DemoEngineSession | null }) {
     setRunId((n) => n + 1);
   }
 
-  const components = useMemo(() => buildComponents(params, modelStage), [params, modelStage]);
+  const components = useMemo(() => buildComponents(), []);
   const active: DemoComponent = useMemo(
     () => components.find((c) => c.id === activeId) ?? components[0]!,
     [components, activeId],
@@ -522,8 +442,8 @@ export function EngineerDemo({ engine }: { engine: DemoEngineSession | null }) {
   // generated part alone, then the growing product assembly.
   const zooSubmit = useMemo(() => {
     if (modelStage <= 0) return null;
-    return { script: combinedZooKcl(params, modelStage) };
-  }, [modelStage, params]);
+    return { script: macroKeyboardKclForStage(modelStage) };
+  }, [modelStage]);
 
   function setParam(key: keyof CompanionParams, value: number | boolean) {
     setParams((prev) => ({ ...prev, [key]: value }));
@@ -554,7 +474,7 @@ export function EngineerDemo({ engine }: { engine: DemoEngineSession | null }) {
             /
           </span>
           <span className="text-foreground flex h-5 max-w-52 items-center truncate text-[13px] leading-none font-medium">
-            e-ink desk companion
+            agentic macro keyboard
           </span>
           <span className="bg-muted text-muted-foreground ml-0.5 flex h-5 items-center rounded-none px-1.5 font-mono text-[11px] leading-none">
             main
@@ -712,8 +632,6 @@ export function EngineerDemo({ engine }: { engine: DemoEngineSession | null }) {
                         </span>
                       </div>
                     )}
-
-                    {modelStage > 0 ? <DemoParamsPanel params={params} onSet={setParam} /> : null}
 
                     {engineBusy ? (
                       <DotMatrixLoader
