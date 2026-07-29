@@ -49,6 +49,43 @@ redirects and screenshot tools both use it. `AUTH_SECRET` is generated once in
 - `package.json` `engines.node` is `22.x` (plus `.node-version`) so Render
   does not pick an unbounded latest Node.
 
+### Chromium / Playwright
+
+`foundry-web` and `foundry-chat-worker` both launch headless Chromium — the web
+service for `/render/*` thumbnails, the worker for the copilot's viewport
+captures and `extract_product_images`. Nothing downloads a browser implicitly:
+the app depends on `playwright-core`, which never bundles binaries, and current
+Playwright releases carry no postinstall hook, so `pnpm install` alone leaves
+the machine browserless. Each build therefore fetches one explicitly:
+
+```
+pnpm --filter @foundry/web exec playwright install --only-shell chromium
+```
+
+Two things make this work, and both are load-bearing:
+
+- **`PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/src/.playwright`** (set in
+  `foundry-shared`). Render only carries the project directory from the build
+  into the runtime container. Playwright's default `$HOME/.cache/ms-playwright`
+  resolves to `/opt/render/.cache/…`, which is downloaded during the build and
+  then absent at start — the failure looks like
+  `Executable doesn't exist at /opt/render/.cache/ms-playwright/…`.
+- **`--only-shell`**, because `server/ai/render.ts` always launches
+  `headless: true`. Playwright ≥1.49 maps that to `chromium-headless-shell`,
+  a separate download from headful `chromium`.
+
+Keep `playwright-core` and `@playwright/test` on the same version — the browser
+revision is pinned per Playwright version, so a mismatch reinstates the same
+"executable doesn't exist" error against a different revision directory.
+
+Chromium runs fine on Render's native Node runtime (it is a normal long-lived
+container, not a serverless sandbox), but the binary is ~170MB and a capture
+spikes several hundred MB of RSS. `--with-deps` is not usable here — it needs
+root, which build commands do not have. If a launch ever fails with
+`error while loading shared libraries: libnss3.so` rather than a missing
+executable, the native image is short a system library and the service needs
+to move to a Docker runtime built on `mcr.microsoft.com/playwright`.
+
 ## After deploy
 
 - Supabase Auth → URL configuration: Site URL = `APP_ORIGIN`; add

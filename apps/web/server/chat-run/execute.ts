@@ -18,12 +18,7 @@ import {
   persistRunMessages,
   type ChannelScope,
 } from "./persist";
-import {
-  maxRunEventSeq,
-  publishRunChunk,
-  publishRunFinished,
-  publishRunStarted,
-} from "./publish";
+import { maxRunEventSeq, publishRunChunk, publishRunFinished, publishRunStarted } from "./publish";
 import {
   markFailedAssistantMessages,
   sanitizeUiMessagesForModel,
@@ -198,10 +193,7 @@ export async function executeChatRun(runId: string): Promise<void> {
     }
   });
 
-  async function finalize(
-    status: "done" | "error" | "cancelled",
-    error?: string,
-  ): Promise<void> {
+  async function finalize(status: "done" | "error" | "cancelled", error?: string): Promise<void> {
     if (finalized) return;
     finalized = true;
 
@@ -251,7 +243,11 @@ export async function executeChatRun(runId: string): Promise<void> {
       runId,
       channelId,
       status,
-      status === "error" ? (error ?? "request failed") : status === "cancelled" ? "cancelled" : null,
+      status === "error"
+        ? (error ?? "request failed")
+        : status === "cancelled"
+          ? "cancelled"
+          : null,
     );
   }
 

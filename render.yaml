@@ -15,6 +15,9 @@
 #   read-only /usr/bin; enable fails with EROFS.
 # - --prod=false keeps prisma/typescript (devDependencies) for generate/build.
 # - engines.node is pinned to 22.x (package.json) so Render doesn't pick Node 26.
+# - Chromium must be downloaded during the build (see PLAYWRIGHT_BROWSERS_PATH).
+#   playwright-core ships no browser binaries, and modern Playwright has no
+#   postinstall hook, so `pnpm install` alone never produces one.
 
 envVarGroups:
   - name: foundry-shared
@@ -27,6 +30,13 @@ envVarGroups:
         value: supabase
       - key: STORAGE_BUCKET
         value: artifacts
+      # Where `playwright install` writes Chromium and where playwright-core
+      # looks for it at runtime. MUST live under /opt/render/project: Render
+      # only carries the project directory from the build into the runtime
+      # container, so the default $HOME/.cache/ms-playwright (= /opt/render/
+      # .cache) is downloaded during the build and then gone at start.
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/project/src/.playwright
       - key: AI_MODEL
         value: gpt-5.6
       - key: AUTH_SECRET
@@ -69,7 +79,9 @@ services:
     # thumbnails / copilot viewport renders still bounce the service.
     plan: starter
     region: oregon
-    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate && pnpm --filter @foundry/web build
+    # --only-shell: server/ai/render.ts always launches headless, which resolves
+    # to chromium-headless-shell. Skipping headful Chromium halves the download.
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/web exec playwright install --only-shell chromium && pnpm --filter @foundry/db generate && pnpm --filter @foundry/web build
     startCommand: pnpm --filter @foundry/web start
     healthCheckPath: /api/health
     buildFilter:
@@ -89,7 +101,10 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate
+    # The worker runs the copilot tool loop (server/ai/tools.ts), so it drives
+    # Chromium too — extract_product_images and the viewport captures both fail
+    # here without a browser, surfacing as "Image extraction failed" in chat.
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/web exec playwright install --only-shell chromium && pnpm --filter @foundry/db generate
     startCommand: pnpm --filter @foundry/web worker:chat:prod
     buildFilter:
       paths:
