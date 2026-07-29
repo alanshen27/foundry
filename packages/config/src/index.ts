@@ -21,6 +21,7 @@ const serverEnvSchema = z
       const trimmed = value.trim();
       return trimmed.length > 0 ? trimmed : undefined;
     }, z.string().url().default("redis://localhost:6379")),
+    // Set automatically by Render — used to reject localhost service URLs.
     // AI copilot (optional; chat is disabled with a clear notice when unset)
     OPENAI_API_KEY: z.string().optional(),
     AI_MODEL: z.string().default("gpt-5.6"),
@@ -52,6 +53,49 @@ const serverEnvSchema = z
         path: ["AUTH_SECRET"],
         message: "AUTH_SECRET is required when AUTH_MODE=local",
       });
+    }
+
+    // On Render, localhost URLs mean a copied .env / missing dashboard secret.
+    // They produce endless AggregateError ECONNREFUSED spam (Redis, Auth, collab).
+    if (process.env.RENDER) {
+      const localHosts = ["localhost", "127.0.0.1", "::1"];
+      const isLocal = (value: string | undefined) => {
+        if (!value) return false;
+        try {
+          return localHosts.includes(new URL(value).hostname);
+        } catch {
+          return localHosts.some((h) => value.includes(h));
+        }
+      };
+
+      if (isLocal(env.NEXT_PUBLIC_SUPABASE_URL)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["NEXT_PUBLIC_SUPABASE_URL"],
+          message: "Must be your Supabase project URL on Render (not localhost)",
+        });
+      }
+      if (isLocal(env.DATABASE_URL)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["DATABASE_URL"],
+          message: "Must be Supabase Postgres on Render (not localhost)",
+        });
+      }
+      if (isLocal(env.REDIS_URL)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["REDIS_URL"],
+          message: "Must be Upstash rediss:// URL on Render (not redis://localhost:6379)",
+        });
+      }
+      if (isLocal(env.NEXT_PUBLIC_COLLAB_URL)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["NEXT_PUBLIC_COLLAB_URL"],
+          message: "Must be wss://<foundry-collab-host> on Render (not ws://localhost:1234)",
+        });
+      }
     }
   });
 

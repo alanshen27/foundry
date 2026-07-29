@@ -69,10 +69,12 @@ export function createSupabaseAuthAdapter(config: SupabaseAuthConfig): AuthPort 
     async getIdentity(): Promise<AuthenticatedIdentity | null> {
       const { data: sessionData } = await client.auth.getSession();
       const accessToken = sessionData.session?.access_token ?? "";
-      if (accessToken) {
-        const hit = identityCache.get(accessToken);
-        if (hit && hit.exp > Date.now()) return hit.identity;
-      }
+      // No cookie/session → don't call Auth over the network (Render health
+      // checks hit `/` constantly; a localhost Supabase URL would ECONNREFUSED-spam).
+      if (!accessToken) return null;
+
+      const hit = identityCache.get(accessToken);
+      if (hit && hit.exp > Date.now()) return hit.identity;
 
       const { data, error } = await client.auth.getUser();
       if (error) {
@@ -85,7 +87,7 @@ export function createSupabaseAuthAdapter(config: SupabaseAuthConfig): AuthPort 
         return null;
       }
       const identity = data.user ? identityFromUser(data.user) : null;
-      if (identity && accessToken) {
+      if (identity) {
         identityCache.set(accessToken, { identity, exp: Date.now() + IDENTITY_CACHE_MS });
       }
       return identity;
