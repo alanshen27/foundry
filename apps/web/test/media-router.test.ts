@@ -4,9 +4,7 @@ const requireProjectCapability = vi.fn();
 const requireWorkspaceCapability = vi.fn();
 const recordAudit = vi.fn();
 const loadProductContext = vi.fn();
-const generateStills = vi.fn();
-const generateVideo = vi.fn();
-const storagePut = vi.fn();
+const enqueueMediaJob = vi.fn();
 const storageDelete = vi.fn();
 
 const mediaCreate = vi.fn();
@@ -37,17 +35,17 @@ vi.mock("../server/product-context", async () => {
 });
 
 vi.mock("../server/media", () => ({
-  getMediaGenerator: () => ({
-    generateStills: (...args: unknown[]) => generateStills(...args),
-    generateVideo: (...args: unknown[]) => generateVideo(...args),
-  }),
   isMediaImageConfigured: () => true,
   isMediaVideoConfigured: () => false,
 }));
 
+vi.mock("../server/media-jobs/queue", () => ({
+  enqueueMediaJob: (...args: unknown[]) => enqueueMediaJob(...args),
+}));
+
 vi.mock("../server/storage", () => ({
   getObjectStorage: () => ({
-    put: (...args: unknown[]) => storagePut(...args),
+    put: vi.fn(),
     delete: (...args: unknown[]) => storageDelete(...args),
     get: vi.fn(),
     head: vi.fn(),
@@ -108,9 +106,7 @@ beforeEach(() => {
     },
     releaseId: "rel1",
   });
-  generateStills.mockReset();
-  generateVideo.mockReset();
-  storagePut.mockReset().mockResolvedValue({ sha256: "abc", sizeBytes: 10 });
+  enqueueMediaJob.mockReset().mockResolvedValue("queued");
   storageDelete.mockReset().mockResolvedValue(undefined);
   mediaCreate.mockReset().mockImplementation(({ data }: { data: Record<string, unknown> }) => ({
     id: "media1",
@@ -120,7 +116,9 @@ beforeEach(() => {
   mediaFindUnique.mockReset();
   mediaUpdate.mockReset();
   mediaDelete.mockReset().mockResolvedValue({});
-  jobCreate.mockReset().mockResolvedValue({ id: "job1", type: "GENERATE_STILLS" });
+  jobCreate
+    .mockReset()
+    .mockResolvedValue({ id: "job1", type: "GENERATE_STILLS", status: "PENDING" });
   jobUpdate.mockReset().mockResolvedValue({});
   siteFindUnique.mockReset();
   attachmentFindMany.mockReset().mockResolvedValue([]);
@@ -133,21 +131,7 @@ beforeEach(() => {
 });
 
 describe("media.generateStills", () => {
-  it("stores one grounded still per role and records the job", async () => {
-    generateStills.mockResolvedValue({
-      ok: true,
-      data: [
-        {
-          bytes: new Uint8Array([1, 2, 3]),
-          mimeType: "image/png",
-          width: 1024,
-          height: 576,
-          generator: "openai:gpt-image-2",
-          simulated: false,
-        },
-      ],
-    });
-
+  it("queues a PENDING job for the worker instead of generating inline", async () => {
     const caller = mediaRouter.createCaller({ user });
     const result = await caller.generateStills({
       projectId: "proj1",
@@ -156,27 +140,24 @@ describe("media.generateStills", () => {
       aspectRatio: "16:9",
     });
 
-    expect(result.media).toHaveLength(2);
-    expect(storagePut).toHaveBeenCalledTimes(2);
-    expect(storagePut.mock.calls[0]?.[0]).toBe("projects/proj1/media/job1/0-hero.png");
-
-    // The generator must see product facts, not just the user's art direction.
-    const prompt = generateStills.mock.calls[0]?.[0]?.prompt as string;
-    expect(prompt).toContain("Palm Rover");
-    expect(prompt).toContain("Runtime: 90 minutes");
-    expect(prompt).toContain("matte charcoal finish on a walnut desk");
-    expect(prompt).toContain("pre-production design concept");
-
-    expect(jobUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: "SUCCEEDED" }) }),
-    );
+    expect(result).toEqual({ jobId: "job1", status: "PENDING" });
+    expect(jobCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: "GENERATE_STILLS",
+        status: "PENDING",
+        projectId: "proj1",
+        releaseId: "rel1",
+      }),
+    });
+    expect(enqueueMediaJob).toHaveBeenCalledWith("job1");
+    expect(mediaCreate).not.toHaveBeenCalled();
     expect(recordAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "ProductMediaCreated" }),
+      expect.objectContaining({ type: "MediaJobStarted" }),
     );
   });
 
-  it("fails the job when every role fails", async () => {
-    generateStills.mockResolvedValue({ ok: false, error: "quota exceeded" });
+  it("fails the job row when the queue is unreachable", async () => {
+    enqueueMediaJob.mockRejectedValue(new Error("redis unavailable"));
 
     const caller = mediaRouter.createCaller({ user });
     await expect(
@@ -185,12 +166,32 @@ describe("media.generateStills", () => {
         prompt: "matte charcoal finish on a walnut desk",
         roles: ["HERO"],
       }),
-    ).rejects.toThrow(/quota exceeded/);
+    ).rejects.toThrow(/redis unavailable/);
 
-    expect(mediaCreate).not.toHaveBeenCalled();
     expect(jobUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) }),
     );
+    // A job nobody will run must not look started.
+    expect(recordAudit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "MediaJobStarted" }),
+    );
+  });
+});
+
+describe("media.generateVideo", () => {
+  it("rejects a seed that is not a still in this project", async () => {
+    mediaFindUnique.mockResolvedValue({ projectId: "other", kind: "STILL" });
+
+    const caller = mediaRouter.createCaller({ user });
+    await expect(
+      caller.generateVideo({
+        projectId: "proj1",
+        prompt: "slow orbit around the product",
+        seedMediaId: "media9",
+        durationSec: 6,
+      }),
+    ).rejects.toThrow(/Seed image not found/);
+    expect(enqueueMediaJob).not.toHaveBeenCalled();
   });
 });
 

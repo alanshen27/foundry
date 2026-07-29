@@ -120,7 +120,7 @@ export default async function StagePage({
         <>
           <SignalPageHeader
             code="Stage / 04"
-            title="Launch"
+            title={view === "renders" ? "Renders" : "Launch"}
             glyphSeed={`${project.id}-launch`}
             className="mb-6"
           />
@@ -131,6 +131,7 @@ export default async function StagePage({
             verifyApproved={verifyState?.status === "APPROVED"}
             canEditMedia={can("site.edit")}
             canApproveMedia={can("site.publish")}
+            view={view === "renders" ? "renders" : "releases"}
           />
         </>
       ) : null}

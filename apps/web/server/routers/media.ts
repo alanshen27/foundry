@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { prisma, type Prisma, type ProductMedia } from "@foundry/db";
+import { prisma, type MediaJobType, type Prisma, type ProductMedia } from "@foundry/db";
 import {
   canAttachToSlot,
   generateStillsInputSchema,
@@ -12,13 +12,13 @@ import {
   siteMediaSlotSchema,
   SITE_MEDIA_SLOT_LIMITS,
 } from "@foundry/domain";
-import { buildMediaPrompt } from "@foundry/media";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability, requireWorkspaceCapability } from "../access";
-import { getMediaGenerator, isMediaImageConfigured, isMediaVideoConfigured } from "../media";
+import { isMediaImageConfigured, isMediaVideoConfigured } from "../media";
+import { enqueueMediaJob } from "../media-jobs/queue";
 import { getObjectStorage } from "../storage";
-import { loadProductContext, toMediaPromptContext } from "../product-context";
+import { loadProductContext } from "../product-context";
 
 /** In-app preview URL. Auth-gated by the project file route. */
 function mediaUrl(key: string): string {
@@ -33,6 +33,56 @@ function withUrls(media: ProductMedia): MediaWithUrls {
     url: mediaUrl(media.storageKey),
     posterUrl: media.posterStorageKey ? mediaUrl(media.posterStorageKey) : null,
   };
+}
+
+/**
+ * Records a PENDING job and hands it to the worker. Generation itself never
+ * runs in the request: a still batch or a video takes minutes, and a platform
+ * timeout mid-call would abandon paid provider work with nothing to show.
+ */
+async function queueJob(params: {
+  type: MediaJobType;
+  workspaceId: string;
+  projectId: string;
+  releaseId: string | null;
+  actorId: string;
+  input: object;
+  auditPayload: Record<string, unknown>;
+}) {
+  const job = await prisma.mediaJob.create({
+    data: {
+      workspaceId: params.workspaceId,
+      projectId: params.projectId,
+      releaseId: params.releaseId,
+      type: params.type,
+      status: "PENDING",
+      input: params.input as Prisma.InputJsonValue,
+      createdById: params.actorId,
+    },
+  });
+
+  try {
+    await enqueueMediaJob(job.id);
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    await prisma.mediaJob.update({
+      where: { id: job.id },
+      data: { status: "FAILED", error, finishedAt: new Date() },
+    });
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `Could not queue media generation: ${error}`,
+    });
+  }
+
+  await recordAudit({
+    type: "MediaJobStarted",
+    workspaceId: params.workspaceId,
+    projectId: params.projectId,
+    actorId: params.actorId,
+    payload: { jobId: job.id, type: job.type, ...params.auditPayload },
+  });
+  return { jobId: job.id, status: job.status };
 }
 
 /** Loads media plus the workspace membership check for its project. */
@@ -77,259 +127,65 @@ export const mediaRouter = router({
       });
     }),
 
+  /** One queued job's state, for polling while generation runs. */
+  job: protectedProcedure.input(z.object({ jobId: z.string() })).query(async ({ ctx, input }) => {
+    const job = await prisma.mediaJob.findUnique({ where: { id: input.jobId } });
+    if (!job) throw new TRPCError({ code: "NOT_FOUND" });
+    await requireWorkspaceCapability(ctx.user.id, job.workspaceId, "project.read", job.projectId);
+    return job;
+  }),
+
   /**
-   * Generates one still per requested role. Each role gets its own grounded
-   * prompt so a batch produces a usable set (hero, detail, lifestyle) rather
-   * than six variations of the same framing.
+   * Queues one still per requested role. Each role gets its own grounded prompt
+   * so a batch produces a usable set (hero, detail, lifestyle) rather than six
+   * variations of the same framing.
    */
   generateStills: protectedProcedure
     .input(generateStillsInputSchema)
     .mutation(async ({ ctx, input }) => {
       const { project } = await requireProjectCapability(ctx.user.id, input.projectId, "site.edit");
-      const { context, releaseId } = await loadProductContext(input.projectId);
-      const promptContext = toMediaPromptContext(context);
-
-      const job = await prisma.mediaJob.create({
-        data: {
-          workspaceId: project.workspaceId,
-          projectId: project.id,
-          releaseId: input.releaseId ?? releaseId,
-          type: "GENERATE_STILLS",
-          status: "RUNNING",
-          input: input as unknown as Prisma.InputJsonValue,
-          createdById: ctx.user.id,
-          startedAt: new Date(),
-        },
-      });
-      await recordAudit({
-        type: "MediaJobStarted",
+      const { releaseId } = await loadProductContext(input.projectId);
+      return queueJob({
+        type: "GENERATE_STILLS",
         workspaceId: project.workspaceId,
         projectId: project.id,
+        releaseId: input.releaseId ?? releaseId,
         actorId: ctx.user.id,
-        payload: { jobId: job.id, type: job.type, roles: input.roles },
+        input,
+        auditPayload: { roles: input.roles },
       });
-
-      const generator = getMediaGenerator();
-      const storage = getObjectStorage();
-      const created: ProductMedia[] = [];
-      const failures: string[] = [];
-
-      for (const [index, role] of input.roles.entries()) {
-        const prompt = buildMediaPrompt({
-          context: promptContext,
-          role,
-          userPrompt: input.prompt,
-        });
-        const result = await generator.generateStills({
-          prompt,
-          count: 1,
-          aspectRatio: input.aspectRatio,
-        });
-        if (!result.ok) {
-          failures.push(`${role}: ${result.error}`);
-          continue;
-        }
-        const still = result.data[0];
-        if (!still) {
-          failures.push(`${role}: generator returned no image`);
-          continue;
-        }
-
-        const key = productMediaKey({
-          projectId: project.id,
-          batchId: job.id,
-          filename: `${index}-${role.toLowerCase()}.${mediaExtension(still.mimeType)}`,
-        });
-        const stored = await storage.put(key, still.bytes, still.mimeType);
-
-        const media = await prisma.productMedia.create({
-          data: {
-            workspaceId: project.workspaceId,
-            projectId: project.id,
-            releaseId: input.releaseId ?? releaseId,
-            kind: "STILL",
-            role,
-            source: "AI_IMAGE",
-            storageKey: key,
-            mimeType: still.mimeType,
-            sha256: stored.sha256,
-            sizeBytes: stored.sizeBytes,
-            width: still.width,
-            height: still.height,
-            prompt,
-            generator: still.generator,
-            simulated: still.simulated,
-            jobId: job.id,
-            createdById: ctx.user.id,
-          },
-        });
-        created.push(media);
-        await recordAudit({
-          type: "ProductMediaCreated",
-          workspaceId: project.workspaceId,
-          projectId: project.id,
-          actorId: ctx.user.id,
-          payload: { mediaId: media.id, role, simulated: media.simulated, jobId: job.id },
-        });
-      }
-
-      const status = created.length > 0 ? "SUCCEEDED" : "FAILED";
-      await prisma.mediaJob.update({
-        where: { id: job.id },
-        data: {
-          status,
-          error: failures.length ? failures.join("; ") : null,
-          finishedAt: new Date(),
-        },
-      });
-      await recordAudit({
-        type: "MediaJobFinished",
-        workspaceId: project.workspaceId,
-        projectId: project.id,
-        actorId: ctx.user.id,
-        payload: { jobId: job.id, status, created: created.length, failures },
-      });
-
-      if (created.length === 0) {
-        throw new TRPCError({
-          code: "BAD_GATEWAY",
-          message: failures.join("; ") || "Image generation failed",
-        });
-      }
-      return {
-        jobId: job.id,
-        media: created.map(withUrls),
-        partialFailures: failures,
-      };
     }),
 
   /**
-   * Generates a short product video, optionally seeded by an existing still so
-   * the footage matches an already-approved render.
+   * Queues a short product video, optionally seeded by an existing still so the
+   * footage matches an already-approved render.
    */
   generateVideo: protectedProcedure
     .input(generateVideoInputSchema)
     .mutation(async ({ ctx, input }) => {
       const { project } = await requireProjectCapability(ctx.user.id, input.projectId, "site.edit");
-      const { context, releaseId } = await loadProductContext(input.projectId);
-
-      let seedImage: { bytes: Uint8Array; mimeType: string } | undefined;
-      let seedKey: string | null = null;
       if (input.seedMediaId) {
-        const seed = await prisma.productMedia.findUnique({ where: { id: input.seedMediaId } });
+        const seed = await prisma.productMedia.findUnique({
+          where: { id: input.seedMediaId },
+          select: { projectId: true, kind: true },
+        });
         if (!seed || seed.projectId !== project.id) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Seed image not found" });
         }
         if (seed.kind !== "STILL") {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Seed media must be a still" });
         }
-        const object = await getObjectStorage().get(seed.storageKey);
-        if (!object) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Seed image bytes are missing" });
-        }
-        seedImage = { bytes: object.body, mimeType: object.contentType };
-        seedKey = seed.storageKey;
       }
-
-      const job = await prisma.mediaJob.create({
-        data: {
-          workspaceId: project.workspaceId,
-          projectId: project.id,
-          releaseId: input.releaseId ?? releaseId,
-          type: "GENERATE_VIDEO",
-          status: "RUNNING",
-          input: input as unknown as Prisma.InputJsonValue,
-          createdById: ctx.user.id,
-          startedAt: new Date(),
-        },
-      });
-      await recordAudit({
-        type: "MediaJobStarted",
+      const { releaseId } = await loadProductContext(input.projectId);
+      return queueJob({
+        type: "GENERATE_VIDEO",
         workspaceId: project.workspaceId,
         projectId: project.id,
+        releaseId: input.releaseId ?? releaseId,
         actorId: ctx.user.id,
-        payload: { jobId: job.id, type: job.type, durationSec: input.durationSec },
+        input,
+        auditPayload: { durationSec: input.durationSec },
       });
-
-      const prompt = buildMediaPrompt({
-        context: toMediaPromptContext(context),
-        role: "HERO",
-        userPrompt: input.prompt,
-        motion: true,
-      });
-      const result = await getMediaGenerator().generateVideo({
-        prompt,
-        durationSec: input.durationSec,
-        seedImage,
-      });
-
-      if (!result.ok) {
-        await prisma.mediaJob.update({
-          where: { id: job.id },
-          data: { status: "FAILED", error: result.error, finishedAt: new Date() },
-        });
-        await recordAudit({
-          type: "MediaJobFinished",
-          workspaceId: project.workspaceId,
-          projectId: project.id,
-          actorId: ctx.user.id,
-          payload: { jobId: job.id, status: "FAILED", error: result.error },
-        });
-        throw new TRPCError({ code: "BAD_GATEWAY", message: result.error });
-      }
-
-      const video = result.data;
-      const key = productMediaKey({
-        projectId: project.id,
-        batchId: job.id,
-        filename: `video.${mediaExtension(video.mimeType)}`,
-      });
-      const stored = await getObjectStorage().put(key, video.bytes, video.mimeType);
-
-      let posterKey = seedKey;
-      if (!posterKey && video.poster) {
-        posterKey = productMediaKey({
-          projectId: project.id,
-          batchId: job.id,
-          filename: `poster.${mediaExtension(video.poster.mimeType)}`,
-        });
-        await getObjectStorage().put(posterKey, video.poster.bytes, video.poster.mimeType);
-      }
-
-      const media = await prisma.productMedia.create({
-        data: {
-          workspaceId: project.workspaceId,
-          projectId: project.id,
-          releaseId: input.releaseId ?? releaseId,
-          kind: "VIDEO",
-          role: "HERO",
-          source: "AI_VIDEO",
-          storageKey: key,
-          mimeType: video.mimeType,
-          sha256: stored.sha256,
-          sizeBytes: stored.sizeBytes,
-          durationMs: video.durationMs,
-          posterStorageKey: posterKey,
-          prompt,
-          generator: video.generator,
-          simulated: video.simulated,
-          jobId: job.id,
-          createdById: ctx.user.id,
-        },
-      });
-
-      await prisma.mediaJob.update({
-        where: { id: job.id },
-        data: { status: "SUCCEEDED", finishedAt: new Date() },
-      });
-      await recordAudit({
-        type: "ProductMediaCreated",
-        workspaceId: project.workspaceId,
-        projectId: project.id,
-        actorId: ctx.user.id,
-        payload: { mediaId: media.id, kind: "VIDEO", simulated: media.simulated, jobId: job.id },
-      });
-      return { jobId: job.id, media: withUrls(media) };
     }),
 
   /**

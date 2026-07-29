@@ -8,6 +8,7 @@ import {
   ChevronsUpDown,
   Combine,
   FolderGit2,
+  Images,
   LayoutDashboard,
   Lightbulb,
   PanelRightClose,
@@ -176,6 +177,13 @@ function processSteps(base: string): ProcessStep[] {
     },
     { key: "verify", label: "Verify", icon: ShieldCheck, href: `${base}/verify`, stage: "VERIFY" },
     { key: "launch", label: "Launch", icon: Rocket, href: `${base}/launch`, stage: "LAUNCH" },
+    {
+      key: "renders",
+      label: "Renders",
+      icon: Images,
+      href: `${base}/launch?view=renders`,
+      stage: "LAUNCH",
+    },
   ];
 }
 
@@ -204,7 +212,11 @@ function ProcessFooter({
               ? onPath && viewParam === "code"
               : step.key === "engineer"
                 ? onPath && viewParam !== "code"
-                : onPath;
+                : step.key === "renders"
+                  ? onPath && viewParam === "renders"
+                  : step.key === "launch"
+                    ? onPath && viewParam !== "renders"
+                    : onPath;
           const status = step.stage ? (stageStatuses[step.stage] ?? "NOT_STARTED") : null;
           const Icon = step.icon;
           const phase = step.stage ? STAGE_THEME[step.stage] : null;

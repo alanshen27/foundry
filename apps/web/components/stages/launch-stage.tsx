@@ -13,6 +13,8 @@ import { MediaLibrary } from "@/components/media/media-library";
 import { trpc } from "@/lib/trpc";
 import { formatCents } from "@/lib/format";
 
+export type LaunchView = "releases" | "renders";
+
 type Props = {
   projectId: string;
   branchId: string;
@@ -22,6 +24,7 @@ type Props = {
   canEditMedia: boolean;
   /** site.publish — approve media for storefront use. */
   canApproveMedia: boolean;
+  view?: LaunchView;
 };
 
 type SnapshotSummary = {
@@ -41,7 +44,44 @@ export function LaunchStage({
   verifyApproved,
   canEditMedia,
   canApproveMedia,
+  view = "releases",
 }: Props) {
+  if (view === "renders") {
+    return (
+      <div className="flex flex-col gap-4">
+        <div>
+          <h2 className="text-base font-semibold tracking-tight">Renders</h2>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Product stills and video for the storefront. Marketing assets only — approving one
+            allows it on a site, not as engineering evidence.
+          </p>
+        </div>
+        <MediaLibrary projectId={projectId} canEdit={canEditMedia} canApprove={canApproveMedia} />
+      </div>
+    );
+  }
+
+  return (
+    <LaunchReleases
+      projectId={projectId}
+      branchId={branchId}
+      canCreate={canCreate}
+      verifyApproved={verifyApproved}
+    />
+  );
+}
+
+function LaunchReleases({
+  projectId,
+  branchId,
+  canCreate,
+  verifyApproved,
+}: {
+  projectId: string;
+  branchId: string;
+  canCreate: boolean;
+  verifyApproved: boolean;
+}) {
   const router = useRouter();
   const list = trpc.launch.listReleases.useQuery({ projectId, branchId });
   const utils = trpc.useUtils();
@@ -237,19 +277,6 @@ export function LaunchStage({
               })}
             </ul>
           )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Marketing media</CardTitle>
-          <p className="text-muted-foreground text-sm">
-            Renders and product video for the storefront. These are marketing assets, not
-            verification evidence — approving one only allows it on a site.
-          </p>
-        </CardHeader>
-        <CardContent>
-          <MediaLibrary projectId={projectId} canEdit={canEditMedia} canApprove={canApproveMedia} />
         </CardContent>
       </Card>
     </div>

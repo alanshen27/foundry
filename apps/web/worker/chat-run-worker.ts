@@ -3,6 +3,9 @@
  * them independently of any browser HTTP connection. Stream chunks are
  * persisted and broadcast so every connected client can subscribe.
  *
+ * Also drains the media-generation queue, which shares this process so a
+ * deployment needs one background service rather than two.
+ *
  * Run alongside the web app: pnpm worker:chat
  */
 import { config } from "dotenv";
@@ -16,6 +19,8 @@ import { getServerEnv } from "@foundry/config";
 import { executeChatRun, HEARTBEAT_STALE_MS } from "../server/chat-run/execute";
 import { Worker, type Job } from "bullmq";
 import { getRedisConnection, CHAT_RUN_QUEUE_NAME } from "../server/chat-run/queue";
+import { executeMediaJob, reclaimMediaJobs } from "../server/media-jobs/execute";
+import { enqueueMediaJob, MEDIA_JOB_QUEUE_NAME } from "../server/media-jobs/queue";
 
 function isPrismaDisconnect(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -121,6 +126,51 @@ worker.on("ready", () => {
   console.log(`[chat-worker] ready on queue "${CHAT_RUN_QUEUE_NAME}"`);
 });
 
+/**
+ * Media generation: low concurrency because each job is a long, billed provider
+ * call, and a long lock because a still batch or video can run for minutes.
+ */
+const mediaWorker = new Worker(
+  MEDIA_JOB_QUEUE_NAME,
+  async (job: Job<{ jobId: string }>) => {
+    const { jobId } = job.data;
+    console.log(`[media-worker] job ${jobId}`);
+    const result = await executeMediaJob(jobId);
+    if (result.status === "failed") {
+      // Recorded on the MediaJob row for the UI; do not retry a billed call.
+      console.error(`[media-worker] job ${jobId} failed: ${result.error}`);
+      return;
+    }
+    console.log(`[media-worker] job ${jobId} ${result.status}`);
+  },
+  {
+    connection,
+    concurrency: 2,
+    lockDuration: 10 * 60_000,
+    stalledInterval: 60_000,
+    maxStalledCount: 1,
+  },
+);
+
+mediaWorker.on("ready", () => {
+  console.log(`[media-worker] ready on queue "${MEDIA_JOB_QUEUE_NAME}"`);
+});
+
+mediaWorker.on("error", (err) => {
+  console.error("[media-worker] queue error", err);
+});
+
+const mediaReclaimTimer = setInterval(() => {
+  void reclaimMediaJobs(enqueueMediaJob)
+    .then(({ requeued, failed }) => {
+      if (requeued || failed) {
+        console.warn(`[media-worker] reclaimed ${requeued} pending, failed ${failed} stale`);
+      }
+    })
+    .catch((err) => console.error("[media-worker] reclaim loop failed", err));
+}, 30_000);
+mediaReclaimTimer.unref?.();
+
 worker.on("error", (err) => {
   console.error("[chat-worker] queue error", err);
 });
@@ -195,10 +245,16 @@ reclaimTimer.unref?.();
 async function shutdown(signal: string) {
   console.log(`[chat-worker] ${signal} — closing worker`);
   clearInterval(reclaimTimer);
+  clearInterval(mediaReclaimTimer);
   try {
     await worker.close();
   } catch (err) {
     console.error("[chat-worker] close failed", err);
+  }
+  try {
+    await mediaWorker.close();
+  } catch (err) {
+    console.error("[media-worker] close failed", err);
   }
   try {
     await connection.quit();
