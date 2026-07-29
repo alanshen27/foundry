@@ -8,7 +8,7 @@ import { SignalPageHeader } from "@/components/signal-page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { STAGE_THEME } from "@/lib/stage-theme";
 import { cn } from "@/lib/utils";
-import { PipelineKickoff } from "./pipeline-kickoff";
+import { PipelineKickoffListener } from "./pipeline-kickoff";
 
 const STAGE_ICONS: Record<Stage, typeof Lightbulb> = {
   IDEATE: Lightbulb,
@@ -81,7 +81,7 @@ export default async function ProjectOverviewPage({
         glyphSeed={project.id}
       />
 
-      <PipelineKickoff hasBrief={Boolean(brief?.prompt || brief?.intendedUse)} />
+      <PipelineKickoffListener hasBrief={Boolean(brief?.prompt || brief?.intendedUse)} />
 
       <Link
         href={`${base}/engineer`}
