@@ -12,6 +12,8 @@ import { cn } from "@/lib/utils";
  */
 export function DemoIntro({ initialText = "Foundry" }: { initialText?: string }) {
   const [shown, setShown] = useState(false);
+  const [text, setText] = useState(initialText);
+  const showIcon = /foundry/i.test(text);
 
   useEffect(() => {
     const t = setTimeout(() => setShown(true), 500);
@@ -29,7 +31,7 @@ export function DemoIntro({ initialText = "Foundry" }: { initialText?: string })
           cols={96}
           fontSize={15}
           fill
-          className="size-full opacity-95"
+          className="size-full opacity-35"
         />
       </div>
 
@@ -40,15 +42,18 @@ export function DemoIntro({ initialText = "Foundry" }: { initialText?: string })
             shown ? "scale-100 opacity-100 blur-0" : "scale-95 opacity-0 blur-sm",
           )}
         >
-          <span className="inline-grid grid-cols-3 gap-[5px]" aria-hidden>
-            {Array.from({ length: 9 }, (_, i) => (
-              <span key={i} className="size-[9px] bg-[#faf9f5] md:size-[11px]" />
-            ))}
-          </span>
+          {showIcon ? (
+            <span className="inline-grid grid-cols-3 gap-[5px]" aria-hidden>
+              {Array.from({ length: 9 }, (_, i) => (
+                <span key={i} className="size-[9px] bg-[#faf9f5] md:size-[11px]" />
+              ))}
+            </span>
+          ) : null}
           <span
             contentEditable
             suppressContentEditableWarning
             spellCheck={false}
+            onInput={(e) => setText(e.currentTarget.textContent ?? "")}
             className="font-mono text-5xl font-medium tracking-[0.2em] whitespace-pre uppercase outline-none md:text-6xl"
           >
             {initialText}
