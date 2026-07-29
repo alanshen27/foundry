@@ -19,7 +19,11 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Puzzle,
+  Redo2,
+  Ruler,
   SlidersHorizontal,
+  Undo2,
+  Upload,
 } from "lucide-react";
 import { cadCursorSurface, normalizedCursorCoordinate, type CursorState } from "@foundry/realtime";
 import { Button } from "@/components/ui/button";
@@ -28,6 +32,7 @@ import {
   addCadComponent,
   displayNameFromCadPath,
   getActiveComponent,
+  importMeshAsPart,
   normalizeCadDoc,
   setActiveComponent,
   updateComponentContent,
@@ -35,9 +40,17 @@ import {
   type CadComponentKind,
   type CadDoc,
 } from "@/lib/cad/engine";
+import {
+  parseCadFeatureFields,
+  parseCadFeatures,
+  setCadFeatureField,
+  type CadFeature,
+  type CadFeatureField,
+} from "@/lib/cad/features";
 import { parseCadParams, setCadParam, type CadParam } from "@/lib/cad/params";
 import { cadViewportInput } from "@/lib/cad/viewport-project";
 import { CadViewport } from "@/components/engineer/cad-viewport";
+import { CadFeatureTimeline } from "@/components/engineer/cad-feature-timeline";
 import { CadToolsPanel } from "@/components/engineer/cad-tools-panel";
 import { useTheme } from "@/components/theme-provider";
 import { defineFoundryMonacoThemes } from "@/lib/monaco-theme";
@@ -46,14 +59,34 @@ import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { useCursors } from "@/lib/use-cursors";
 
+type CadMeasurement = {
+  unit: "mm";
+  center: { x: number; y: number; z: number };
+  dimensions: { x: number; y: number; z: number };
+};
+
 function ParamsPanel({
   params,
+  inlineFields,
+  feature,
+  measurement,
+  measuring,
+  measureError,
   canEdit,
   onSet,
+  onSetInline,
+  onMeasure,
 }: {
   params: CadParam[];
+  inlineFields: CadFeatureField[];
+  feature: CadFeature | null;
+  measurement?: CadMeasurement;
+  measuring: boolean;
+  measureError?: string;
   canEdit: boolean;
   onSet: (name: string, value: number | boolean | string) => void;
+  onSetInline: (field: CadFeatureField, value: number) => void;
+  onMeasure: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -65,51 +98,144 @@ function ParamsPanel({
         className="flex w-full items-center gap-2 px-3 py-2"
       >
         <SlidersHorizontal className="text-primary size-3.5" />
-        <span className="text-xs font-semibold">Parameters</span>
-        <span className="text-muted-foreground ml-auto text-[10px]">{params.length}</span>
+        <span className="text-xs font-semibold">Inspector</span>
+        <span className="text-muted-foreground ml-auto text-[10px]">
+          {feature?.operation ?? "part"}
+        </span>
         {collapsed ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
       </button>
       {!collapsed ? (
-        <div className="flex max-h-[50vh] flex-col gap-1.5 overflow-y-auto border-t px-3 py-2.5">
-          {params.map((param) => (
-            <label key={param.name} className="flex items-center gap-2 text-xs">
-              <span className="text-muted-foreground min-w-0 flex-1 truncate" title={param.name}>
-                {param.name}
-              </span>
-              {typeof param.value === "boolean" ? (
-                <input
-                  type="checkbox"
-                  checked={param.value}
-                  disabled={!canEdit}
-                  onChange={(e) => onSet(param.name, e.target.checked)}
-                  className="accent-primary size-3.5"
-                />
-              ) : typeof param.value === "number" ? (
-                <input
-                  type="number"
-                  value={param.value}
-                  disabled={!canEdit}
-                  step={Number.isInteger(param.value) ? 1 : 0.1}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    if (Number.isFinite(n)) onSet(param.name, n);
-                  }}
-                  className={cn(
-                    "bg-background w-20 rounded-none border px-1.5 py-0.5 text-right font-mono text-xs outline-none",
-                    "focus:border-ring",
-                  )}
-                />
-              ) : (
-                <input
-                  type="text"
-                  value={param.value}
-                  disabled={!canEdit}
-                  onChange={(e) => onSet(param.name, e.target.value)}
-                  className="bg-background w-24 rounded-none border px-1.5 py-0.5 font-mono text-xs outline-none focus:border-ring"
-                />
-              )}
-            </label>
-          ))}
+        <div className="max-h-[62vh] overflow-y-auto border-t">
+          {feature ? (
+            <div className="border-b px-3 py-2.5">
+              <p className="truncate text-xs font-medium" title={feature.label}>
+                {feature.label}
+              </p>
+              <p className="text-muted-foreground mt-1 flex justify-between font-mono text-[10px]">
+                <span>{feature.kind}</span>
+                <span>
+                  L{feature.lineStart}–{feature.lineEnd}
+                </span>
+              </p>
+            </div>
+          ) : null}
+
+          <div className="flex flex-col gap-1.5 px-3 py-2.5">
+            <p className="text-muted-foreground mb-0.5 text-[10px] font-medium tracking-wide uppercase">
+              {feature ? "Feature parameters" : "Part parameters"}
+            </p>
+            {params.length === 0 && inlineFields.length === 0 ? (
+              <p className="text-muted-foreground text-[11px] leading-relaxed">
+                {feature
+                  ? "This feature has no exposed top-level parameters. Open code for advanced edits."
+                  : "No editable top-level parameters were found."}
+              </p>
+            ) : (
+              <>
+                {params.map((param) => (
+                  <label key={param.name} className="flex items-center gap-2 text-xs">
+                    <span
+                      className="text-muted-foreground min-w-0 flex-1 truncate"
+                      title={param.name}
+                    >
+                      {param.name}
+                    </span>
+                    {typeof param.value === "boolean" ? (
+                      <input
+                        type="checkbox"
+                        checked={param.value}
+                        disabled={!canEdit}
+                        onChange={(e) => onSet(param.name, e.target.checked)}
+                        className="accent-primary size-3.5"
+                      />
+                    ) : typeof param.value === "number" ? (
+                      <input
+                        type="number"
+                        value={param.value}
+                        disabled={!canEdit}
+                        step={Number.isInteger(param.value) ? 1 : 0.1}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          if (Number.isFinite(n)) onSet(param.name, n);
+                        }}
+                        className={cn(
+                          "bg-background w-20 rounded-none border px-1.5 py-0.5 text-right font-mono text-xs outline-none",
+                          "focus:border-ring",
+                        )}
+                      />
+                    ) : (
+                      <input
+                        type="text"
+                        value={param.value}
+                        disabled={!canEdit}
+                        onChange={(e) => onSet(param.name, e.target.value)}
+                        className="bg-background w-24 rounded-none border px-1.5 py-0.5 font-mono text-xs outline-none focus:border-ring"
+                      />
+                    )}
+                  </label>
+                ))}
+                {inlineFields.map((field) => (
+                  <label key={field.id} className="flex items-center gap-2 text-xs">
+                    <span
+                      className="text-muted-foreground min-w-0 flex-1 truncate"
+                      title={field.name}
+                    >
+                      {field.name}
+                    </span>
+                    <span className="relative">
+                      <input
+                        type="number"
+                        value={field.value}
+                        disabled={!canEdit}
+                        step={Number.isInteger(field.value) ? 1 : 0.1}
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          if (Number.isFinite(value)) onSetInline(field, value);
+                        }}
+                        className={cn(
+                          "bg-background w-20 rounded-none border px-1.5 py-0.5 text-right font-mono text-xs outline-none",
+                          field.unit && "pr-7",
+                          "focus:border-ring",
+                        )}
+                      />
+                      {field.unit ? (
+                        <span className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 font-mono text-[9px]">
+                          {field.unit}
+                        </span>
+                      ) : null}
+                    </span>
+                  </label>
+                ))}
+              </>
+            )}
+          </div>
+
+          <div className="border-t px-3 py-2.5">
+            <button
+              type="button"
+              onClick={onMeasure}
+              disabled={measuring}
+              className="hover:bg-muted flex w-full items-center justify-center gap-1.5 rounded-none border px-2 py-1.5 text-[11px] font-medium disabled:opacity-60"
+            >
+              <Ruler className="size-3.5" />
+              {measuring ? "Measuring with Zoo…" : "Measure overall"}
+            </button>
+            {measurement ? (
+              <div className="mt-2 grid grid-cols-3 gap-1">
+                {(["x", "y", "z"] as const).map((axis) => (
+                  <div key={axis} className="bg-muted/50 px-1.5 py-1 text-center">
+                    <p className="text-muted-foreground text-[9px] uppercase">{axis}</p>
+                    <p className="font-mono text-[10px]">
+                      {measurement.dimensions[axis].toFixed(2)} {measurement.unit}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {measureError ? (
+              <p className="text-destructive mt-2 text-[10px] leading-relaxed">{measureError}</p>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>
@@ -261,6 +387,86 @@ function CadCursorOverlay({
   return <CadCursorLayer peers={cursors.peers} />;
 }
 
+type CadImportUnit = "mm" | "cm" | "m" | "in" | "ft" | "yd";
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read file"));
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function ImportCadPanel({
+  file,
+  unit,
+  importing,
+  error,
+  onUnitChange,
+  onCancel,
+  onImport,
+}: {
+  file: File;
+  unit: CadImportUnit;
+  importing: boolean;
+  error: string | null;
+  onUnitChange: (unit: CadImportUnit) => void;
+  onCancel: () => void;
+  onImport: () => void;
+}) {
+  return (
+    <div className="bg-background/65 absolute inset-0 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+      <div className="bg-card w-full max-w-sm rounded-none border shadow-xl">
+        <div className="border-b px-4 py-3">
+          <p className="text-sm font-semibold">Import CAD resource</p>
+          <p className="text-muted-foreground mt-1 truncate font-mono text-[11px]">{file.name}</p>
+        </div>
+        <div className="space-y-3 px-4 py-3">
+          <div className="bg-muted/50 flex justify-between px-2.5 py-2 text-xs">
+            <span className="text-muted-foreground">Size</span>
+            <span className="font-mono">{(file.size / 1_048_576).toFixed(2)} MB</span>
+          </div>
+          <label className="block text-xs">
+            <span className="text-muted-foreground mb-1.5 block">
+              Source units for unitless mesh formats
+            </span>
+            <select
+              value={unit}
+              onChange={(event) => onUnitChange(event.target.value as CadImportUnit)}
+              className="border-input bg-background h-9 w-full rounded-none border px-2 text-xs outline-none focus:border-ring"
+            >
+              <option value="mm">Millimeters</option>
+              <option value="cm">Centimeters</option>
+              <option value="m">Meters</option>
+              <option value="in">Inches</option>
+              <option value="ft">Feet</option>
+              <option value="yd">Yards</option>
+            </select>
+          </label>
+          <p className="text-muted-foreground text-[10px] leading-relaxed">
+            STEP/STP keeps its authored scale. STL, OBJ, and PLY are unitless and use this setting.
+            Imported geometry is labeled UNVERIFIED until inspected.
+          </p>
+          {error ? <p className="text-destructive text-[11px]">{error}</p> : null}
+        </div>
+        <div className="flex justify-end gap-2 border-t px-4 py-3">
+          <Button variant="outline" size="sm" onClick={onCancel} disabled={importing}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={onImport} disabled={importing}>
+            {importing ? "Importing…" : "Import"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ModelEditor({
   projectId,
   branchId,
@@ -301,22 +507,40 @@ export function ModelEditor({
   );
   const viewer = trpc.project.viewer.useQuery();
   const save = trpc.design.save.useMutation();
+  const importMesh = trpc.cad.importMesh.useMutation();
 
   const [doc, setDoc] = useState<CadDoc | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [showTree, setShowTree] = useState(true);
   const [showCode, setShowCode] = useState(false);
   const [execError, setExecError] = useState<string | null>(null);
+  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
+  const [pendingImport, setPendingImport] = useState<File | null>(null);
+  const [importUnit, setImportUnit] = useState<CadImportUnit>("mm");
+  const [importError, setImportError] = useState<string | null>(null);
   const [syncingAfterLock, setSyncingAfterLock] = useState(false);
+  const [, setHistoryVersion] = useState(0);
   const dirtyRef = useRef(false);
   const migratedRef = useRef(false);
   const sawLockRef = useRef(false);
   const appliedUpdatedAtRef = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const historyRef = useRef<{
+    past: CadDoc[];
+    future: CadDoc[];
+    lastRecordedAt: number;
+    lastComponentId: string | null;
+  }>({ past: [], future: [], lastRecordedAt: 0, lastComponentId: null });
   const saveRef = useRef(save);
   saveRef.current = save;
   const locked = Boolean(aiLock.data);
   const editable = canEdit && !locked && !syncingAfterLock;
+
+  const measurement = trpc.cad.measure.useQuery(
+    { projectId, branchId, componentId: activeId ?? "" },
+    { enabled: false, retry: false },
+  );
 
   useEffect(() => {
     if (!query.isFetched) return;
@@ -364,6 +588,13 @@ export function ModelEditor({
       setSyncingAfterLock(true);
       if (saveTimer.current) clearTimeout(saveTimer.current);
       dirtyRef.current = false;
+      historyRef.current = {
+        past: [],
+        future: [],
+        lastRecordedAt: 0,
+        lastComponentId: null,
+      };
+      setHistoryVersion((version) => version + 1);
       return;
     }
     if (!sawLockRef.current) return;
@@ -373,18 +604,47 @@ export function ModelEditor({
     });
   }, [locked, query.refetch]);
 
-  function persist(next: CadDoc) {
-    setDoc(next);
+  function persist(
+    next: CadDoc,
+    options: {
+      recordHistory?: boolean;
+      checkpoint?: boolean;
+      activeIdOverride?: string;
+    } = {},
+  ) {
+    const nextActiveId =
+      options.activeIdOverride ??
+      (activeId && next.components.some((component) => component.id === activeId)
+        ? activeId
+        : next.activeId);
+    const normalizedNext = setActiveComponent(next, nextActiveId);
+
+    if (doc && options.recordHistory !== false) {
+      const history = historyRef.current;
+      const now = Date.now();
+      const shouldCheckpoint =
+        options.checkpoint ||
+        history.lastComponentId !== nextActiveId ||
+        now - history.lastRecordedAt > 800;
+      if (shouldCheckpoint) {
+        history.past = [...history.past.slice(-49), doc];
+      }
+      history.future = [];
+      history.lastRecordedAt = now;
+      history.lastComponentId = nextActiveId;
+      setHistoryVersion((version) => version + 1);
+    }
+
+    setDoc(normalizedNext);
     dirtyRef.current = true;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const toSave = activeId ? setActiveComponent(next, activeId) : next;
       saveRef.current.mutate(
         {
           projectId,
           branchId,
           kind: "MODEL3D",
-          data: toSave,
+          data: normalizedNext,
         },
         {
           onSuccess: (saved) => {
@@ -404,6 +664,7 @@ export function ModelEditor({
       onOpenComponent({ id: c.id, name: c.name });
       return;
     }
+    setSelectedFeatureId(null);
     setActiveId(id);
   }
 
@@ -413,15 +674,81 @@ export function ModelEditor({
     const n = doc.components.filter((c) => c.kind === kind).length + 1;
     const next = addCadComponent(doc, { name: `${base}-${n}`, kind });
     setActiveId(next.activeId);
-    persist(next);
+    setSelectedFeatureId(null);
+    persist(next, { checkpoint: true, activeIdOverride: next.activeId });
   }
 
-  function onChangeContent(next: string | undefined) {
+  function onChangeContent(next: string | undefined, checkpoint = false) {
     if (!editable || !doc || !activeId || next === undefined) return;
     const current = doc.components.find((c) => c.id === activeId);
     if (!current) return;
     if ((current.kind === "part" || current.kind === "assembly") && !next.trim()) return;
-    persist(updateComponentContent(doc, activeId, next));
+    persist(updateComponentContent(doc, activeId, next), { checkpoint });
+  }
+
+  function undo() {
+    if (!editable || !doc) return;
+    const history = historyRef.current;
+    const previous = history.past.at(-1);
+    if (!previous) return;
+    history.past = history.past.slice(0, -1);
+    history.future = [...history.future, doc].slice(-50);
+    history.lastRecordedAt = 0;
+    history.lastComponentId = null;
+    setHistoryVersion((version) => version + 1);
+    setActiveId(previous.activeId);
+    setSelectedFeatureId(null);
+    persist(previous, {
+      recordHistory: false,
+      checkpoint: true,
+      activeIdOverride: previous.activeId,
+    });
+  }
+
+  function redo() {
+    if (!editable || !doc) return;
+    const history = historyRef.current;
+    const next = history.future.at(-1);
+    if (!next) return;
+    history.future = history.future.slice(0, -1);
+    history.past = [...history.past, doc].slice(-50);
+    history.lastRecordedAt = 0;
+    history.lastComponentId = null;
+    setHistoryVersion((version) => version + 1);
+    setActiveId(next.activeId);
+    setSelectedFeatureId(null);
+    persist(next, {
+      recordHistory: false,
+      checkpoint: true,
+      activeIdOverride: next.activeId,
+    });
+  }
+
+  async function confirmImport() {
+    if (!pendingImport || !doc || !editable) return;
+    setImportError(null);
+    if (pendingImport.size > 10_000_000) {
+      setImportError("File exceeds the 10 MB CAD import limit.");
+      return;
+    }
+    try {
+      const contentBase64 = await fileToBase64(pendingImport);
+      const result = await importMesh.mutateAsync({
+        projectId,
+        branchId,
+        filename: pendingImport.name,
+        contentBase64,
+        lengthUnit: importUnit,
+      });
+      const next = importMeshAsPart(doc, result.asset);
+      setActiveId(next.activeId);
+      setSelectedFeatureId(null);
+      persist(next, { checkpoint: true, activeIdOverride: next.activeId });
+      setPendingImport(null);
+      if (importInputRef.current) importInputRef.current.value = "";
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "CAD import failed");
+    }
   }
 
   const viewDoc: CadDoc | null = useMemo(
@@ -460,6 +787,19 @@ export function ModelEditor({
     () => (isKcl && active ? parseCadParams(active.content) : []),
     [isKcl, active?.content],
   );
+  const features = useMemo(
+    () => (isKcl && active ? parseCadFeatures(active.content) : []),
+    [isKcl, active?.content],
+  );
+  const selectedFeature = features.find((feature) => feature.id === selectedFeatureId) ?? null;
+  const visibleParams = selectedFeature
+    ? params.filter((param) => selectedFeature.parameterNames.includes(param.name))
+    : params;
+  const inlineFields = selectedFeature ? parseCadFeatureFields(selectedFeature) : [];
+  const targetSolid =
+    selectedFeature?.isSolid && selectedFeature.kind !== "import" ? selectedFeature.binding : null;
+  const canUndo = historyRef.current.past.length > 0;
+  const canRedo = historyRef.current.future.length > 0;
 
   if (doc === null || engine.isLoading) {
     return <DotMatrixLoader className="absolute inset-0" label="Loading CAD" />;
@@ -513,7 +853,7 @@ export function ModelEditor({
               theme={monacoTheme}
               beforeMount={defineFoundryMonacoThemes}
               value={active?.content ?? ""}
-              onChange={onChangeContent}
+              onChange={(value) => onChangeContent(value)}
               options={{
                 readOnly: !editable,
                 minimap: { enabled: false },
@@ -548,11 +888,23 @@ export function ModelEditor({
           <InstructionsPreview content={active.content} />
         ) : (
           <>
-            {params.length > 0 && active ? (
+            {active && isKcl ? (
               <ParamsPanel
-                params={params}
+                params={visibleParams}
+                inlineFields={inlineFields}
+                feature={selectedFeature}
+                measurement={measurement.data}
+                measuring={measurement.isFetching}
+                measureError={measurement.error?.message}
                 canEdit={editable}
                 onSet={(name, value) => onChangeContent(setCadParam(active.content, name, value))}
+                onSetInline={(field, value) => {
+                  if (!selectedFeature) return;
+                  onChangeContent(
+                    setCadFeatureField(active.content, selectedFeature, field, value),
+                  );
+                }}
+                onMeasure={() => void measurement.refetch()}
               />
             ) : null}
             {viewport ? (
@@ -569,8 +921,18 @@ export function ModelEditor({
               />
             ) : null}
             {active && isKcl ? (
-              <CadToolsPanel script={active.content} canEdit={editable} onApply={onChangeContent} />
+              <CadToolsPanel
+                script={active.content}
+                canEdit={editable}
+                targetSolid={targetSolid}
+                onApply={(next) => onChangeContent(next, true)}
+              />
             ) : null}
+            <CadFeatureTimeline
+              features={features}
+              selectedId={selectedFeature?.id ?? null}
+              onSelect={(feature) => setSelectedFeatureId(feature?.id ?? null)}
+            />
           </>
         )}
         <CadCursorOverlay
@@ -618,7 +980,66 @@ export function ModelEditor({
           >
             <Code className="size-4" />
           </Button>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            onClick={undo}
+            disabled={!editable || !canUndo}
+            aria-label="Undo CAD edit"
+            title="Undo CAD edit"
+            className="bg-card/90 shadow backdrop-blur-md"
+          >
+            <Undo2 className="size-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            onClick={redo}
+            disabled={!editable || !canRedo}
+            aria-label="Redo CAD edit"
+            title="Redo CAD edit"
+            className="bg-card/90 shadow backdrop-blur-md"
+          >
+            <Redo2 className="size-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            onClick={() => importInputRef.current?.click()}
+            disabled={!editable}
+            aria-label="Import CAD resource"
+            title="Import STEP, STL, OBJ, GLTF, GLB, or PLY"
+            className="bg-card/90 shadow backdrop-blur-md"
+          >
+            <Upload className="size-4" />
+          </Button>
+          <input
+            ref={importInputRef}
+            type="file"
+            hidden
+            accept=".step,.stp,.stl,.obj,.gltf,.glb,.ply"
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null;
+              setImportError(null);
+              setPendingImport(file);
+            }}
+          />
         </div>
+        {pendingImport ? (
+          <ImportCadPanel
+            file={pendingImport}
+            unit={importUnit}
+            importing={importMesh.isPending}
+            error={importError}
+            onUnitChange={setImportUnit}
+            onCancel={() => {
+              setPendingImport(null);
+              setImportError(null);
+              if (importInputRef.current) importInputRef.current.value = "";
+            }}
+            onImport={() => void confirmImport()}
+          />
+        ) : null}
       </div>
     </div>
   );

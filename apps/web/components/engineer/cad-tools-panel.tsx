@@ -199,10 +199,13 @@ function FieldGrid({
 export function CadToolsPanel({
   script,
   canEdit,
+  targetSolid,
   onApply,
 }: {
   script: string;
   canEdit: boolean;
+  /** Solid selected in the design history; defaults to the newest solid. */
+  targetSolid?: string | null;
   onApply: (nextScript: string) => void;
 }) {
   const [groupId, setGroupId] = useState<CadToolGroup>("create");
@@ -211,7 +214,7 @@ export function CadToolsPanel({
   const [error, setError] = useState<string | null>(null);
 
   const active = activeId ? getCadTool(activeId) : undefined;
-  const lastSolid = useMemo(() => findLastSolid(script), [script]);
+  const lastSolid = useMemo(() => targetSolid ?? findLastSolid(script), [script, targetSolid]);
 
   const byGroup = useMemo(() => {
     const map = new Map<CadToolGroup, CadToolDef[]>();
@@ -253,7 +256,7 @@ export function CadToolsPanel({
   function apply() {
     if (!active || !canEdit) return;
     try {
-      const result = applyCadTool(script, active.id, values);
+      const result = applyCadTool(script, active.id, values, { targetSolid });
       onApply(result.script);
       setActiveId(null);
       setError(null);

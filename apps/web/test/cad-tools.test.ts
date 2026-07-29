@@ -84,6 +84,22 @@ describe("applyCadTool", () => {
     expect(script).toMatch(/yaw\d* = 90/);
   });
 
+  it("applies modifying tools to an explicitly selected solid", () => {
+    const withTwo = `${BASE}
+other = startSketchOn(XY)
+  |> circle(center = [80, 0], radius = 10)
+  |> extrude(length = 10)
+`;
+    const { script, target } = applyCadTool(
+      withTwo,
+      "rotate",
+      { yaw: 30, pitch: 0, roll: 0 },
+      { targetSolid: "body" },
+    );
+    expect(target).toBe("body");
+    expect(script.indexOf("|> rotate")).toBeLessThan(script.indexOf("other ="));
+  });
+
   it("mirrors across a plane into a new binding", () => {
     const { script, target } = applyCadTool(BASE, "mirror", { plane: "YZ" });
     expect(target).toMatch(/^body/);

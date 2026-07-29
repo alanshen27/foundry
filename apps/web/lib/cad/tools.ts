@@ -44,6 +44,11 @@ export type ApplyToolResult = {
   target: string | null;
 };
 
+export type ApplyCadToolOptions = {
+  /** Explicit solid chosen in the feature history. Falls back to the last solid. */
+  targetSolid?: string | null;
+};
+
 const PLANE_OPTIONS = [
   { value: "XY", label: "XY (top)" },
   { value: "XZ", label: "XZ (front)" },
@@ -589,11 +594,14 @@ export function applyCadTool(
   script: string,
   toolId: string,
   values: CadToolValues,
+  options?: ApplyCadToolOptions,
 ): ApplyToolResult {
   const tool = getCadTool(toolId);
   if (!tool) return { script, target: null };
 
-  const solid = findLastSolid(script);
+  const solids = listSolids(script);
+  const requested = options?.targetSolid;
+  const solid = requested && solids.includes(requested) ? requested : (solids.at(-1) ?? null);
   if (tool.requiresSolid && !solid) {
     throw new Error(`Select or create a solid before using ${tool.label}.`);
   }
@@ -878,7 +886,6 @@ ${body} = revolve(${profile}, axis = ${axis}, angle = ${aName}deg)`,
     case "union":
     case "subtract":
     case "intersect": {
-      const solids = listSolids(script);
       if (solids.length < 2) {
         throw new Error(`${tool.label} needs at least two solids in the script.`);
       }

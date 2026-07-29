@@ -2,12 +2,20 @@ import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { prisma } from "@foundry/db";
-import { cadAssetFormatFromName, importAssetPath, type CadAssetFormat } from "@foundry/cad";
+import {
+  cadAssetFormatFromName,
+  importAssetPath,
+  isForeignImportOnlyScript,
+  normalizeCadDoc,
+  parseKclModuleImports,
+  type CadAssetFormat,
+} from "@foundry/cad";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";
-import { getZooEngineToken } from "../zoo-token";
+import { getCad, getZooEngineToken } from "../cad";
 import { getObjectStorage } from "../storage";
+import { withKclProjectDir } from "../kcl-project-dir";
 
 const FORMAT_MIME: Record<CadAssetFormat, string> = {
   stl: "model/stl",
@@ -29,6 +37,60 @@ export const cadRouter = router({
         token: getZooEngineToken(),
         // Match Zoo viewer: https base; @kittycad/lib rewrites to wss for modeling WS.
         baseUrl: "https://api.zoo.dev",
+      };
+    }),
+
+  /** Exact overall dimensions from the authoritative Zoo geometry engine. */
+  measure: protectedProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        branchId: z.string(),
+        componentId: z.string(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
+      const row = await prisma.designDoc.findUnique({
+        where: {
+          projectId_branchId_kind: {
+            projectId: input.projectId,
+            branchId: input.branchId,
+            kind: "MODEL3D",
+          },
+        },
+      });
+      if (!row?.data) throw new TRPCError({ code: "NOT_FOUND", message: "CAD document not found" });
+
+      const doc = normalizeCadDoc(row.data);
+      const component = doc.components.find((candidate) => candidate.id === input.componentId);
+      if (!component || component.kind === "instructions") {
+        throw new TRPCError({ code: "NOT_FOUND", message: "CAD component not found" });
+      }
+      if (isForeignImportOnlyScript(component.content)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Exact dimensions for imported reference bodies are not available yet. Use a parametric KCL part for authoritative measurements.",
+        });
+      }
+
+      const cad = getCad();
+      const result =
+        parseKclModuleImports(component.content).length > 0
+          ? await withKclProjectDir(doc, component.path, (projectDir) =>
+              cad.boundingBoxKcl({ projectDir, unit: "mm" }),
+            )
+          : await cad.boundingBoxKcl({ code: component.content, unit: "mm" });
+
+      if (!result.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: result.error });
+      }
+      return {
+        componentId: component.id,
+        componentName: component.name,
+        unit: "mm" as const,
+        ...result.data,
       };
     }),
 
