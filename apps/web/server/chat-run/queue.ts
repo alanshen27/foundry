@@ -2,42 +2,63 @@ import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import { getServerEnv } from "@foundry/config";
 
-let connection: IORedis | undefined;
-
+/**
+ * Prefer the raw REDIS_URL string — Upstash auth/TLS is reliable this way.
+ * BullMQ accepts an options bag OR a duplicated ioredis connection.
+ */
 export function getRedisConnection() {
-  if (!connection) {
-    const env = getServerEnv();
-    const url = env.REDIS_URL.trim();
-    let host = url;
-    try {
-      host = new URL(url).host;
-    } catch {
-      // keep raw
-    }
-    connection = new IORedis(url, {
-      maxRetriesPerRequest: null, // Required by BullMQ
-      // Upstash / managed Redis often need TLS via rediss://
-      tls: url.startsWith("rediss://") ? {} : undefined,
-    });
-    connection.on("error", (err) => {
-      console.error(`[redis] connection error host=${host}`, err.message || err);
-    });
-    connection.on("connect", () => {
-      console.log(`[redis] connected host=${host}`);
-    });
-  }
-  return connection;
+  const env = getServerEnv();
+  const url = env.REDIS_URL.trim();
+  return new IORedis(url, {
+    maxRetriesPerRequest: null, // Required by BullMQ
+    tls: url.startsWith("rediss://") ? {} : undefined,
+    family: 4,
+    enableReadyCheck: false,
+  });
 }
 
 export const CHAT_RUN_QUEUE_NAME = "chat-runs";
 
+let queue: Queue | undefined;
+let sharedConnection: IORedis | undefined;
+
+function queueConnection() {
+  if (!sharedConnection) {
+    sharedConnection = getRedisConnection();
+    sharedConnection.on("error", (err) => {
+      console.error("[redis:queue]", err.message || err);
+    });
+  }
+  return sharedConnection;
+}
+
 export function getChatRunQueue() {
-  return new Queue(CHAT_RUN_QUEUE_NAME, {
-    connection: getRedisConnection(),
-  });
+  if (!queue) {
+    queue = new Queue(CHAT_RUN_QUEUE_NAME, {
+      connection: queueConnection(),
+      defaultJobOptions: {
+        removeOnComplete: 100,
+        removeOnFail: 200,
+        attempts: 3,
+        backoff: { type: "exponential", delay: 2000 },
+      },
+    });
+    queue.on("error", (err) => {
+      console.error("[redis:queue:bull]", err.message || err);
+    });
+  }
+  return queue;
 }
 
 export async function enqueueChatRun(runId: string) {
-  const queue = getChatRunQueue();
-  await queue.add("execute", { runId });
+  const q = getChatRunQueue();
+  await q.add(
+    "execute",
+    { runId },
+    {
+      // Deduplicate rapid retries for the same run id
+      jobId: runId,
+    },
+  );
+  console.log(`[redis:queue] enqueued run ${runId}`);
 }

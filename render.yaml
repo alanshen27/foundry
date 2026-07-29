@@ -56,7 +56,7 @@ services:
     region: oregon
     buildCommand: corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate && pnpm --filter @foundry/web build
     startCommand: pnpm --filter @foundry/web start
-    healthCheckPath: /
+    healthCheckPath: /api/health
     buildFilter:
       paths:
         - apps/web/**
@@ -102,8 +102,10 @@ services:
       - fromGroup: foundry-shared
       - key: NODE_VERSION
         value: "22"
+      # Must match web — worker publishes run chunks via Supabase broadcast.
+      # SSE still polls Postgres, but busy/cancel signals need this on.
       - key: NEXT_PUBLIC_REALTIME_MODE
-        value: off
+        value: supabase
       - key: APP_ORIGIN
         fromService:
           name: foundry-web

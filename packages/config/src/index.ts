@@ -11,17 +11,32 @@ const serverEnvSchema = z
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
     NEXT_PUBLIC_REALTIME_MODE: z.enum(["supabase", "off"]).default("off"),
     // Yjs / Hocuspocus collaboration (Engineer > Code). Empty = single-player Monaco.
+    // Localhost on Render is treated as unset so a leftover ws://localhost:1234
+    // does not crash getServerEnv() and take down chat/auth with it.
     NEXT_PUBLIC_COLLAB_URL: z.preprocess((value) => {
       if (typeof value !== "string") return undefined;
       const trimmed = value.trim();
-      return trimmed.length > 0 ? trimmed : undefined;
+      if (!trimmed) return undefined;
+      if (process.env.RENDER) {
+        try {
+          const host = new URL(trimmed).hostname;
+          if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+            console.warn(
+              `[config] Ignoring NEXT_PUBLIC_COLLAB_URL=${trimmed} on Render — set wss://<foundry-collab-host>`,
+            );
+            return undefined;
+          }
+        } catch {
+          return undefined;
+        }
+      }
+      return trimmed;
     }, z.string().url().optional()),
     REDIS_URL: z.preprocess((value) => {
       if (typeof value !== "string") return undefined;
       const trimmed = value.trim();
       return trimmed.length > 0 ? trimmed : undefined;
     }, z.string().url().default("redis://localhost:6379")),
-    // Set automatically by Render — used to reject localhost service URLs.
     // AI copilot (optional; chat is disabled with a clear notice when unset)
     OPENAI_API_KEY: z.string().optional(),
     AI_MODEL: z.string().default("gpt-5.6"),
@@ -56,7 +71,6 @@ const serverEnvSchema = z
     }
 
     // On Render, localhost URLs mean a copied .env / missing dashboard secret.
-    // They produce endless AggregateError ECONNREFUSED spam (Redis, Auth, collab).
     if (process.env.RENDER) {
       const localHosts = ["localhost", "127.0.0.1", "::1"];
       const isLocal = (value: string | undefined) => {
@@ -87,13 +101,6 @@ const serverEnvSchema = z
           code: z.ZodIssueCode.custom,
           path: ["REDIS_URL"],
           message: "Must be Upstash rediss:// URL on Render (not redis://localhost:6379)",
-        });
-      }
-      if (isLocal(env.NEXT_PUBLIC_COLLAB_URL)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["NEXT_PUBLIC_COLLAB_URL"],
-          message: "Must be wss://<foundry-collab-host> on Render (not ws://localhost:1234)",
         });
       }
     }

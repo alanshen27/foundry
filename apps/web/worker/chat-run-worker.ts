@@ -57,6 +57,18 @@ function assertProdRedis(redisUrl: string) {
 const env = getServerEnv();
 assertProdRedis(env.REDIS_URL);
 
+if (!env.OPENAI_API_KEY) {
+  console.warn(
+    "[chat-worker] OPENAI_API_KEY is unset — runs will error until it is set in foundry-shared",
+  );
+}
+
+if (env.NEXT_PUBLIC_REALTIME_MODE !== "supabase") {
+  console.warn(
+    `[chat-worker] NEXT_PUBLIC_REALTIME_MODE=${env.NEXT_PUBLIC_REALTIME_MODE} — set to "supabase" so run broadcasts reach the web UI (SSE still works via DB)`,
+  );
+}
+
 const redisHost = (() => {
   try {
     return new URL(env.REDIS_URL).host;
@@ -65,13 +77,23 @@ const redisHost = (() => {
   }
 })();
 
-console.log(`[chat-worker] starting BullMQ worker… redis=${redisHost}`);
+const connection = getRedisConnection();
+connection.on("error", (err) => {
+  console.error("[chat-worker] redis error", err.message || err);
+});
+connection.on("connect", () => {
+  console.log(`[chat-worker] redis connected host=${redisHost}`);
+});
+
+console.log(
+  `[chat-worker] starting BullMQ worker… redis=${redisHost} realtime=${env.NEXT_PUBLIC_REALTIME_MODE}`,
+);
 
 const worker = new Worker(
   CHAT_RUN_QUEUE_NAME,
   async (job: Job<{ runId: string }>) => {
     const { runId } = job.data;
-    console.log(`[chat-worker] run ${runId}`);
+    console.log(`[chat-worker] run ${runId} (job ${job.id})`);
     try {
       await executeChatRun(runId);
       console.log(`[chat-worker] run ${runId} finished`);
@@ -87,7 +109,7 @@ const worker = new Worker(
     }
   },
   {
-    connection: getRedisConnection(),
+    connection,
     concurrency: 10,
   },
 );
@@ -100,12 +122,59 @@ worker.on("error", (err) => {
   console.error("[chat-worker] queue error", err);
 });
 
+worker.on("failed", (job, err) => {
+  console.error(`[chat-worker] job ${job?.id} failed`, err.message || err);
+});
+
+/**
+ * Safety net: if a run was written to Postgres but never made it onto Redis
+ * (enqueue failure, Redis blip, deploy race), pick it up directly.
+ */
+async function reclaimPendingRuns() {
+  const now = Date.now();
+  const stuck = await prisma.chatRun.findMany({
+    where: {
+      status: "PENDING",
+      // Give BullMQ a few seconds first; stop before the 45s UI timeout.
+      createdAt: {
+        lt: new Date(now - 4_000),
+        gt: new Date(now - 40_000),
+      },
+    },
+    orderBy: { createdAt: "asc" },
+    take: 5,
+    select: { id: true },
+  });
+
+  for (const run of stuck) {
+    console.warn(`[chat-worker] reclaiming PENDING run ${run.id}`);
+    try {
+      await executeChatRun(run.id);
+    } catch (err) {
+      console.error(`[chat-worker] reclaim ${run.id} failed`, err);
+    }
+  }
+}
+
+const reclaimTimer = setInterval(() => {
+  void reclaimPendingRuns().catch((err) =>
+    console.error("[chat-worker] reclaim loop failed", err),
+  );
+}, 5_000);
+reclaimTimer.unref?.();
+
 async function shutdown(signal: string) {
   console.log(`[chat-worker] ${signal} — closing worker`);
+  clearInterval(reclaimTimer);
   try {
     await worker.close();
   } catch (err) {
     console.error("[chat-worker] close failed", err);
+  }
+  try {
+    await connection.quit();
+  } catch {
+    // ignore
   }
   try {
     await prisma.$disconnect();
