@@ -30,7 +30,7 @@ export async function createRunEventStream(runId: string): Promise<ReadableStrea
 
       const run = await prisma.chatRun.findUnique({
         where: { id: runId },
-        select: { status: true, createdAt: true },
+        select: { status: true, createdAt: true, startedAt: true, error: true },
       });
       if (!run) {
         controller.close();
@@ -39,19 +39,23 @@ export async function createRunEventStream(runId: string): Promise<ReadableStrea
       }
 
       // Don't hold the SSE open forever on a run the worker never progressed.
-      const ageMs = Date.now() - run.createdAt.getTime();
+      // Measure RUNNING from startedAt when present so queue wait doesn't count.
+      const ageMs = Date.now() - (run.startedAt ?? run.createdAt).getTime();
+      const pendingAgeMs = Date.now() - run.createdAt.getTime();
       if (
-        (run.status === "PENDING" && ageMs > 45_000) ||
+        (run.status === "PENDING" && pendingAgeMs > 45_000) ||
         (run.status === "RUNNING" && lastSeq === 0 && ageMs > 60_000)
       ) {
+        const error = "Timed out waiting for worker (check Redis / chat worker)";
         await prisma.chatRun.update({
           where: { id: runId },
           data: {
             status: "ERROR",
-            error: "Timed out waiting for worker (check Redis / chat worker)",
+            error,
             finishedAt: new Date(),
           },
         });
+        controller.enqueue(sseEncode({ type: "error", errorText: error }));
         controller.enqueue(sseComment("done"));
         controller.close();
         closed = true;
@@ -65,6 +69,9 @@ export async function createRunEventStream(runId: string): Promise<ReadableStrea
 
       if (events.length === 0) {
         if (TERMINAL.has(run.status)) {
+          if (run.status === "ERROR" && run.error?.trim()) {
+            controller.enqueue(sseEncode({ type: "error", errorText: run.error.trim() }));
+          }
           controller.enqueue(sseComment("done"));
           controller.close();
           closed = true;
@@ -81,6 +88,9 @@ export async function createRunEventStream(runId: string): Promise<ReadableStrea
       }
 
       if (TERMINAL.has(run.status)) {
+        if (run.status === "ERROR" && run.error?.trim()) {
+          controller.enqueue(sseEncode({ type: "error", errorText: run.error.trim() }));
+        }
         controller.enqueue(sseComment("done"));
         controller.close();
         closed = true;

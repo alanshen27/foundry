@@ -109,7 +109,7 @@ export async function executeChatRun(runId: string): Promise<void> {
       where: { id: runId },
       data: { status: "ERROR", error: "OPENAI_API_KEY is not configured", finishedAt: new Date() },
     });
-    await publishRunFinished(runId, run.channelId, "error");
+    await publishRunFinished(runId, run.channelId, "error", "OPENAI_API_KEY is not configured");
     return;
   }
 
@@ -306,7 +306,7 @@ export async function executeChatRun(runId: string): Promise<void> {
         where: { id: runId },
         data: { status: "ERROR", error: message, finishedAt: new Date() },
       });
-      await publishRunFinished(runId, run.channelId, "error");
+      await publishRunFinished(runId, run.channelId, "error", message);
     }
     throw err;
   } finally {

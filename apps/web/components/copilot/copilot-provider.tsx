@@ -220,9 +220,9 @@ function ChatEngine({
         selfRunRef.current = false;
         setLocalBusy(false);
         void utils.chat.activeRun.invalidate({ projectId, channelId });
-        const payload = message.payload as { status?: string } | undefined;
+        const payload = message.payload as { status?: string; error?: string } | undefined;
         if (payload?.status === "error") {
-          setMessages((prev) => markFailedAssistantMessages(prev));
+          setMessages((prev) => markFailedAssistantMessages(prev, payload.error));
         } else {
           setMessages((prev) => pruneEmptyAssistantMessages(prev));
         }

@@ -91,6 +91,9 @@ export async function enqueueChatRun(runId: string) {
     {
       // Deduplicate rapid retries for the same run id
       jobId: runId,
+      // Retries re-enter mid-stream and can double-bill Zoo; reclaimPendingRuns
+      // already covers enqueue misses.
+      attempts: 1,
     },
   );
   console.log(`[redis:queue] enqueued run ${runId}`);

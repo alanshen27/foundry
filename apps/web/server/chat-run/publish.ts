@@ -32,9 +32,14 @@ export async function publishRunFinished(
   runId: string,
   channelId: string,
   status: "done" | "error" | "cancelled",
+  error?: string | null,
 ): Promise<void> {
   await getBroadcastPublisher().publish(copilotBroadcastChannel(channelId), {
     event: "run-finished",
-    payload: { runId, status },
+    payload: {
+      runId,
+      status,
+      ...(error?.trim() ? { error: error.trim() } : {}),
+    },
   });
 }

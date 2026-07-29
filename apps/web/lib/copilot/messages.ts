@@ -197,9 +197,18 @@ export function isAssistantFailureText(text: string): boolean {
   return text.startsWith(ASSISTANT_FAILURE_PREFIX);
 }
 
+/** Mid-flight tool states left hanging when a run dies mid-tool. */
+const INCOMPLETE_TOOL_STATES = new Set([
+  "input-streaming",
+  "input-available",
+  "approval-requested",
+  "approval-responded",
+]);
+
 /**
  * Keep the last assistant turn on failure and stamp a visible failure note
- * instead of deleting the empty "Working…" placeholder.
+ * instead of deleting the empty "Working…" placeholder. Also flip in-flight
+ * tool cards to output-error so they stop spinning forever.
  */
 export function markFailedAssistantMessages(messages: UIMessage[], reason?: string): UIMessage[] {
   let lastAssistantIdx = -1;
@@ -219,9 +228,24 @@ export function markFailedAssistantMessages(messages: UIMessage[], reason?: stri
     const alreadyFailed = message.parts.some(
       (part) => part.type === "text" && isAssistantFailureText(part.text),
     );
-    if (alreadyFailed) return message;
 
-    const hasContent = message.parts.some((part) => {
+    let toolsUpdated = false;
+    const parts: UIMessage["parts"] = message.parts.map((part) => {
+      if (!isToolUIPart(part)) return part;
+      if (!INCOMPLETE_TOOL_STATES.has(part.state)) return part;
+      toolsUpdated = true;
+      return {
+        ...part,
+        state: "output-error",
+        errorText: detail,
+      } as UIMessage["parts"][number];
+    });
+
+    if (alreadyFailed) {
+      return toolsUpdated ? { ...message, parts } : message;
+    }
+
+    const hasContent = parts.some((part) => {
       if (part.type === "text") return part.text.trim().length > 0;
       if (isToolPart(part)) return true;
       return false;
@@ -232,7 +256,7 @@ export function markFailedAssistantMessages(messages: UIMessage[], reason?: stri
     }
     return {
       ...message,
-      parts: [...message.parts, { type: "text", text: label }],
+      parts: [...parts, { type: "text", text: label }],
     };
   });
 }

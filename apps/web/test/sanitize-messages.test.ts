@@ -228,6 +228,32 @@ describe("markFailedAssistantMessages", () => {
     expect(next[0]!.parts).toHaveLength(2);
     expect(next[0]!.parts[1]).toEqual({ type: "text", text: "Failed: timeout" });
   });
+
+  it("marks in-flight tools as output-error so they stop spinning", () => {
+    const messages = [
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "Rebuilding assembly" },
+          {
+            type: "tool-add_part_to_assembly",
+            toolCallId: "call_1",
+            state: "input-available",
+            input: { parts: ["enclosure"] },
+          },
+        ],
+      },
+    ] as unknown as UIMessage[];
+    const next = markFailedAssistantMessages(messages, "Zoo MCP blew up");
+    const tool = next[0]!.parts[1] as {
+      state: string;
+      errorText?: string;
+    };
+    expect(tool.state).toBe("output-error");
+    expect(tool.errorText).toBe("Zoo MCP blew up");
+    expect(next[0]!.parts[2]).toEqual({ type: "text", text: "Failed: Zoo MCP blew up" });
+  });
 });
 
 describe("stripOrphanToolCalls", () => {
