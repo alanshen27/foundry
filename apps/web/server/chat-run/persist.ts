@@ -75,11 +75,42 @@ export async function saveNewMessages(scope: ChannelScope, messages: UIMessage[]
 }
 
 /**
- * Authoritative write from the chat worker: create or update message parts.
- *
- * Unlike `saveNewMessages`, this intentionally overwrites parts so a failed
- * run can stamp `Failed: …` onto an assistant turn that was partially streamed
- * (and so timeout reclaim can persist whatever chunks already landed).
+ * How "complete" a message body is. Used so a thin client snapshot (or a
+ * mid-stream rebuild) can never clobber a richer row already in Postgres.
+ */
+export function messagePartsScore(parts: unknown): number {
+  if (!Array.isArray(parts)) return 0;
+  let score = parts.length * 1_000;
+  for (const part of parts) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as Record<string, unknown>;
+    const type = typeof p.type === "string" ? p.type : "";
+    if (type === "text" && typeof p.text === "string") {
+      score += p.text.length;
+      continue;
+    }
+    const isTool = type.startsWith("tool-") || type === "dynamic-tool";
+    if (!isTool) continue;
+    const state = typeof p.state === "string" ? p.state : "";
+    if (state === "output-available") score += 800;
+    else if (state === "output-error") score += 700;
+    else if (state === "input-available") score += 300;
+    else score += 100;
+    if (p.output != null) score += 200 + JSON.stringify(p.output).length;
+    if (typeof p.errorText === "string") score += p.errorText.length;
+    if (p.input != null) score += Math.min(JSON.stringify(p.input).length, 2_000);
+  }
+  return score;
+}
+
+function preferIncomingParts(existing: unknown, incoming: unknown): boolean {
+  return messagePartsScore(incoming) >= messagePartsScore(existing);
+}
+
+/**
+ * Authoritative write from the chat worker (and client safety net): create or
+ * update message parts, but NEVER replace a richer stored body with a thinner
+ * one. Client mid-stream snapshots used to wipe completed tool cards / text.
  */
 export async function persistRunMessages(
   scope: ChannelScope,
@@ -88,9 +119,23 @@ export async function persistRunMessages(
   const rows = messages.filter((message) => message.id && message.parts.length > 0);
   if (rows.length === 0) return 0;
 
+  const ids = rows.map((m) => m.id);
+  const existing = await prisma.chatMessage.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, parts: true },
+  });
+  const existingById = new Map(existing.map((row) => [row.id, row.parts]));
+
   const now = Date.now();
-  await prisma.$transaction(
-    rows.map((message, index) =>
+  const ops = [];
+  for (let index = 0; index < rows.length; index++) {
+    const message = rows[index]!;
+    const prev = existingById.get(message.id);
+    if (prev !== undefined && !preferIncomingParts(prev, message.parts)) {
+      // Keep the richer DB copy — incoming is a downgrade.
+      continue;
+    }
+    ops.push(
       prisma.chatMessage.upsert({
         where: { id: message.id },
         create: {
@@ -106,9 +151,12 @@ export async function persistRunMessages(
           parts: message.parts as unknown as Prisma.InputJsonValue,
         },
       }),
-    ),
-  );
-  return rows.length;
+    );
+  }
+
+  if (ops.length === 0) return 0;
+  await prisma.$transaction(ops);
+  return ops.length;
 }
 
 /**

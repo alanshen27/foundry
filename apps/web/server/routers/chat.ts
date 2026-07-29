@@ -59,9 +59,9 @@ export const chatRouter = router({
     }),
 
   /**
-   * Client-side safety net: after a failed/cancelled run the browser still has
-   * the transcript the user saw. Persist it so a refresh doesn't wipe the turn
-   * when the worker died before finalize.
+   * Client-side safety net AFTER a failed/cancelled run. Never call this while
+   * streaming — mid-stream upserts used to clobber worker checkpoints.
+   * persistRunMessages is merge-safe (refuses to downgrade richer parts).
    */
   persistMessages: protectedProcedure
     .input(
@@ -85,12 +85,23 @@ export const chatRouter = router({
       });
       if (!channel) throw new TRPCError({ code: "NOT_FOUND", message: "Unknown channel" });
 
+      // Refuse while a run is still live — client snapshots race the worker.
+      const active = await prisma.chatRun.findFirst({
+        where: {
+          projectId: input.projectId,
+          channelId: input.channelId,
+          status: { in: ["PENDING", "RUNNING"] },
+        },
+        select: { id: true },
+      });
+      if (active && !input.error) {
+        return { ok: true, count: 0, skipped: "active_run" as const };
+      }
+
       let messages: UIMessage[];
       try {
         messages = await validateUIMessages({ messages: input.messages });
       } catch {
-        // Mid-stream tool parts often fail strict validation — still cache them
-        // so a reload doesn't wipe a turn the user already watched.
         messages = (input.messages as UIMessage[]).filter(
           (m) => m && typeof m === "object" && typeof m.id === "string" && Array.isArray(m.parts),
         );

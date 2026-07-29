@@ -351,18 +351,10 @@ function ChatEngine({
     onMessages(channelId, messages);
   }, [channelId, messages, onMessages]);
 
-  // Cache the live transcript while streaming so a reload doesn't wipe it
-  // before the worker's next checkpoint lands.
-  useEffect(() => {
-    if (!localBusy && status !== "submitted" && status !== "streaming") return;
-    if (messages.length === 0) return;
-    const timer = setTimeout(() => {
-      void persistMutation
-        .mutateAsync({ projectId, branchId, channelId, messages })
-        .catch(() => undefined);
-    }, 800);
-    return () => clearTimeout(timer);
-  }, [messages, localBusy, status, persistMutation, projectId, branchId, channelId]);
+  // Do NOT persist mid-stream from the client. That path used persistRunMessages
+  // upserts and routinely overwrote richer worker checkpoints (tool cards/text)
+  // with a thinner UI snapshot — LLM turns "deleted themselves" from the DB.
+  // Worker checkpoints + post-terminal safety-net persists cover reload.
 
   const stopRun = useCallback(() => {
     const epoch = sendEpochRef.current;

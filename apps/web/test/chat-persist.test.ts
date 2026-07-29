@@ -3,18 +3,28 @@ import type { UIMessage } from "ai";
 
 type Row = { id: string; role: string; parts: unknown; createdAt: Date };
 type CreateManyArgs = { data: Row[]; skipDuplicates?: boolean };
-type FindManyArgs = { take?: number; orderBy?: unknown };
+type FindManyArgs = { take?: number; orderBy?: unknown; where?: { id?: { in: string[] } } };
 
 const createMany = vi.fn(async (_args: CreateManyArgs) => ({ count: 0 }));
 const findMany = vi.fn(async (_args: FindManyArgs): Promise<Row[]> => []);
 const deleteMany = vi.fn(async () => ({ count: 0 }));
+const upsert = vi.fn(async () => ({}));
+const transaction = vi.fn(async (ops: unknown[]) => ops);
 
 vi.mock("@foundry/db", () => ({
-  prisma: { chatMessage: { createMany, findMany, deleteMany } },
+  prisma: {
+    chatMessage: { createMany, findMany, deleteMany, upsert },
+    $transaction: transaction,
+  },
 }));
 
-const { CHAT_HISTORY_LIMIT, loadChannelHistory, saveNewMessages } =
-  await import("@/server/chat-run/persist");
+const {
+  CHAT_HISTORY_LIMIT,
+  loadChannelHistory,
+  saveNewMessages,
+  persistRunMessages,
+  messagePartsScore,
+} = await import("@/server/chat-run/persist");
 
 const scope = { projectId: "p1", branchId: "b1", channelId: "c1" };
 
@@ -38,6 +48,70 @@ beforeEach(() => {
   createMany.mockClear();
   findMany.mockClear();
   deleteMany.mockClear();
+  upsert.mockClear();
+  transaction.mockClear();
+});
+
+describe("messagePartsScore", () => {
+  it("scores completed tool output higher than a bare text stub", () => {
+    const rich = [
+      { type: "text", text: "Working…" },
+      {
+        type: "tool-add_part_to_assembly",
+        state: "output-available",
+        output: { ok: true, placed: ["a", "b", "c"] },
+      },
+      { type: "text", text: "Assembled three parts." },
+    ];
+    const thin = [{ type: "text", text: "Working…" }];
+    expect(messagePartsScore(rich)).toBeGreaterThan(messagePartsScore(thin));
+  });
+});
+
+describe("persistRunMessages", () => {
+  it("refuses to overwrite a richer DB row with a thinner client snapshot", async () => {
+    findMany.mockResolvedValueOnce([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "Here is the assembly." },
+          {
+            type: "tool-add_part_to_assembly",
+            state: "output-available",
+            output: { ok: true },
+          },
+        ],
+        createdAt: new Date(),
+      },
+    ]);
+
+    const count = await persistRunMessages(scope, [
+      message("a1", "assistant", "Working…"),
+    ]);
+
+    expect(count).toBe(0);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it("updates when the incoming parts are at least as rich", async () => {
+    findMany.mockResolvedValueOnce([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [{ type: "text", text: "Hi" }],
+        createdAt: new Date(),
+      },
+    ]);
+
+    const count = await persistRunMessages(scope, [
+      message("a1", "assistant", "Hi — full answer with details."),
+    ]);
+
+    expect(count).toBe(1);
+    expect(transaction).toHaveBeenCalledOnce();
+  });
 });
 
 describe("saveNewMessages", () => {
