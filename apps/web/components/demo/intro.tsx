@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { AnimatedSignalGlyph } from "@/components/animated-signal-glyph";
+import { FoundryMarkIcon } from "@/components/foundry-mark";
 import { InteractiveDotField } from "@/components/interactive-dot-field";
 import { cn } from "@/lib/utils";
 
 /**
  * Video-opener title card: the signal-orange panel with the breathing
- * ASCII glyph mark, and the Foundry pixel-mark + wordmark inline on top.
+ * ASCII glyph mark, and the Foundry logo + wordmark inline on top.
  * The wordmark is editable — click it and type, or pass ?text=Your+Words.
  */
 export function DemoIntro({ initialText = "Foundry" }: { initialText?: string }) {
@@ -43,10 +44,8 @@ export function DemoIntro({ initialText = "Foundry" }: { initialText?: string })
           )}
         >
           {showIcon ? (
-            <span className="inline-grid grid-cols-3 gap-[5px]" aria-hidden>
-              {Array.from({ length: 9 }, (_, i) => (
-                <span key={i} className="size-[9px] bg-[#faf9f5] md:size-[11px]" />
-              ))}
+            <span className="flex size-16 items-center justify-center bg-[#faf9f5] p-2 md:size-20">
+              <FoundryMarkIcon className="size-full" />
             </span>
           ) : null}
           <span
