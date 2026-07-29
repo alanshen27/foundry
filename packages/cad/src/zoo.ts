@@ -152,9 +152,25 @@ function extractOutputs(op: unknown): Record<string, string> | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-function lineCount(text: string): number {
-  if (!text) return 1;
-  return text.split("\n").length;
+/**
+ * Whole-file Zoo source range. Trailing newlines must not create a phantom
+ * last line — Zoo rejects `end.line` past the last real line with
+ * "Source range out of bounds" (which previously spun the assembly agent).
+ */
+export function wholeFileSourceRange(text: string): {
+  start: { line: number; column: number };
+  end: { line: number; column: number };
+} {
+  const stripped = text.replace(/\n+$/u, "");
+  if (!stripped) {
+    return { start: { line: 0, column: 0 }, end: { line: 0, column: 0 } };
+  }
+  const lines = stripped.split("\n");
+  const last = lines.length - 1;
+  return {
+    start: { line: 0, column: 0 },
+    end: { line: last, column: lines[last]!.length },
+  };
 }
 
 /** Iteration jobs are async ops; poll the generic async endpoint for those. */
@@ -351,16 +367,16 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
 
         const focusPath = options?.focusPath?.trim();
         const focusContent = focusPath ? (files[focusPath] ?? "") : "";
+        // Prefer an empty range list (same as single-file iterateCad) when we
+        // don't have a focus file. When we do, clamp to real lines only —
+        // never `split("\n").length - 1` on trailing `\n` (Zoo 400).
         const source_ranges =
-          focusPath && focusContent
+          focusPath && focusContent.trim()
             ? [
                 {
                   file: focusPath,
                   prompt,
-                  range: {
-                    start: { line: 0, column: 0 },
-                    end: { line: Math.max(lineCount(focusContent) - 1, 0), column: 0 },
-                  },
+                  range: wholeFileSourceRange(focusContent),
                 },
               ]
             : [];
@@ -371,7 +387,9 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
         }));
 
         console.log(
-          `[zoo] multi-file iteration files=${attached.length} focus=${focusPath ?? "(all)"}`,
+          `[zoo] multi-file iteration files=${attached.length} focus=${focusPath ?? "(all)"} rangeEnd=${
+            source_ranges[0]?.range.end.line ?? "-"
+          }`,
         );
         const res = await ml.create_text_to_cad_multi_file_iteration({
           client,
