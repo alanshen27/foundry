@@ -130,7 +130,9 @@ worker.on("failed", (job, err) => {
 
 /**
  * Safety net: if a run was written to Postgres but never made it onto Redis
- * (enqueue failure, Redis blip, deploy race), pick it up directly.
+ * (enqueue failure, Redis blip, deploy race), put it back on the queue.
+ * Never call executeChatRun here — that raced with BullMQ and crashed on
+ * duplicate ChatRunEvent seq.
  */
 async function reclaimPendingRuns() {
   const now = Date.now();
@@ -148,10 +150,11 @@ async function reclaimPendingRuns() {
     select: { id: true },
   });
 
+  const { enqueueChatRun } = await import("../server/chat-run/queue");
   for (const run of stuck) {
     console.warn(`[chat-worker] reclaiming PENDING run ${run.id}`);
     try {
-      await executeChatRun(run.id);
+      await enqueueChatRun(run.id);
     } catch (err) {
       console.error(`[chat-worker] reclaim ${run.id} failed`, err);
     }

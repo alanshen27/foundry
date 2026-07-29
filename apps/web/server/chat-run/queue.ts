@@ -83,18 +83,29 @@ export function getChatRunQueue() {
   return queue;
 }
 
-export async function enqueueChatRun(runId: string) {
+export async function enqueueChatRun(runId: string): Promise<"queued" | "exists"> {
   const q = getChatRunQueue();
-  await q.add(
-    "execute",
-    { runId },
-    {
-      // Deduplicate rapid retries for the same run id
-      jobId: runId,
-      // Retries re-enter mid-stream and can double-bill Zoo; reclaimPendingRuns
-      // already covers enqueue misses.
-      attempts: 1,
-    },
-  );
-  console.log(`[redis:queue] enqueued run ${runId}`);
+  try {
+    await q.add(
+      "execute",
+      { runId },
+      {
+        // Deduplicate rapid retries for the same run id
+        jobId: runId,
+        // Retries re-enter mid-stream and can double-bill Zoo; reclaimPendingRuns
+        // re-enqueues misses without calling execute directly.
+        attempts: 1,
+      },
+    );
+    console.log(`[redis:queue] enqueued run ${runId}`);
+    return "queued";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // BullMQ rejects duplicate jobIds — treat as already queued.
+    if (/already exists/i.test(message)) {
+      console.log(`[redis:queue] run ${runId} already queued`);
+      return "exists";
+    }
+    throw err;
+  }
 }

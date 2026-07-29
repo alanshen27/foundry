@@ -18,7 +18,12 @@ import {
   persistRunMessages,
   type ChannelScope,
 } from "./persist";
-import { publishRunChunk, publishRunFinished, publishRunStarted } from "./publish";
+import {
+  maxRunEventSeq,
+  publishRunChunk,
+  publishRunFinished,
+  publishRunStarted,
+} from "./publish";
 import {
   markFailedAssistantMessages,
   sanitizeUiMessagesForModel,
@@ -106,10 +111,22 @@ export async function executeChatRun(runId: string): Promise<void> {
 
   const channelId = run.channelId;
 
-  await prisma.chatRun.update({
-    where: { id: runId },
+  // Only one worker may start a PENDING run. Reclaim + BullMQ used to both
+  // call execute and race on ChatRunEvent seq (P2002 → silent client fail).
+  const claimed = await prisma.chatRun.updateMany({
+    where: { id: runId, status: "PENDING" },
     data: { status: "RUNNING", startedAt: new Date() },
   });
+  if (claimed.count === 0) {
+    const current = await prisma.chatRun.findUnique({
+      where: { id: runId },
+      select: { status: true },
+    });
+    console.warn(
+      `[chat-run ${runId}] skip execute — status=${current?.status ?? "missing"} (already claimed or terminal)`,
+    );
+    return;
+  }
 
   const scope: ChannelScope = {
     projectId: run.projectId,
@@ -149,7 +166,8 @@ export async function executeChatRun(runId: string): Promise<void> {
     { runId },
   );
 
-  let seq = 0;
+  // Continue past any chunks a previous crashed attempt already wrote.
+  let seq = await maxRunEventSeq(runId);
   let finalized = false;
   /** Latest UI transcript observed from the stream (updated in onEnd). */
   let latestMessages: UIMessage[] = rawMessages;
@@ -369,7 +387,7 @@ export async function executeChatRun(runId: string): Promise<void> {
           }),
         ),
       };
-      seq = 0;
+      seq = await maxRunEventSeq(runId);
       await runStream(prepared.ui, prepared.model);
     }
 
