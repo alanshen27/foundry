@@ -184,10 +184,9 @@ function ChatEngine({
     id: channelId,
     transport,
     messages: seedRef.current,
-    // Resume was attaching to stuck PENDING/RUNNING streams (keepalive SSE for
-    // minutes), leaving status="streaming" so send never fired. Re-enable once
-    // worker+queue reliability is solid; broadcast still drives cross-tab attach.
-    resume: false,
+    // Reattach to an in-flight worker run after reload / tab return. Stream
+    // route times out dead PENDING/RUNNING keepalives so this can't wedge send.
+    resume: true,
     onFinish: () => {
       const epoch = sendEpochRef.current;
       selfRunRef.current = false;
@@ -280,6 +279,19 @@ function ChatEngine({
     persistFailureStamp,
   ]);
 
+  // After reload: if a worker run is still live and we're idle, reattach SSE.
+  const didResumeRef = useRef(false);
+  useEffect(() => {
+    if (didResumeRef.current) return;
+    if (!activeRunQuery.data) return;
+    if (selfRunRef.current) return;
+    if (status === "submitted" || status === "streaming") return;
+    didResumeRef.current = true;
+    setLocalBusy(true);
+    ownedRunIdRef.current = activeRunQuery.data.id;
+    void resumeStream();
+  }, [activeRunQuery.data, status, resumeStream]);
+
   useEffect(() => {
     const broadcast = createBroadcastPort();
     const sub = broadcast.subscribe(copilotBroadcastChannel(channelId), (message) => {
@@ -297,13 +309,12 @@ function ChatEngine({
         const payload = message.payload as
           | { runId?: string; status?: string; error?: string }
           | undefined;
-        // Ignore finishes for runs we no longer own (already replaced by a new send).
-        if (
-          payload?.runId &&
-          ownedRunIdRef.current &&
-          payload.runId !== ownedRunIdRef.current &&
-          selfRunRef.current
-        ) {
+        // Never let another run's finish clear our in-flight send/stream.
+        if (payload?.runId && ownedRunIdRef.current && payload.runId !== ownedRunIdRef.current) {
+          return;
+        }
+        if (selfRunRef.current && !ownedRunIdRef.current) {
+          // Still waiting for our runId from POST — ignore stray finishes.
           return;
         }
         selfRunRef.current = false;

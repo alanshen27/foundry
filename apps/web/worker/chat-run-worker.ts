@@ -129,14 +129,14 @@ worker.on("failed", (job, err) => {
 });
 
 /**
- * Safety net: if a run was written to Postgres but never made it onto Redis
- * (enqueue failure, Redis blip, deploy race), put it back on the queue.
- * Never call executeChatRun here — that raced with BullMQ and crashed on
- * duplicate ChatRunEvent seq.
+ * Safety net: re-queue runs that Postgres thinks are live but Redis has no
+ * active job for (enqueue miss, deploy kill, or the prior "skip RUNNING" bug
+ * that marked the job complete while leaving ChatRun RUNNING).
+ * Never call executeChatRun here — only enqueue.
  */
-async function reclaimPendingRuns() {
+async function reclaimOrphanedRuns() {
   const now = Date.now();
-  const stuck = await prisma.chatRun.findMany({
+  const pending = await prisma.chatRun.findMany({
     where: {
       status: "PENDING",
       // Give BullMQ a few seconds first; stop before the 45s UI timeout.
@@ -147,13 +147,34 @@ async function reclaimPendingRuns() {
     },
     orderBy: { createdAt: "asc" },
     take: 5,
-    select: { id: true },
+    select: { id: true, status: true },
+  });
+  const running = await prisma.chatRun.findMany({
+    where: {
+      status: "RUNNING",
+      // Grace so a just-claimed run isn't double-enqueued.
+      startedAt: { lt: new Date(now - 20_000) },
+    },
+    orderBy: { startedAt: "asc" },
+    take: 5,
+    select: { id: true, status: true },
   });
 
-  const { enqueueChatRun } = await import("../server/chat-run/queue");
-  for (const run of stuck) {
-    console.warn(`[chat-worker] reclaiming PENDING run ${run.id}`);
+  const { enqueueChatRun, getChatRunQueue } = await import("../server/chat-run/queue");
+  const q = getChatRunQueue();
+
+  for (const run of [...pending, ...running]) {
     try {
+      const job = await q.getJob(run.id);
+      if (job) {
+        const state = await job.getState();
+        if (state === "active" || state === "waiting" || state === "delayed") {
+          continue;
+        }
+        // completed/failed leftover blocks the same jobId — remove then re-add.
+        await job.remove().catch(() => undefined);
+      }
+      console.warn(`[chat-worker] reclaiming ${run.status} run ${run.id}`);
       await enqueueChatRun(run.id);
     } catch (err) {
       console.error(`[chat-worker] reclaim ${run.id} failed`, err);
@@ -162,7 +183,7 @@ async function reclaimPendingRuns() {
 }
 
 const reclaimTimer = setInterval(() => {
-  void reclaimPendingRuns().catch((err) => console.error("[chat-worker] reclaim loop failed", err));
+  void reclaimOrphanedRuns().catch((err) => console.error("[chat-worker] reclaim loop failed", err));
 }, 5_000);
 reclaimTimer.unref?.();
 

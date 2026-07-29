@@ -111,10 +111,11 @@ export async function executeChatRun(runId: string): Promise<void> {
 
   const channelId = run.channelId;
 
-  // Only one worker may start a PENDING run. Reclaim + BullMQ used to both
-  // call execute and race on ChatRunEvent seq (P2002 → silent client fail).
+  // Claim PENDING, or take over RUNNING after a deploy/stall redelivery.
+  // BullMQ only gives the job to one worker; reclaim only re-enqueues (never
+  // execute). Skipping RUNNING left orphaned runs that never streamed again.
   const claimed = await prisma.chatRun.updateMany({
-    where: { id: runId, status: "PENDING" },
+    where: { id: runId, status: { in: ["PENDING", "RUNNING"] } },
     data: { status: "RUNNING", startedAt: new Date() },
   });
   if (claimed.count === 0) {
@@ -123,7 +124,7 @@ export async function executeChatRun(runId: string): Promise<void> {
       select: { status: true },
     });
     console.warn(
-      `[chat-run ${runId}] skip execute — status=${current?.status ?? "missing"} (already claimed or terminal)`,
+      `[chat-run ${runId}] skip execute — status=${current?.status ?? "missing"} (terminal)`,
     );
     return;
   }
