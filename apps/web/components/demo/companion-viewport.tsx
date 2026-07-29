@@ -5,7 +5,7 @@
  * e-ink desk companion rendered locally (no Zoo engine, no DB). Parameters
  * rebuild the model live so the demo reads like a working parametric CAD.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
@@ -30,7 +30,7 @@ export const DEFAULT_COMPANION_PARAMS: CompanionParams = {
   showKickstand: true,
 };
 
-export type CompanionView = "iso" | "front" | "top" | "right";
+export type CompanionView = "iso" | "front" | "back" | "left" | "right" | "top" | "bottom";
 
 const SHELL = 0xe8e4dc;
 const SHELL_DARK = 0x2b2b2b;
@@ -113,9 +113,14 @@ function makeScreenTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-/** Builds the finished desk companion. Y-up; unit = mm; sits on y=0 desk. */
-function buildCompanion(p: CompanionParams, screenTex: THREE.Texture): THREE.Group {
+/**
+ * Builds the desk companion. Y-up; unit = mm; sits on y=0 desk.
+ * `stage` grows the model for the scripted demo: 1 = enclosure,
+ * 2 = + display module, 3 = finished product.
+ */
+function buildCompanion(p: CompanionParams, screenTex: THREE.Texture, stage: number): THREE.Group {
   const root = new THREE.Group();
+  if (stage < 1) return root;
 
   const W = p.bodyWidthMm;
   const H = p.bodyHeightMm;
@@ -152,6 +157,7 @@ function buildCompanion(p: CompanionParams, screenTex: THREE.Texture): THREE.Gro
   // Screen recess (bezel) + e-ink panel with dashboard texture.
   const bezelW = W - 16;
   const bezelH = H - 24;
+  if (stage < 2) return root;
   const bezel = new THREE.Mesh(new RoundedBoxGeometry(bezelW, bezelH, 2.4, 3, 1.5), darkMat);
   bezel.position.set(0, 4, T / 2);
   body.add(bezel);
@@ -164,6 +170,8 @@ function buildCompanion(p: CompanionParams, screenTex: THREE.Texture): THREE.Gro
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(bezelW - 8, bezelH - 8), screenMat);
   screen.position.set(0, 4, T / 2 + 1.25);
   body.add(screen);
+
+  if (stage < 3) return root;
 
   // Front accent strip under the display (speaker/status grille).
   const strip = new THREE.Mesh(new THREE.BoxGeometry(W - 24, 3, 0.8), accentMat);
@@ -244,27 +252,44 @@ const VIEWS: Record<
 > = {
   iso: { pos: [170, 130, 190] },
   front: { pos: [0, 70, 260] },
-  top: { pos: [0, 300, 0.01] },
+  back: { pos: [0, 70, -260] },
+  left: { pos: [-260, 70, 0] },
   right: { pos: [260, 70, 0] },
+  top: { pos: [0, 300, 0.01] },
+  bottom: { pos: [0, -300, 0.01] },
+};
+
+export type CompanionViewportApi = {
+  fit: () => void;
+  zoomBy: (factor: number) => void;
+  applyView: (v: CompanionView) => void;
 };
 
 export function CompanionViewport({
   params,
   view,
   spin,
+  stage = 3,
+  apiRef,
 }: {
   params: CompanionParams;
   view: CompanionView;
   /** Slow turntable rotation for the demo video hero shot. */
   spin: boolean;
+  /** Scripted build progress: 0 = empty desk, 3 = finished product. */
+  stage?: number;
+  /** Camera controls for the toolbar (fit / zoom / view). */
+  apiRef?: MutableRefObject<CompanionViewportApi | null>;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const { theme } = useTheme();
   const runtime = useRef<{
-    rebuild: (p: CompanionParams) => void;
+    rebuild: (p: CompanionParams, stage: number) => void;
     applyView: (v: CompanionView) => void;
     setBg: (mode: "dark" | "light") => void;
     setSpin: (on: boolean) => void;
+    fit: () => void;
+    zoomBy: (factor: number) => void;
   } | null>(null);
 
   useEffect(() => {
@@ -300,19 +325,31 @@ export function CompanionViewport({
     let model: THREE.Group | null = null;
     let spinning = false;
 
-    const rebuild = (p: CompanionParams) => {
+    const rebuild = (p: CompanionParams, s: number) => {
       if (model) {
         scene.remove(model);
         disposeObject(model);
       }
-      model = buildCompanion(p, screenTex);
+      model = buildCompanion(p, screenTex, s);
       scene.add(model);
     };
 
     const applyView = (v: CompanionView) => {
       const def = VIEWS[v];
       camera.position.set(...def.pos);
-      controls.target.set(0, v === "top" ? 0 : 45, 0);
+      controls.target.set(0, v === "top" || v === "bottom" ? 0 : 45, 0);
+      controls.update();
+    };
+
+    const fit = () => {
+      camera.position.set(...VIEWS.iso.pos).multiplyScalar(0.85);
+      controls.target.set(0, 45, 0);
+      controls.update();
+    };
+
+    const zoomBy = (factor: number) => {
+      const dir = camera.position.clone().sub(controls.target);
+      camera.position.copy(controls.target).add(dir.multiplyScalar(factor));
       controls.update();
     };
 
@@ -329,9 +366,12 @@ export function CompanionViewport({
       setSpin: (on) => {
         spinning = on;
       },
+      fit,
+      zoomBy,
     };
+    if (apiRef) apiRef.current = { fit, zoomBy, applyView };
     runtime.current.setBg(theme.mode);
-    rebuild(params);
+    rebuild(params, stage);
     applyView(view);
     spinning = spin;
 
@@ -364,6 +404,7 @@ export function CompanionViewport({
       screenTex.dispose();
       renderer.dispose();
       runtime.current = null;
+      if (apiRef) apiRef.current = null;
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
     };
     // params/view/theme applied in sibling effects; mount is once.
@@ -374,8 +415,8 @@ export function CompanionViewport({
   }, [theme.mode]);
 
   useEffect(() => {
-    runtime.current?.rebuild(params);
-  }, [params]);
+    runtime.current?.rebuild(params, stage);
+  }, [params, stage]);
 
   useEffect(() => {
     runtime.current?.applyView(view);

@@ -7,8 +7,11 @@ export const metadata: Metadata = {
 
 /**
  * SIMULATED Engineer workspace for demo recordings. Public route with no
- * auth/DB/Zoo dependencies; everything shown is local, hardcoded demo data.
+ * auth/DB dependencies; the chat run is scripted locally. When
+ * ZOO_API_TOKEN is configured the model renders through the real Zoo
+ * engine viewport; otherwise it falls back to a local three.js stand-in.
  */
 export default function EngineerDemoPage() {
-  return <EngineerDemo />;
+  const token = process.env.ZOO_API_TOKEN?.trim();
+  return <EngineerDemo engine={token ? { token, baseUrl: "https://api.zoo.dev" } : null} />;
 }
