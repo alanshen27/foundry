@@ -89,6 +89,13 @@ export const chatRouter = router({
       try {
         messages = await validateUIMessages({ messages: input.messages });
       } catch {
+        // Mid-stream tool parts often fail strict validation — still cache them
+        // so a reload doesn't wipe a turn the user already watched.
+        messages = (input.messages as UIMessage[]).filter(
+          (m) => m && typeof m === "object" && typeof m.id === "string" && Array.isArray(m.parts),
+        );
+      }
+      if (messages.length === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid chat messages" });
       }
       if (input.error) {

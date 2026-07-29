@@ -13,6 +13,7 @@ import { buildProjectTools, withToolLogging } from "@/server/ai/tools";
 import { appOrigin } from "@/server/app-origin";
 import { COPILOT_SYSTEM_PROMPT } from "./prompt";
 import {
+  checkpointRunMessages,
   persistFailedRunFromEvents,
   persistRunMessages,
   type ChannelScope,
@@ -284,6 +285,30 @@ export async function executeChatRun(runId: string): Promise<void> {
       });
 
       const reader = uiStream.getReader();
+      let lastCheckpointAt = 0;
+      let checkpointing: Promise<void> | null = null;
+      const maybeCheckpoint = (force = false) => {
+        const now = Date.now();
+        if (!force && now - lastCheckpointAt < 1_200) return;
+        if (checkpointing) return;
+        lastCheckpointAt = now;
+        checkpointing = checkpointRunMessages({
+          runId,
+          scope,
+          inputMessages: uiMessages,
+        })
+          .then((rebuilt) => {
+            latestMessages = rebuilt;
+            sawStreamMessages = true;
+          })
+          .catch((err) => {
+            console.warn(`[chat-run ${runId}] stream checkpoint failed`, err);
+          })
+          .finally(() => {
+            checkpointing = null;
+          });
+      };
+
       try {
         while (true) {
           if (abort.signal.aborted) {
@@ -293,9 +318,21 @@ export async function executeChatRun(runId: string): Promise<void> {
           const { done, value } = await reader.read();
           if (done) break;
           await publishRunChunk(runId, channelId, ++seq, value);
+          const kind = value && typeof value === "object" && "type" in value ? value.type : "";
+          // Persist often enough that a reload mid-Zoo-tool still has text +
+          // tool cards; force on step boundaries.
+          maybeCheckpoint(
+            kind === "finish-step" ||
+              kind === "tool-output-available" ||
+              kind === "tool-output-error" ||
+              kind === "text-end",
+          );
         }
       } finally {
         reader.releaseLock();
+        maybeCheckpoint(true);
+        const pending = checkpointing;
+        if (pending) await pending;
       }
     };
 

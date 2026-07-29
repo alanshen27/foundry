@@ -126,6 +126,21 @@ export async function persistFailedRunFromEvents(params: {
   return persistRunMessages(params.scope, stamped);
 }
 
+/**
+ * Rebuild + upsert whatever the run has streamed so far. Safe to call often
+ * during a long Zoo tool call so a browser reload doesn't wipe the turn.
+ */
+export async function checkpointRunMessages(params: {
+  runId: string;
+  scope: ChannelScope;
+  inputMessages: UIMessage[];
+}): Promise<UIMessage[]> {
+  const rebuilt = await rebuildUiMessagesFromRunEvents(params.runId, params.inputMessages);
+  if (rebuilt === params.inputMessages) return rebuilt;
+  await persistRunMessages(params.scope, rebuilt);
+  return rebuilt;
+}
+
 export async function rebuildUiMessagesFromRunEvents(
   runId: string,
   originalMessages: UIMessage[],
