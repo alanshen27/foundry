@@ -127,23 +127,30 @@ export const chatRouter = router({
         projectId: z.string(),
         channelId: z.string().optional(),
         branchId: z.string().optional(),
+        /** Prefer canceling one run — branch-wide cancel races with a just-started send. */
+        runId: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       await requireProjectCapability(ctx.user.id, input.projectId, "agent.invoke");
-      // Lock is branch-wide; prefer clearing the whole branch so a dead run on
-      // any channel can't 409 the next send.
+
       const where: {
         projectId: string;
         status: { in: ("PENDING" | "RUNNING")[] };
+        id?: string;
         branchId?: string;
         channelId?: string;
       } = {
         projectId: input.projectId,
         status: { in: ["PENDING", "RUNNING"] },
       };
-      if (input.branchId) where.branchId = input.branchId;
-      else if (input.channelId) where.channelId = input.channelId;
+      if (input.runId) {
+        where.id = input.runId;
+      } else if (input.branchId) {
+        where.branchId = input.branchId;
+      } else if (input.channelId) {
+        where.channelId = input.channelId;
+      }
 
       const active = await prisma.chatRun.findMany({
         where,

@@ -4,6 +4,8 @@ type Body = {
   projectId: string;
   branchId: string;
   channelId: string;
+  /** Fired once the server accepts the run so the client can cancel that id only. */
+  onRunId?: (runId: string) => void;
 };
 
 /** Parse JSON API errors without throwing on HTML error pages. */
@@ -37,7 +39,9 @@ export class BackgroundChatTransport<
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        ...this.ctx,
+        projectId: this.ctx.projectId,
+        branchId: this.ctx.branchId,
+        channelId: this.ctx.channelId,
         messages: options.messages,
       }),
       signal: options.abortSignal,
@@ -55,6 +59,7 @@ export class BackgroundChatTransport<
     }
     if (!payload.runId) throw new Error("Copilot run did not return a runId");
 
+    this.ctx.onRunId?.(payload.runId);
     return this.openRunStream(payload.runId, options.abortSignal);
   }
 

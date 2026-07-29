@@ -107,6 +107,10 @@ function ChatEngine({
   const busyRef = useRef(false);
   /** True when this tab started the run — skip resumeStream (avoids dual SSE). */
   const selfRunRef = useRef(false);
+  /** Bumps on every send so a late cancel from a prior failure can't kill the new run. */
+  const sendEpochRef = useRef(0);
+  /** Server run id for the in-flight send (set by transport). */
+  const ownedRunIdRef = useRef<string | null>(null);
   // Freeze the seed so RSC re-renders / prop updates never reset the live chat.
   const seedRef = useRef(pruneEmptyAssistantMessages(initialMessages));
   // Flip true synchronously on send so the stop square appears before status catches up.
@@ -145,8 +149,35 @@ function ChatEngine({
   }, [utils]);
 
   const transport = useMemo(
-    () => new BackgroundChatTransport({ projectId, branchId, channelId }),
+    () =>
+      new BackgroundChatTransport({
+        projectId,
+        branchId,
+        channelId,
+        onRunId: (runId) => {
+          ownedRunIdRef.current = runId;
+        },
+      }),
     [projectId, branchId, channelId],
+  );
+
+  /** Cancel only the run this tab owned for `epoch` (never a newer send). */
+  const releaseOwnedRun = useCallback(
+    (epoch: number) => {
+      if (epoch !== sendEpochRef.current) return;
+      const runId = ownedRunIdRef.current;
+      ownedRunIdRef.current = null;
+      if (!runId) return;
+      void cancelMutation
+        .mutateAsync({ projectId, runId })
+        .catch(() => undefined)
+        .finally(() => {
+          if (epoch === sendEpochRef.current) {
+            void utils.chat.activeRun.invalidate({ projectId, channelId });
+          }
+        });
+    },
+    [cancelMutation, utils, projectId, channelId],
   );
 
   const { messages, sendMessage, status, error, stop, resumeStream, setMessages } = useChat({
@@ -158,11 +189,11 @@ function ChatEngine({
     // worker+queue reliability is solid; broadcast still drives cross-tab attach.
     resume: false,
     onFinish: () => {
+      const epoch = sendEpochRef.current;
       selfRunRef.current = false;
       setLocalBusy(false);
+      if (epoch === sendEpochRef.current) ownedRunIdRef.current = null;
       void utils.chat.activeRun.invalidate({ projectId, channelId });
-      // Never drop a failed turn — stamp it if the stream ended in error,
-      // otherwise only prune truly empty placeholders.
       setMessages((prev) => {
         if (statusRef.current === "error") {
           const next = markFailedAssistantMessages(prev, error?.message);
@@ -176,21 +207,18 @@ function ChatEngine({
       refreshProjectData();
     },
     onError: (err) => {
-      selfRunRef.current = false;
-      setLocalBusy(false);
-      void utils.chat.activeRun.invalidate({ projectId, channelId });
       const reason = err instanceof Error ? err.message : String(err);
-      // Don't double-stamp the lock message as a failed assistant turn — that
-      // is a send rejection, not a mid-run crash. Still release any dead lock.
+      // Lock rejection is handled in send() (clear branch + retry). Do not
+      // cancel here — a concurrent retry may already own a new runId.
       if (/workspace is locked/i.test(reason)) {
-        void cancelMutation
-          .mutateAsync({ projectId, branchId, channelId })
-          .catch(() => undefined)
-          .finally(() => {
-            void utils.chat.activeRun.invalidate({ projectId, channelId });
-          });
+        selfRunRef.current = false;
+        setLocalBusy(false);
+        void utils.chat.activeRun.invalidate({ projectId, channelId });
         return;
       }
+      const epoch = sendEpochRef.current;
+      selfRunRef.current = false;
+      setLocalBusy(false);
       setMessages((prev) => {
         const next = markFailedAssistantMessages(prev, reason);
         void persistMutation
@@ -198,17 +226,12 @@ function ChatEngine({
           .catch((e) => console.error("failed to persist chat transcript", e));
         return next;
       });
-      void cancelMutation
-        .mutateAsync({ projectId, branchId, channelId })
-        .catch(() => undefined)
-        .finally(() => {
-          void utils.chat.activeRun.invalidate({ projectId, channelId });
-        });
+      // Only the run that failed — never wipe a newer send's ChatRun.
+      releaseOwnedRun(epoch);
     },
   });
 
-  /** Stamp a failure note, persist transcript, and release the branch lock. */
-  const stampAndPersistFailure = useCallback(
+  const persistFailureStamp = useCallback(
     (reason?: string) => {
       setMessages((prev) => {
         const next = markFailedAssistantMessages(prev, reason);
@@ -217,26 +240,9 @@ function ChatEngine({
           .catch((err) => console.error("failed to persist chat transcript", err));
         return next;
       });
-      // Client-side stream death (network error, tab blip) used to leave the
-      // ChatRun PENDING/RUNNING forever → every later send 409'd "locked".
-      void cancelMutation
-        .mutateAsync({ projectId, branchId, channelId })
-        .catch(() => undefined)
-        .finally(() => {
-          void utils.chat.activeRun.invalidate({ projectId, channelId });
-        });
     },
-    [
-      setMessages,
-      persistMutation,
-      cancelMutation,
-      utils,
-      projectId,
-      branchId,
-      channelId,
-    ],
+    [setMessages, persistMutation, projectId, branchId, channelId],
   );
-
   statusRef.current = status;
   // Gate send on local stream state only. A stuck ChatRun row / hung resume
   // SSE used to set busy forever via activeRun, so Enter did nothing and the
@@ -247,8 +253,9 @@ function ChatEngine({
   const busy = sending || Boolean(activeRunQuery.data);
 
   // Clear optimistic busy once the server agrees there's no active run and
-  // the local stream is idle.
+  // the local stream is idle. Never cancel from here — that raced with enqueue.
   useEffect(() => {
+    if (selfRunRef.current) return;
     if (
       localBusy &&
       !activeRunQuery.data &&
@@ -258,7 +265,7 @@ function ChatEngine({
     ) {
       setLocalBusy(false);
       if (status === "error") {
-        stampAndPersistFailure(error?.message);
+        persistFailureStamp(error?.message);
       } else {
         setMessages((prev) => pruneEmptyAssistantMessages(prev));
       }
@@ -270,7 +277,7 @@ function ChatEngine({
     status,
     error,
     setMessages,
-    stampAndPersistFailure,
+    persistFailureStamp,
   ]);
 
   useEffect(() => {
@@ -279,8 +286,6 @@ function ChatEngine({
       if (message.event === "run-started") {
         setLocalBusy(true);
         void utils.chat.activeRun.invalidate({ projectId, channelId });
-        // Only attach if another client started the run. Resuming our own send
-        // opens a second SSE and tool parts land on the wrong message.
         if (
           !selfRunRef.current &&
           (statusRef.current === "ready" || statusRef.current === "error")
@@ -289,12 +294,26 @@ function ChatEngine({
         }
       }
       if (message.event === "run-finished") {
+        const payload = message.payload as
+          | { runId?: string; status?: string; error?: string }
+          | undefined;
+        // Ignore finishes for runs we no longer own (already replaced by a new send).
+        if (
+          payload?.runId &&
+          ownedRunIdRef.current &&
+          payload.runId !== ownedRunIdRef.current &&
+          selfRunRef.current
+        ) {
+          return;
+        }
         selfRunRef.current = false;
         setLocalBusy(false);
+        if (payload?.runId && ownedRunIdRef.current === payload.runId) {
+          ownedRunIdRef.current = null;
+        }
         void utils.chat.activeRun.invalidate({ projectId, channelId });
-        const payload = message.payload as { status?: string; error?: string } | undefined;
         if (payload?.status === "error") {
-          stampAndPersistFailure(payload.error);
+          persistFailureStamp(payload.error);
         } else {
           setMessages((prev) => pruneEmptyAssistantMessages(prev));
         }
@@ -314,7 +333,7 @@ function ChatEngine({
     refreshProjectData,
     utils,
     setMessages,
-    stampAndPersistFailure,
+    persistFailureStamp,
   ]);
 
   useEffect(() => {
@@ -322,19 +341,30 @@ function ChatEngine({
   }, [channelId, messages, onMessages]);
 
   const stopRun = useCallback(() => {
+    const epoch = sendEpochRef.current;
     selfRunRef.current = false;
     stop();
     setLocalBusy(false);
     busyRef.current = false;
-    // Keep whatever streamed before stop — only prune empty placeholders.
     setMessages((prev) => pruneEmptyAssistantMessages(prev));
+    releaseOwnedRun(epoch);
+    // Also clear any other stuck branch locks when the user hits Stop.
     void cancelMutation
-      .mutateAsync({ projectId, branchId, channelId })
+      .mutateAsync({ projectId, branchId })
       .catch(() => undefined)
       .finally(() => {
         void utils.chat.activeRun.invalidate({ projectId, channelId });
       });
-  }, [cancelMutation, projectId, branchId, channelId, stop, utils, setMessages]);
+  }, [
+    cancelMutation,
+    projectId,
+    branchId,
+    channelId,
+    stop,
+    utils,
+    setMessages,
+    releaseOwnedRun,
+  ]);
 
   const send = useCallback(
     (text: string) => {
@@ -343,37 +373,45 @@ function ChatEngine({
       if (busyRef.current) return;
       if (!mentionsAi(trimmed)) return;
       shell.setOpen(true);
+
+      const epoch = ++sendEpochRef.current;
+      ownedRunIdRef.current = null;
       selfRunRef.current = true;
       setLocalBusy(true);
       busyRef.current = true;
 
-      const start = () =>
-        sendMessage({ text: trimmed }).catch(async (err) => {
-          const reason = err instanceof Error ? err.message : "request failed";
-          // Dead lock from a prior crashed run — clear it and retry once.
-          if (/workspace is locked/i.test(reason)) {
-            try {
-              await cancelMutation.mutateAsync({ projectId, branchId, channelId });
-              await utils.chat.activeRun.invalidate({ projectId, channelId });
-              await sendMessage({ text: trimmed });
-              return;
-            } catch (retryErr) {
-              selfRunRef.current = false;
-              setLocalBusy(false);
-              busyRef.current = false;
-              stampAndPersistFailure(
-                retryErr instanceof Error ? retryErr.message : reason,
-              );
-              return;
-            }
-          }
-          selfRunRef.current = false;
-          setLocalBusy(false);
-          busyRef.current = false;
-          stampAndPersistFailure(reason);
-        });
+      const fail = (reason: string) => {
+        if (epoch !== sendEpochRef.current) return;
+        selfRunRef.current = false;
+        setLocalBusy(false);
+        busyRef.current = false;
+        persistFailureStamp(reason);
+        releaseOwnedRun(epoch);
+      };
 
-      void start();
+      void sendMessage({ text: trimmed }).catch(async (err) => {
+        const reason = err instanceof Error ? err.message : "request failed";
+        if (/workspace is locked/i.test(reason)) {
+          try {
+            // Clear the dead lock, then start a fresh epoch for the retry so a
+            // late cancel from the failed attempt can't touch the new run.
+            await cancelMutation.mutateAsync({ projectId, branchId });
+            if (epoch !== sendEpochRef.current) return;
+            const retryEpoch = ++sendEpochRef.current;
+            ownedRunIdRef.current = null;
+            selfRunRef.current = true;
+            setLocalBusy(true);
+            busyRef.current = true;
+            await sendMessage({ text: trimmed });
+            if (retryEpoch !== sendEpochRef.current) return;
+            return;
+          } catch (retryErr) {
+            fail(retryErr instanceof Error ? retryErr.message : reason);
+            return;
+          }
+        }
+        fail(reason);
+      });
       void utils.chat.activeRun.invalidate({ projectId, channelId });
     },
     [
@@ -384,7 +422,8 @@ function ChatEngine({
       branchId,
       channelId,
       cancelMutation,
-      stampAndPersistFailure,
+      persistFailureStamp,
+      releaseOwnedRun,
     ],
   );
   const value = useMemo(
