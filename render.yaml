@@ -64,6 +64,9 @@ services:
   - type: web
     name: foundry-web
     runtime: node
+    # Starter = 512MB. Next + one Chromium screenshot spikes past that and
+    # Render OOM-kills the dyno. Prefer Standard (2GB) in the dashboard if
+    # thumbnails / copilot viewport renders still bounce the service.
     plan: starter
     region: oregon
     buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate && pnpm --filter @foundry/web build

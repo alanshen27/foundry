@@ -4,9 +4,15 @@ import { chromium, type Browser } from "playwright-core";
 /**
  * Headless-browser screenshots of the /render/* pages, so the copilot can see
  * the actual editors (3D model, circuit) and iterate on its own output.
+ *
+ * IMPORTANT: Render Starter is 512MB. A long-lived Chromium singleton will OOM
+ * the web dyno (and the chat worker). We serialize captures and always close
+ * the browser when the queue drains.
  */
 
 let browserPromise: Promise<Browser> | null = null;
+/** Tail of the capture queue — only one Chromium job at a time. */
+let queueTail: Promise<unknown> = Promise.resolve();
 
 /**
  * Belt-and-braces for the dev-tools badge: the dev runtime injects it outside
@@ -19,13 +25,76 @@ const HIDE_DEV_OVERLAY_CSS = `
 `;
 
 async function getBrowser(): Promise<Browser> {
-  browserPromise ??= chromium.launch({ headless: true }).then((browser) => {
-    browser.on("disconnected", () => {
-      browserPromise = null;
+  browserPromise ??= chromium
+    .launch({
+      headless: true,
+      args: [
+        // Keep the footprint tiny on 512MB dynos.
+        "--disable-dev-shm-usage",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--single-process",
+      ],
+    })
+    .then((browser) => {
+      browser.on("disconnected", () => {
+        browserPromise = null;
+      });
+      return browser;
     });
-    return browser;
-  });
   return browserPromise;
+}
+
+async function closeBrowser(): Promise<void> {
+  const pending = browserPromise;
+  browserPromise = null;
+  if (!pending) return;
+  try {
+    const browser = await pending;
+    await browser.close();
+  } catch {
+    // ignore — process may already be dead after OOM/restart
+  }
+}
+
+/**
+ * Run one Playwright job under the global lock, then shut Chromium down if the
+ * queue is idle so RSS returns to the Next.js baseline.
+ */
+async function withBrowserPage<T>(
+  viewport: { width: number; height: number },
+  fn: (page: Awaited<ReturnType<Browser["newPage"]>>) => Promise<T>,
+): Promise<T> {
+  const run = async (): Promise<T> => {
+    const browser = await getBrowser();
+    const page = await browser.newPage({
+      viewport,
+      deviceScaleFactor: 1,
+    });
+    try {
+      return await fn(page);
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  };
+
+  const job = queueTail.then(run, run);
+  // Keep the chain alive even if this job rejects.
+  queueTail = job.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  try {
+    return await job;
+  } finally {
+    // If nothing else queued while we ran, release Chromium memory.
+    const idle = queueTail;
+    void idle.then(async () => {
+      // Only close if we are still the idle tail (no newer job linked).
+      if (queueTail === idle) await closeBrowser();
+    });
+  }
 }
 
 export async function screenshotRenderPage(
@@ -47,12 +116,7 @@ export async function screenshotRenderPage(
     requireReady?: boolean;
   },
 ): Promise<Buffer> {
-  const browser = await getBrowser();
-  const page = await browser.newPage({
-    viewport: { width, height },
-    deviceScaleFactor: 1,
-  });
-  try {
+  return withBrowserPage({ width, height }, async (page) => {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
     // Render pages set data-render-ready once canvases have painted.
     const ready = await page
@@ -64,9 +128,7 @@ export async function screenshotRenderPage(
     }
     await page.addStyleTag({ content: HIDE_DEV_OVERLAY_CSS }).catch(() => undefined);
     return await page.screenshot({ type: "png" });
-  } finally {
-    await page.close();
-  }
+  });
 }
 
 export type ProductImageCandidate = {
@@ -84,12 +146,7 @@ export async function extractProductImages(
   pageUrl: string,
   { limit = 8 }: { limit?: number } = {},
 ): Promise<ProductImageCandidate[]> {
-  const browser = await getBrowser();
-  const page = await browser.newPage({
-    viewport: { width: 1280, height: 900 },
-    deviceScaleFactor: 1,
-  });
-  try {
+  return withBrowserPage({ width: 1280, height: 900 }, async (page) => {
     await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 25_000 });
     await new Promise((r) => setTimeout(r, 800));
     const raw = await page.evaluate(() => {
@@ -148,7 +205,7 @@ export async function extractProductImages(
     });
 
     const seen = new Set<string>();
-    const ranked = raw
+    return raw
       .filter((c) => {
         if (seen.has(c.url)) return false;
         seen.add(c.url);
@@ -169,9 +226,5 @@ export async function extractProductImages(
         return score(b) - score(a);
       })
       .slice(0, limit);
-
-    return ranked;
-  } finally {
-    await page.close();
-  }
+  });
 }
