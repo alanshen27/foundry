@@ -34,7 +34,10 @@ export function getRedisConnection() {
   });
   connection.on("error", (err) => {
     const detail =
-      err && typeof err === "object" && "errors" in err && Array.isArray((err as AggregateError).errors)
+      err &&
+      typeof err === "object" &&
+      "errors" in err &&
+      Array.isArray((err as AggregateError).errors)
         ? (err as AggregateError).errors
             .map((e) => {
               const n = e as { address?: string; port?: number; code?: string };
