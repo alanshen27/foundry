@@ -99,36 +99,71 @@ async function toModelMessages(
   }
 }
 
+/** Worker heartbeat cadence; live attempts refresh startedAt this often. */
+const HEARTBEAT_MS = 15_000;
+/** A RUNNING row whose heartbeat is older than this belongs to a dead worker. */
+export const HEARTBEAT_STALE_MS = 75_000;
+
+/**
+ * A redelivered job found its run already RUNNING. Never re-run the model —
+ * a second attempt appends to the same event log, which duplicated tool
+ * calls (and re-fired real Zoo mutations) on every deploy/stall. If the old
+ * attempt is dead (stale heartbeat) fail the run visibly so the user can
+ * retry; if it's still alive on another worker, leave it alone.
+ */
+async function failDeadRunningAttempt(
+  run: { id: string; channelId: string; inputMessages: unknown },
+  scope: ChannelScope,
+): Promise<void> {
+  const error =
+    "The chat worker restarted while this reply was in flight. Send the message again.";
+  const takeover = await prisma.chatRun.updateMany({
+    where: {
+      id: run.id,
+      status: "RUNNING",
+      startedAt: { lt: new Date(Date.now() - HEARTBEAT_STALE_MS) },
+    },
+    data: { status: "ERROR", error, finishedAt: new Date() },
+  });
+  if (takeover.count === 0) {
+    console.warn(`[chat-run ${run.id}] skip execute — live on another worker or terminal`);
+    return;
+  }
+  console.warn(`[chat-run ${run.id}] dead RUNNING attempt — failed cleanly (no re-run)`);
+  let inputMessages: UIMessage[] = [];
+  try {
+    inputMessages = await validateUIMessages({ messages: run.inputMessages as unknown[] });
+  } catch {
+    // Unparseable history — persist from events alone.
+  }
+  await persistFailedRunFromEvents({ runId: run.id, scope, inputMessages, error }).catch((err) =>
+    console.error(`[chat-run ${run.id}] takeover persist failed`, err),
+  );
+  await publishRunFinished(run.id, run.channelId, "error", error);
+}
+
 /** Execute one queued copilot run (called by the background worker). */
 export async function executeChatRun(runId: string): Promise<void> {
   const run = await prisma.chatRun.findUnique({ where: { id: runId } });
   if (!run || run.status === "DONE" || run.status === "ERROR" || run.status === "CANCELLED") return;
 
   const channelId = run.channelId;
-
-  // Claim PENDING, or take over RUNNING after a deploy/stall redelivery.
-  // BullMQ only gives the job to one worker; reclaim only re-enqueues (never
-  // execute). Skipping RUNNING left orphaned runs that never streamed again.
-  const claimed = await prisma.chatRun.updateMany({
-    where: { id: runId, status: { in: ["PENDING", "RUNNING"] } },
-    data: { status: "RUNNING", startedAt: new Date() },
-  });
-  if (claimed.count === 0) {
-    const current = await prisma.chatRun.findUnique({
-      where: { id: runId },
-      select: { status: true },
-    });
-    console.warn(
-      `[chat-run ${runId}] skip execute — status=${current?.status ?? "missing"} (terminal)`,
-    );
-    return;
-  }
-
   const scope: ChannelScope = {
     projectId: run.projectId,
     branchId: run.branchId,
     channelId,
   };
+
+  // Claim strictly PENDING → RUNNING. A RUNNING row means another attempt
+  // owns (or owned) this run; failDeadRunningAttempt decides via heartbeat.
+  const claimed = await prisma.chatRun.updateMany({
+    where: { id: runId, status: "PENDING" },
+    data: { status: "RUNNING", startedAt: new Date() },
+  });
+  if (claimed.count === 0) {
+    await failDeadRunningAttempt(run, scope);
+    return;
+  }
 
   const env = getServerEnv();
   if (!env.OPENAI_API_KEY) {
@@ -169,6 +204,22 @@ export async function executeChatRun(runId: string): Promise<void> {
   let latestMessages: UIMessage[] = rawMessages;
   let sawStreamMessages = false;
   const abort = new AbortController();
+
+  // Heartbeat startedAt so redelivered jobs can tell a live attempt from a
+  // dead one. Doubles as a cancellation poll: if cancel/stale terminalized
+  // the row out from under us, stop streaming instead of racing finalize.
+  const heartbeat = setInterval(() => {
+    void prisma.chatRun
+      .updateMany({
+        where: { id: runId, status: "RUNNING" },
+        data: { startedAt: new Date() },
+      })
+      .then((res) => {
+        if (res.count === 0 && !abort.signal.aborted) abort.abort();
+      })
+      .catch(() => undefined);
+  }, HEARTBEAT_MS);
+  (heartbeat as unknown as { unref?: () => void }).unref?.();
 
   const { copilotBroadcastChannel, createSupabaseBroadcastPort, createOffBroadcastPort } =
     await import("@foundry/realtime");
@@ -231,14 +282,17 @@ export async function executeChatRun(runId: string): Promise<void> {
       console.error(`[chat-run ${runId}] failed to persist messages`, err);
     });
 
-    await prisma.chatRun.update({
-      where: { id: runId },
+    // Guarded: if cancel/stale/takeover already terminalized this run, that
+    // status (and its broadcast) won — don't overwrite or double-publish.
+    const terminalized = await prisma.chatRun.updateMany({
+      where: { id: runId, status: { in: ["PENDING", "RUNNING"] } },
       data: {
         status: status === "done" ? "DONE" : status === "cancelled" ? "CANCELLED" : "ERROR",
         finishedAt: new Date(),
         error: status === "done" ? null : (error ?? status),
       },
     });
+    if (terminalized.count === 0) return;
     await publishRunFinished(
       runId,
       channelId,
@@ -403,8 +457,15 @@ export async function executeChatRun(runId: string): Promise<void> {
     await finalize("error", message);
     throw err;
   } finally {
-    // Last-resort persist if finalize never ran (should be rare).
+    clearInterval(heartbeat);
+    // Last-resort terminalize + persist if finalize never ran (should be rare).
     if (!finalized) {
+      await prisma.chatRun
+        .updateMany({
+          where: { id: runId, status: { in: ["PENDING", "RUNNING"] } },
+          data: { status: "ERROR", error: "run ended without finalize", finishedAt: new Date() },
+        })
+        .catch(() => undefined);
       await persistFailedRunFromEvents({
         runId,
         scope,

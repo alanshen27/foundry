@@ -1725,14 +1725,18 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
           const token = mintRenderToken({ projectId, branchId, kind: "model3d" });
           try {
-            // Serial views — parallel Zoo WebRTC cold-starts routinely time out as "Connecting…".
+            // Serial views — parallel Zoo WebRTC cold-starts routinely time out
+            // as "Connecting…". Cap the fallback at 2 views × 45s so one
+            // inspect can't burn many minutes of Playwright on a small dyno;
+            // the MCP path above returns all four angles in one collage.
+            const fallbackViews = views.slice(0, 2);
             const images: { view: string; key: string; imageUrl: string }[] = [];
-            for (const view of views) {
+            for (const view of fallbackViews) {
               const url = `${ctx.origin}/render/model3d?token=${encodeURIComponent(token)}&view=${view}`;
               const png = await screenshotRenderPage(url, {
                 width: 640,
                 height: 480,
-                readyTimeout: 90_000,
+                readyTimeout: 45_000,
                 requireReady: true,
               });
               const key = `projects/${projectId}/ai/model-${view}-${Date.now()}.png`;

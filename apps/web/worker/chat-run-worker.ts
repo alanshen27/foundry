@@ -13,7 +13,7 @@ config({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../../../.env")
 
 import { prisma } from "@foundry/db";
 import { getServerEnv } from "@foundry/config";
-import { executeChatRun } from "../server/chat-run/execute";
+import { executeChatRun, HEARTBEAT_STALE_MS } from "../server/chat-run/execute";
 import { Worker, type Job } from "bullmq";
 import { getRedisConnection, CHAT_RUN_QUEUE_NAME } from "../server/chat-run/queue";
 
@@ -107,12 +107,13 @@ const worker = new Worker(
   {
     connection,
     concurrency: 10,
-    // Zoo multi-file iteration + MCP execute_kcl can run many minutes with
-    // only awaits (event loop free). Keep the lock aligned with RUNNING_STALE
-    // so Redis doesn't mark the job stalled mid-assembly.
-    lockDuration: 40 * 60_000,
-    stalledInterval: 60_000,
-    maxStalledCount: 1,
+    // Redelivery is now harmless: executeChatRun only claims PENDING rows and
+    // a redelivered job for a live attempt (fresh heartbeat) is a no-op. So a
+    // short lock is safe and means a killed worker's runs fail fast instead
+    // of hanging for the old 40-minute lock.
+    lockDuration: 60_000,
+    stalledInterval: 30_000,
+    maxStalledCount: 2,
   },
 );
 
@@ -152,8 +153,10 @@ async function reclaimOrphanedRuns() {
   const running = await prisma.chatRun.findMany({
     where: {
       status: "RUNNING",
-      // Grace so a just-claimed run isn't double-enqueued.
-      startedAt: { lt: new Date(now - 20_000) },
+      // startedAt is heartbeated every 15s by a live attempt (see execute.ts).
+      // Only reclaim runs whose heartbeat is stale — re-enqueueing leads to
+      // failDeadRunningAttempt, which fails them cleanly (never re-runs).
+      startedAt: { lt: new Date(now - HEARTBEAT_STALE_MS) },
     },
     orderBy: { startedAt: "asc" },
     take: 5,

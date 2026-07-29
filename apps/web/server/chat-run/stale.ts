@@ -8,11 +8,12 @@ import { publishRunFinished } from "./publish";
 /** PENDING with no worker pickup — usually Redis/worker down. */
 const PENDING_STALE_MS = 45_000;
 /**
- * RUNNING without finishing — worker crashed mid-stream. A single Zoo
- * text_to_cad / multi-part assembly can run a long time with no stream chunks,
- * so this has to sit above Zoo's worst-case wall clock or runs die mid-flight.
+ * RUNNING with a stale heartbeat — a live worker attempt refreshes startedAt
+ * every 15s (see chat-run/execute.ts), including while long Zoo tools are in
+ * flight. Minutes of silence therefore means the process died, and the run
+ * can be failed fast instead of holding the AI edit lock for ages.
  */
-const RUNNING_STALE_MS = 40 * 60_000;
+const RUNNING_STALE_MS = 3 * 60_000;
 
 type ChatRunClient = Pick<Prisma.TransactionClient, "chatRun">;
 
@@ -38,7 +39,7 @@ async function expireStaleRuns(
   const runningWhere: Prisma.ChatRunWhereInput = {
     ...scope,
     status: "RUNNING",
-    // Measure from pickup, not enqueue, so queue wait doesn't count.
+    // startedAt doubles as the worker heartbeat, so this measures liveness.
     OR: [
       { startedAt: { lt: new Date(now - RUNNING_STALE_MS) } },
       { startedAt: null, createdAt: { lt: new Date(now - RUNNING_STALE_MS) } },

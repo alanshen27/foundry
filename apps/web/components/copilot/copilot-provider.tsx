@@ -23,6 +23,7 @@ import {
   seedTranscriptWithLocalBackup,
   writeLocalTranscript,
 } from "@/lib/copilot/local-transcript";
+import { mentionsAi } from "@/lib/copilot/mentions";
 import {
   markFailedAssistantMessages,
   mergeTranscriptPreferringUserTurns,
@@ -316,13 +317,10 @@ function ChatEngine({
   persistFailureStampRef.current = persistFailureStamp;
   statusRef.current = status;
   messagesRef.current = messages;
-  // Gate send on local stream state only. A stuck ChatRun row / hung resume
-  // SSE used to set busy forever via activeRun, so Enter did nothing and the
-  // composer never cleared (no POST /api/ai/chat).
-  const sending = localBusy || status === "submitted" || status === "streaming";
-  busyRef.current = sending;
-  // Stop button: local send OR a server-side run the user may want to cancel.
-  const busy = sending || Boolean(activeRunQuery.data);
+  // Stop / "working" only for real @AI runs — notes (no @AI) briefly hit
+  // submitted/streaming via useChat but must not flip the button to Stop.
+  const busy = localBusy || Boolean(activeRunQuery.data);
+  busyRef.current = busy;
 
   // Clear optimistic busy once the server agrees there's no active run and
   // the local stream is idle. Never cancel from here — that raced with enqueue.
@@ -377,14 +375,22 @@ function ChatEngine({
       if (message.event === "run-started") {
         setLocalBusy(true);
         void utils.chat.activeRun.invalidate({ projectId, channelId });
+        const startedRunId = (message.payload as { runId?: string } | undefined)?.runId ?? null;
         const streaming =
           statusRef.current === "submitted" || statusRef.current === "streaming";
-        // Other tabs / reloads only — never open a second SSE for our own send.
+        // Other tabs / reloads only — never open a second SSE for our own
+        // send, and never attach twice to the same run (the resume effect
+        // above may have already claimed it).
         if (
           !selfRunRef.current &&
           !streaming &&
-          (statusRef.current === "ready" || statusRef.current === "error")
+          (statusRef.current === "ready" || statusRef.current === "error") &&
+          (!startedRunId || resumedRunIdRef.current !== startedRunId)
         ) {
+          if (startedRunId) {
+            resumedRunIdRef.current = startedRunId;
+            ownedRunIdRef.current = startedRunId;
+          }
           void resumeStream();
         }
       }
@@ -475,12 +481,14 @@ function ChatEngine({
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      if (busyRef.current) return;
+      // Only @AI runs own the stop button / send lock. Notes can always go out.
+      const wantsAi = mentionsAi(trimmed);
+      if (wantsAi && busyRef.current) return;
       shell.setOpen(true);
 
       const epoch = ++sendEpochRef.current;
       ownedRunIdRef.current = null;
-      selfRunRef.current = true;
+      selfRunRef.current = wantsAi;
       pendingUserTextRef.current = trimmed;
       // Stash before POST so a reload mid-flight / after 401 still keeps the turn.
       writeLocalTranscript(channelId, [
@@ -491,8 +499,10 @@ function ChatEngine({
           parts: [{ type: "text", text: trimmed }],
         } as UIMessage,
       ]);
-      setLocalBusy(true);
-      busyRef.current = true;
+      if (wantsAi) {
+        setLocalBusy(true);
+        busyRef.current = true;
+      }
 
       const fail = (reason: string) => {
         if (epoch !== sendEpochRef.current) return;
@@ -506,11 +516,17 @@ function ChatEngine({
       void sendMessage({ text: trimmed })
         .then(() => {
           // Stream finished — server persisted at POST; drop the local safety net.
-          if (epoch === sendEpochRef.current) pendingUserTextRef.current = null;
+          if (epoch === sendEpochRef.current) {
+            pendingUserTextRef.current = null;
+            if (!wantsAi) {
+              selfRunRef.current = false;
+              setLocalBusy(false);
+            }
+          }
         })
         .catch(async (err) => {
           const reason = err instanceof Error ? err.message : "request failed";
-          if (/workspace is locked/i.test(reason)) {
+          if (wantsAi && /workspace is locked/i.test(reason)) {
             try {
               // Clear the dead lock, then start a fresh epoch for the retry so a
               // late cancel from the failed attempt can't touch the new run.
@@ -530,9 +546,18 @@ function ChatEngine({
               return;
             }
           }
-          fail(reason);
+          if (wantsAi) fail(reason);
+          else {
+            if (epoch === sendEpochRef.current) {
+              selfRunRef.current = false;
+              pendingUserTextRef.current = null;
+            }
+            persistFailureStamp(reason);
+          }
         });
-      void utils.chat.activeRun.invalidate({ projectId, channelId });
+      if (wantsAi) {
+        void utils.chat.activeRun.invalidate({ projectId, channelId });
+      }
     },
     [
       sendMessage,

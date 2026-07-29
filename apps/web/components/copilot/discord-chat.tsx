@@ -206,7 +206,8 @@ export function DiscordChat({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const canSend = Boolean(input.trim()) && status !== "submitted" && status !== "streaming";
+  // Notes (no @AI) stay sendable; Stop only appears while an @AI run is busy.
+  const canSend = Boolean(input.trim()) && !busy;
   const mentionActive = useMemo(() => mentionQueryAt(input, caret), [input, caret]);
   const mentionOptions = useMemo(
     () => (mentionActive ? filterMentionTargets(mentionActive.query) : []),
