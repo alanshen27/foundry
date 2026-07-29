@@ -307,8 +307,7 @@ function ChatEngine({
       }
       if (message.event === "run-finished") {
         const payload = message.payload as
-          | { runId?: string; status?: string; error?: string }
-          | undefined;
+          { runId?: string; status?: string; error?: string } | undefined;
         // Never let another run's finish clear our in-flight send/stream.
         if (payload?.runId && ownedRunIdRef.current && payload.runId !== ownedRunIdRef.current) {
           return;
@@ -371,16 +370,7 @@ function ChatEngine({
       .finally(() => {
         void utils.chat.activeRun.invalidate({ projectId, channelId });
       });
-  }, [
-    cancelMutation,
-    projectId,
-    branchId,
-    channelId,
-    stop,
-    utils,
-    setMessages,
-    releaseOwnedRun,
-  ]);
+  }, [cancelMutation, projectId, branchId, channelId, stop, utils, setMessages, releaseOwnedRun]);
 
   const send = useCallback(
     (text: string) => {

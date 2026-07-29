@@ -86,9 +86,7 @@ describe("persistRunMessages", () => {
       },
     ]);
 
-    const count = await persistRunMessages(scope, [
-      message("a1", "assistant", "Working…"),
-    ]);
+    const count = await persistRunMessages(scope, [message("a1", "assistant", "Working…")]);
 
     expect(count).toBe(0);
     expect(transaction).not.toHaveBeenCalled();

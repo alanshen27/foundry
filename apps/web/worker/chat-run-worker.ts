@@ -183,7 +183,9 @@ async function reclaimOrphanedRuns() {
 }
 
 const reclaimTimer = setInterval(() => {
-  void reclaimOrphanedRuns().catch((err) => console.error("[chat-worker] reclaim loop failed", err));
+  void reclaimOrphanedRuns().catch((err) =>
+    console.error("[chat-worker] reclaim loop failed", err),
+  );
 }, 5_000);
 reclaimTimer.unref?.();
 
