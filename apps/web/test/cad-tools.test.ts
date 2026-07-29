@@ -5,6 +5,7 @@ import {
   findLastSolid,
   nextBinding,
   pipeOntoSolid,
+  pushPullFace,
   upsertParams,
 } from "@/lib/cad/tools";
 
@@ -123,5 +124,77 @@ other = startSketchOn(XY)
 `;
     const { script } = applyCadTool(withTwo, "union", {});
     expect(script).toMatch(/body\d+ = union\(\[body, other\]\)/);
+  });
+
+  it("creates additional parametric primitive families", () => {
+    expect(applyCadTool("// empty\n", "sphere", { radius: 18 }).script).toContain("revolve(");
+    expect(
+      applyCadTool("// empty\n", "cone", {
+        baseRadius: 20,
+        topRadius: 4,
+        height: 30,
+      }).script,
+    ).toContain("loft([");
+    expect(
+      applyCadTool("// empty\n", "tube", {
+        outerRadius: 20,
+        wall: 3,
+        height: 40,
+      }).script,
+    ).toContain("subtract(");
+  });
+
+  it("adds sweep, appearance, and duplicate operations", () => {
+    expect(
+      applyCadTool("// empty\n", "sweep", {
+        radius: 3,
+        length: 40,
+        bend: 12,
+        rise: 18,
+      }).script,
+    ).toContain("sweep(");
+    expect(
+      applyCadTool(BASE, "appearance", {
+        color: "#3366ff",
+        metalness: 30,
+        roughness: 40,
+        opacity: 100,
+      }).script,
+    ).toContain('|> appearance(color = "#3366ff"');
+    expect(applyCadTool(BASE, "duplicate", { x: 30, y: 0, z: 0 }).script).toContain("clone(body)");
+  });
+
+  it("creates Fusion-style sketch, construction, and fastener features", () => {
+    const slot = applyCadTool("// empty\n", "slotSketch", {
+      plane: "XY",
+      length: 36,
+      width: 12,
+    }).script;
+    expect(slot).toContain("tangentialArc");
+    expect(slot).toContain("|> close()");
+
+    const plane = applyCadTool("// empty\n", "offsetPlane", {
+      plane: "XZ",
+      offset: 25,
+    }).script;
+    expect(plane).toContain("offsetPlane(XZ, offset =");
+    expect(plane).toContain("startSketchOn(constructionPlane");
+
+    const nut = applyCadTool("// empty\n", "hexNut", {
+      outerRadius: 10,
+      boreRadius: 4,
+      height: 6,
+    }).script;
+    expect(nut).toContain("numSides = 6");
+    expect(nut).toContain("subtract(");
+  });
+});
+
+describe("pushPullFace", () => {
+  it("edits the driving dimension for a principal face", () => {
+    const result = pushPullFace(BASE, "top", 7.5);
+    expect(result.parameter).toBe("height");
+    expect(result.value).toBe(27.5);
+    expect(result.script).toContain("height = 27.5");
   });
 });

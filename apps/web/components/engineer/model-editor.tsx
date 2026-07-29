@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "rea
 import Editor from "@monaco-editor/react";
 import {
   Bot,
+  Axis3d,
   Boxes,
   ChevronDown,
   ChevronUp,
@@ -29,12 +30,16 @@ import { cadCursorSurface, normalizedCursorCoordinate, type CursorState } from "
 import { Button } from "@/components/ui/button";
 import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import {
+  addCadAsset,
   addCadComponent,
+  cadAssetImportMode,
   displayNameFromCadPath,
   getActiveComponent,
   importMeshAsPart,
+  insertPartIntoAssembly,
   normalizeCadDoc,
   setActiveComponent,
+  upsertPartScript,
   updateComponentContent,
   type CadComponent,
   type CadComponentKind,
@@ -51,7 +56,11 @@ import { parseCadParams, setCadParam, type CadParam } from "@/lib/cad/params";
 import { cadViewportInput } from "@/lib/cad/viewport-project";
 import { CadViewport } from "@/components/engineer/cad-viewport";
 import { CadFeatureTimeline } from "@/components/engineer/cad-feature-timeline";
+import { CadImportDialog, type CadImportUnit } from "@/components/engineer/cad-import-dialog";
 import { CadToolsPanel } from "@/components/engineer/cad-tools-panel";
+import { CadTransformGizmo } from "@/components/engineer/cad-transform-gizmo";
+import { applyCadTool, findLastSolid } from "@/lib/cad/tools";
+import { safeCadError } from "@/lib/cad/safe-error";
 import { useTheme } from "@/components/theme-provider";
 import { defineFoundryMonacoThemes } from "@/lib/monaco-theme";
 import { monacoThemeFor } from "@/lib/theme";
@@ -91,7 +100,7 @@ function ParamsPanel({
   const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <div className="bg-card/85 absolute top-3 right-3 z-10 w-60 rounded-none border shadow-lg backdrop-blur-md">
+    <div className="bg-card/90 absolute top-32 right-3 z-30 w-64 rounded-lg border shadow-lg backdrop-blur-md">
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
@@ -255,16 +264,34 @@ function ComponentTree({
   canEdit,
   onSelect,
   onAdd,
+  onImport,
+  onInsertPart,
 }: {
   doc: CadDoc;
   activeId: string;
   canEdit: boolean;
   onSelect: (id: string) => void;
   onAdd: (kind: CadComponentKind) => void;
+  onImport: () => void;
+  onInsertPart: (assemblyId: string, partId: string) => void;
 }) {
   const groups: CadComponentKind[] = ["part", "assembly", "instructions"];
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1">
+      <div className="mx-2 my-2 overflow-hidden rounded-lg border">
+        <div className="text-muted-foreground px-2.5 pt-2 text-[9px] font-semibold tracking-wider uppercase">
+          Project data
+        </div>
+        <button
+          type="button"
+          onClick={onImport}
+          disabled={!canEdit}
+          className="hover:bg-muted/60 flex w-full items-center gap-2 px-2.5 py-2 text-left text-xs disabled:opacity-40"
+        >
+          <Upload className="text-primary size-3.5" />
+          <span className="font-medium">Import design file</span>
+        </button>
+      </div>
       {groups.map((kind) => {
         const meta = KIND_META[kind];
         const Icon = meta.icon;
@@ -289,14 +316,36 @@ function ComponentTree({
               // Parts live at parts/<name>/main.kcl — show the part name, not "main.kcl".
               const label = c.name || displayNameFromCadPath(c.path);
               const ext = c.kind === "instructions" ? ".md" : ".kcl";
+              const canDropPart = kind === "assembly" && canEdit;
               return (
                 <button
                   key={c.id}
                   type="button"
+                  draggable={kind === "part" && canEdit}
+                  onDragStart={(event) => {
+                    if (kind !== "part") return;
+                    event.dataTransfer.effectAllowed = "copy";
+                    event.dataTransfer.setData("application/x-foundry-cad-part", c.id);
+                    event.dataTransfer.setData("text/plain", c.id);
+                  }}
+                  onDragOver={(event) => {
+                    if (!canDropPart) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                  }}
+                  onDrop={(event) => {
+                    if (!canDropPart) return;
+                    event.preventDefault();
+                    const partId =
+                      event.dataTransfer.getData("application/x-foundry-cad-part") ||
+                      event.dataTransfer.getData("text/plain");
+                    if (partId) onInsertPart(c.id, partId);
+                  }}
                   onClick={() => onSelect(c.id)}
                   className={cn(
                     "hover:bg-muted/60 flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs",
                     activeId === c.id && "bg-muted text-foreground font-medium",
+                    canDropPart && "border-primary/0 hover:border-primary/30 border-y",
                   )}
                 >
                   <Layers className="text-muted-foreground size-3 shrink-0 opacity-60" />
@@ -304,11 +353,19 @@ function ComponentTree({
                     {label}
                     {ext}
                   </span>
+                  {kind === "part" && canEdit ? (
+                    <span className="text-muted-foreground text-[8px]">drag</span>
+                  ) : null}
                 </button>
               );
             })}
             {items.length === 0 ? (
               <p className="text-muted-foreground px-2.5 py-1 text-[11px]">None yet</p>
+            ) : null}
+            {kind === "assembly" && items.length > 0 ? (
+              <p className="text-muted-foreground px-2.5 py-1 text-[9px]">
+                Drop a Part onto an assembly to place it.
+              </p>
             ) : null}
           </div>
         );
@@ -387,8 +444,6 @@ function CadCursorOverlay({
   return <CadCursorLayer peers={cursors.peers} />;
 }
 
-type CadImportUnit = "mm" | "cm" | "m" | "in" | "ft" | "yd";
-
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -400,71 +455,6 @@ function fileToBase64(file: File): Promise<string> {
     };
     reader.readAsDataURL(file);
   });
-}
-
-function ImportCadPanel({
-  file,
-  unit,
-  importing,
-  error,
-  onUnitChange,
-  onCancel,
-  onImport,
-}: {
-  file: File;
-  unit: CadImportUnit;
-  importing: boolean;
-  error: string | null;
-  onUnitChange: (unit: CadImportUnit) => void;
-  onCancel: () => void;
-  onImport: () => void;
-}) {
-  return (
-    <div className="bg-background/65 absolute inset-0 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
-      <div className="bg-card w-full max-w-sm rounded-none border shadow-xl">
-        <div className="border-b px-4 py-3">
-          <p className="text-sm font-semibold">Import CAD resource</p>
-          <p className="text-muted-foreground mt-1 truncate font-mono text-[11px]">{file.name}</p>
-        </div>
-        <div className="space-y-3 px-4 py-3">
-          <div className="bg-muted/50 flex justify-between px-2.5 py-2 text-xs">
-            <span className="text-muted-foreground">Size</span>
-            <span className="font-mono">{(file.size / 1_048_576).toFixed(2)} MB</span>
-          </div>
-          <label className="block text-xs">
-            <span className="text-muted-foreground mb-1.5 block">
-              Source units for unitless mesh formats
-            </span>
-            <select
-              value={unit}
-              onChange={(event) => onUnitChange(event.target.value as CadImportUnit)}
-              className="border-input bg-background h-9 w-full rounded-none border px-2 text-xs outline-none focus:border-ring"
-            >
-              <option value="mm">Millimeters</option>
-              <option value="cm">Centimeters</option>
-              <option value="m">Meters</option>
-              <option value="in">Inches</option>
-              <option value="ft">Feet</option>
-              <option value="yd">Yards</option>
-            </select>
-          </label>
-          <p className="text-muted-foreground text-[10px] leading-relaxed">
-            STEP/STP keeps its authored scale. STL, OBJ, and PLY are unitless and use this setting.
-            Imported geometry is labeled UNVERIFIED until inspected.
-          </p>
-          {error ? <p className="text-destructive text-[11px]">{error}</p> : null}
-        </div>
-        <div className="flex justify-end gap-2 border-t px-4 py-3">
-          <Button variant="outline" size="sm" onClick={onCancel} disabled={importing}>
-            Cancel
-          </Button>
-          <Button size="sm" onClick={onImport} disabled={importing}>
-            {importing ? "Importing…" : "Import"}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export function ModelEditor({
@@ -513,10 +503,10 @@ export function ModelEditor({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [showTree, setShowTree] = useState(true);
   const [showCode, setShowCode] = useState(false);
+  const [showGizmo, setShowGizmo] = useState(true);
   const [execError, setExecError] = useState<string | null>(null);
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
-  const [pendingImport, setPendingImport] = useState<File | null>(null);
-  const [importUnit, setImportUnit] = useState<CadImportUnit>("mm");
+  const [importOpen, setImportOpen] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [syncingAfterLock, setSyncingAfterLock] = useState(false);
   const [, setHistoryVersion] = useState(0);
@@ -525,7 +515,6 @@ export function ModelEditor({
   const sawLockRef = useRef(false);
   const appliedUpdatedAtRef = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const importInputRef = useRef<HTMLInputElement | null>(null);
   const historyRef = useRef<{
     past: CadDoc[];
     future: CadDoc[];
@@ -550,7 +539,10 @@ export function ModelEditor({
     // Always take newer server docs (copilot writes) even if local was dirty —
     // otherwise AI-added parts never appear after a parallel race or autosave.
     const serverIsNew = appliedUpdatedAtRef.current !== serverUpdatedAt;
-    if (dirtyRef.current && !serverIsNew) return;
+    // A project without a persisted MODEL3D row reports the same "empty"
+    // snapshot on every poll. Re-normalizing it would mint fresh component ids
+    // every 1.5s and remount Monaco / reset CAD selection.
+    if (!serverIsNew) return;
 
     const next = normalizeCadDoc(query.data?.data ?? null);
     appliedUpdatedAtRef.current = serverUpdatedAt;
@@ -678,6 +670,15 @@ export function ModelEditor({
     persist(next, { checkpoint: true, activeIdOverride: next.activeId });
   }
 
+  function onInsertPart(assemblyId: string, partId: string) {
+    if (!doc || !editable) return;
+    const next = insertPartIntoAssembly(doc, assemblyId, partId);
+    if (next === doc) return;
+    setActiveId(assemblyId);
+    setSelectedFeatureId(null);
+    persist(next, { checkpoint: true, activeIdOverride: assemblyId });
+  }
+
   function onChangeContent(next: string | undefined, checkpoint = false) {
     if (!editable || !doc || !activeId || next === undefined) return;
     const current = doc.components.find((c) => c.id === activeId);
@@ -724,30 +725,37 @@ export function ModelEditor({
     });
   }
 
-  async function confirmImport() {
-    if (!pendingImport || !doc || !editable) return;
+  async function confirmImport(file: File, unit: CadImportUnit) {
+    if (!doc || !editable) return;
     setImportError(null);
-    if (pendingImport.size > 10_000_000) {
-      setImportError("File exceeds the 10 MB CAD import limit.");
+    if (file.size > 25_000_000) {
+      setImportError("File exceeds the 25 MB design import limit.");
       return;
     }
     try {
-      const contentBase64 = await fileToBase64(pendingImport);
+      const contentBase64 = await fileToBase64(file);
       const result = await importMesh.mutateAsync({
         projectId,
         branchId,
-        filename: pendingImport.name,
+        filename: file.name,
         contentBase64,
-        lengthUnit: importUnit,
+        lengthUnit: unit,
       });
-      const next = importMeshAsPart(doc, result.asset);
+      const mode = cadAssetImportMode(result.asset.format);
+      let next: CadDoc;
+      if (mode === "native-kcl") {
+        const source = (await file.text()).trim();
+        if (!source) throw new Error("The selected KCL file is empty.");
+        next = upsertPartScript(addCadAsset(doc, result.asset), result.asset.name, source);
+      } else {
+        next = importMeshAsPart(doc, result.asset);
+      }
       setActiveId(next.activeId);
       setSelectedFeatureId(null);
       persist(next, { checkpoint: true, activeIdOverride: next.activeId });
-      setPendingImport(null);
-      if (importInputRef.current) importInputRef.current.value = "";
+      setImportOpen(false);
     } catch (error) {
-      setImportError(error instanceof Error ? error.message : "CAD import failed");
+      setImportError(safeCadError(error, "import"));
     }
   }
 
@@ -798,8 +806,37 @@ export function ModelEditor({
   const inlineFields = selectedFeature ? parseCadFeatureFields(selectedFeature) : [];
   const targetSolid =
     selectedFeature?.isSolid && selectedFeature.kind !== "import" ? selectedFeature.binding : null;
+  const manipulatorTarget = isKcl && active ? (targetSolid ?? findLastSolid(active.content)) : null;
   const canUndo = historyRef.current.past.length > 0;
   const canRedo = historyRef.current.future.length > 0;
+
+  function applyManipulatorTranslate(axis: "X" | "Y" | "Z", distanceMm: number) {
+    if (!active || !isKcl || !manipulatorTarget) return;
+    const values = {
+      x: axis === "X" ? distanceMm : 0,
+      y: axis === "Y" ? distanceMm : 0,
+      z: axis === "Z" ? distanceMm : 0,
+    };
+    const result = applyCadTool(active.content, "translate", values, {
+      targetSolid: manipulatorTarget,
+    });
+    onChangeContent(result.script, true);
+  }
+
+  function applyManipulatorRotate(axis: "X" | "Y" | "Z", degrees: number) {
+    if (!active || !isKcl || !manipulatorTarget) return;
+    const result = applyCadTool(
+      active.content,
+      "rotate",
+      {
+        roll: axis === "X" ? degrees : 0,
+        pitch: axis === "Y" ? degrees : 0,
+        yaw: axis === "Z" ? degrees : 0,
+      },
+      { targetSolid: manipulatorTarget },
+    );
+    onChangeContent(result.script, true);
+  }
 
   if (doc === null || engine.isLoading) {
     return <DotMatrixLoader className="absolute inset-0" label="Loading CAD" />;
@@ -808,8 +845,7 @@ export function ModelEditor({
   if (engine.error || !engine.data) {
     return (
       <div className="text-destructive absolute inset-0 flex items-center justify-center p-8 text-center text-sm">
-        {engine.error?.message ??
-          "Zoo CAD is not configured. Set ZOO_API_TOKEN in the root .env and restart."}
+        {safeCadError(engine.error ?? new Error("CAD service is not configured"), "session")}
       </div>
     );
   }
@@ -817,10 +853,11 @@ export function ModelEditor({
   return (
     <div className="absolute inset-0 flex">
       {showTree ? (
-        <div className="bg-card/40 flex w-52 shrink-0 flex-col border-r">
-          <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+        <div className="bg-card/55 flex w-60 shrink-0 flex-col border-r">
+          <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
             <Boxes className="text-primary size-3.5" />
-            <span className="text-xs font-medium">CAD workspace</span>
+            <span className="text-xs font-semibold">Design browser</span>
+            <span className="text-muted-foreground ml-auto text-[9px]">KCL</span>
           </div>
           <ComponentTree
             doc={doc}
@@ -828,6 +865,11 @@ export function ModelEditor({
             canEdit={editable}
             onSelect={onSelect}
             onAdd={onAdd}
+            onImport={() => {
+              setImportError(null);
+              setImportOpen(true);
+            }}
+            onInsertPart={onInsertPart}
           />
         </div>
       ) : null}
@@ -895,7 +937,9 @@ export function ModelEditor({
                 feature={selectedFeature}
                 measurement={measurement.data}
                 measuring={measurement.isFetching}
-                measureError={measurement.error?.message}
+                measureError={
+                  measurement.error ? safeCadError(measurement.error, "execution") : undefined
+                }
                 canEdit={editable}
                 onSet={(name, value) => onChangeContent(setCadParam(active.content, name, value))}
                 onSetInline={(field, value) => {
@@ -912,12 +956,20 @@ export function ModelEditor({
                 script={viewport.script}
                 engine={engine.data}
                 view="orbit"
-                chrome
+                chrome={true}
                 projectFiles={viewport.projectFiles}
                 entryPath={viewport.entryPath}
                 meshAssets={viewport.meshAssets}
                 foreignImportOnly={viewport.foreignImportOnly}
                 onError={setExecError}
+              />
+            ) : null}
+            {showGizmo && manipulatorTarget ? (
+              <CadTransformGizmo
+                target={manipulatorTarget}
+                canEdit={editable}
+                onTranslate={applyManipulatorTranslate}
+                onRotate={applyManipulatorRotate}
               />
             ) : null}
             {active && isKcl ? (
@@ -944,7 +996,7 @@ export function ModelEditor({
         />
         {aiLock.data ? (
           <div
-            className="bg-card/95 pointer-events-none absolute top-14 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg backdrop-blur-md"
+            className="bg-card/95 pointer-events-none absolute top-32 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg backdrop-blur-md"
             role="status"
           >
             <span className="bg-primary/15 text-primary flex size-6 items-center justify-center rounded-md">
@@ -957,13 +1009,12 @@ export function ModelEditor({
             <Lock className="text-muted-foreground size-3.5" />
           </div>
         ) : null}
-        <div className="absolute top-3 left-3 z-30 flex items-center gap-1">
+        <div className="bg-card/95 absolute inset-x-0 top-0 z-40 flex h-10 items-center gap-1 border-b px-2 shadow-sm backdrop-blur-md">
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
             onClick={() => setShowTree(!showTree)}
             aria-label={showTree ? "Hide component tree" : "Show component tree"}
-            className="bg-card/90 shadow backdrop-blur-md"
           >
             {showTree ? (
               <PanelLeftClose className="size-4" />
@@ -972,74 +1023,83 @@ export function ModelEditor({
             )}
           </Button>
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
             onClick={() => setShowCode(!showCode)}
             aria-label={showCode ? "Hide code" : "Show code"}
-            className={cn("bg-card/90 shadow backdrop-blur-md", showCode && "bg-muted")}
+            className={cn(showCode && "bg-muted")}
           >
             <Code className="size-4" />
           </Button>
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
             onClick={undo}
             disabled={!editable || !canUndo}
             aria-label="Undo CAD edit"
             title="Undo CAD edit"
-            className="bg-card/90 shadow backdrop-blur-md"
           >
             <Undo2 className="size-4" />
           </Button>
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
             onClick={redo}
             disabled={!editable || !canRedo}
             aria-label="Redo CAD edit"
             title="Redo CAD edit"
-            className="bg-card/90 shadow backdrop-blur-md"
           >
             <Redo2 className="size-4" />
           </Button>
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
-            onClick={() => importInputRef.current?.click()}
+            onClick={() => {
+              setImportError(null);
+              setImportOpen(true);
+            }}
             disabled={!editable}
-            aria-label="Import CAD resource"
-            title="Import STEP, STL, OBJ, GLTF, GLB, or PLY"
-            className="bg-card/90 shadow backdrop-blur-md"
+            aria-label="Import design resource"
+            title="Import CAD, mesh, drawing, KCL, or electronics design files"
           >
             <Upload className="size-4" />
           </Button>
-          <input
-            ref={importInputRef}
-            type="file"
-            hidden
-            accept=".step,.stp,.stl,.obj,.gltf,.glb,.ply"
-            onChange={(event) => {
-              const file = event.target.files?.[0] ?? null;
-              setImportError(null);
-              setPendingImport(file);
-            }}
-          />
+          <div className="bg-border mx-1 h-5 w-px" />
+          <Button
+            variant={showGizmo ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => setShowGizmo((shown) => !shown)}
+            disabled={!manipulatorTarget}
+            aria-pressed={showGizmo}
+            title="Toggle the in-canvas move and rotate manipulator"
+            className="h-7 gap-1.5 px-2 text-[10px]"
+          >
+            <Axis3d className="size-3.5" />
+            Move / Copy
+          </Button>
+          <div className="text-muted-foreground ml-2 flex min-w-0 items-center gap-1.5 text-[10px]">
+            <span className="text-primary font-semibold tracking-wider">DESIGN</span>
+            <span>/</span>
+            <span className="text-foreground max-w-52 truncate font-mono">
+              {active?.path ?? "No active part"}
+            </span>
+          </div>
+          <div className="text-muted-foreground ml-auto flex items-center gap-2 pr-1 text-[10px]">
+            <span>{features.length} features</span>
+            <span className="bg-border h-3 w-px" />
+            <span>{save.isPending ? "Saving…" : "Saved"}</span>
+          </div>
         </div>
-        {pendingImport ? (
-          <ImportCadPanel
-            file={pendingImport}
-            unit={importUnit}
-            importing={importMesh.isPending}
-            error={importError}
-            onUnitChange={setImportUnit}
-            onCancel={() => {
-              setPendingImport(null);
-              setImportError(null);
-              if (importInputRef.current) importInputRef.current.value = "";
-            }}
-            onImport={() => void confirmImport()}
-          />
-        ) : null}
+        <CadImportDialog
+          open={importOpen}
+          pending={importMesh.isPending}
+          error={importError}
+          onClose={() => {
+            setImportOpen(false);
+            setImportError(null);
+          }}
+          onFile={(file, unit) => void confirmImport(file, unit)}
+        />
       </div>
     </div>
   );

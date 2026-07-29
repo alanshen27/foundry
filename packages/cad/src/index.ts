@@ -49,6 +49,8 @@ export {
   upsertCadContent,
   slugifyCadName,
   cadAssetFormatFromName,
+  cadAssetImportMode,
+  isEngineCadAssetFormat,
   importAssetPath,
   kclForForeignImport,
   parseForeignImports,
@@ -66,4 +68,4 @@ export {
   addCadAsset,
   importMeshAsPart,
 } from "./doc";
-export type { KclProjectBuild } from "./doc";
+export type { CadAssetImportMode, KclProjectBuild } from "./doc";

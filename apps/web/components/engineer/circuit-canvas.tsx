@@ -20,8 +20,14 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   AlertTriangle,
+  Cable,
+  ChevronDown,
+  CircleCheck,
   Code2,
   FileDown,
+  ListChecks,
+  Network,
+  PanelBottom,
   Play,
   RotateCw,
   Search,
@@ -29,6 +35,7 @@ import {
   SquareDashed,
   Terminal,
   Trash2,
+  WandSparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -60,6 +67,8 @@ import {
   type PartNode,
 } from "@/components/engineer/circuit-nodes";
 import { partitionBoards, type BoardPartition } from "@/lib/circuit/groups";
+import { runCircuitErc } from "@/lib/circuit/erc";
+import { buildNets } from "@/lib/pcb/netlist";
 import { Simulator } from "@/lib/sim/engine";
 import { MCU_TYPES, partModel } from "@/lib/sim/parts";
 import { runSketch, type SketchHandle } from "@/lib/sim/sketch";
@@ -230,6 +239,10 @@ function graphToDoc(
       id: e.id,
       from: { part: e.source, pin: e.sourceHandle ?? "" },
       to: { part: e.target, pin: e.targetHandle ?? "" },
+      label:
+        typeof (e.data as { netLabel?: unknown } | undefined)?.netLabel === "string"
+          ? (e.data as { netLabel: string }).netLabel.trim() || undefined
+          : undefined,
     })),
   };
 }
@@ -309,7 +322,12 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<PartNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [search, setSearch] = useState("");
+  const [partCategory, setPartCategory] = useState("All");
+  const [electricalOpen, setElectricalOpen] = useState(true);
+  const [electricalTab, setElectricalTab] = useState<"nets" | "erc" | "boards">("nets");
+  const [activeNetName, setActiveNetName] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedWireId, setSelectedWireId] = useState<string | null>(null);
   const [groups, setGroups] = useState<CircuitGroup[]>([]);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   /** Region being dragged out, in flow coordinates. */
@@ -471,19 +489,37 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
 
   const onConnect = useCallback(
     (conn: Connection) => {
-      if (!canEdit || !conn.source || !conn.target) return;
-      setEdges((es) => [
-        ...es,
-        {
-          id: uid("w"),
-          source: conn.source,
-          sourceHandle: conn.sourceHandle,
-          target: conn.target,
-          targetHandle: conn.targetHandle,
-          type: "smoothstep",
-          style: WIRE_STYLE,
-        },
-      ]);
+      if (!canEdit || !conn.source || !conn.target || !conn.sourceHandle || !conn.targetHandle) {
+        return;
+      }
+      if (conn.source === conn.target && conn.sourceHandle === conn.targetHandle) return;
+      setEdges((current) => {
+        const duplicate = current.some(
+          (edge) =>
+            (edge.source === conn.source &&
+              edge.sourceHandle === conn.sourceHandle &&
+              edge.target === conn.target &&
+              edge.targetHandle === conn.targetHandle) ||
+            (edge.source === conn.target &&
+              edge.sourceHandle === conn.targetHandle &&
+              edge.target === conn.source &&
+              edge.targetHandle === conn.sourceHandle),
+        );
+        if (duplicate) return current;
+        return [
+          ...current,
+          {
+            id: uid("w"),
+            source: conn.source,
+            sourceHandle: conn.sourceHandle,
+            target: conn.target,
+            targetHandle: conn.targetHandle,
+            type: "smoothstep",
+            style: WIRE_STYLE,
+            data: { netLabel: undefined },
+          },
+        ];
+      });
       scheduleSave();
     },
     [canEdit, setEdges, scheduleSave],
@@ -538,6 +574,39 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     },
     [selectedId, setNodes, scheduleSave],
   );
+
+  const patchSelectedWire = useCallback(
+    (label: string) => {
+      if (!selectedWireId) return;
+      const netLabel = label.trimStart().slice(0, 80);
+      setEdges((current) =>
+        current.map((edge) =>
+          edge.id === selectedWireId
+            ? {
+                ...edge,
+                label: netLabel || undefined,
+                data: { ...(edge.data ?? {}), netLabel: netLabel || undefined },
+              }
+            : edge,
+        ),
+      );
+      scheduleSave();
+    },
+    [selectedWireId, setEdges, scheduleSave],
+  );
+
+  const tidySchematic = useCallback(() => {
+    setNodes((current) =>
+      current.map((node, index) => ({
+        ...node,
+        position: {
+          x: 120 + (index % 4) * 190,
+          y: 120 + Math.floor(index / 4) * 155,
+        },
+      })),
+    );
+    scheduleSave();
+  }, [setNodes, scheduleSave]);
 
   const { screenToFlowPosition } = useReactFlow();
 
@@ -676,16 +745,56 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
   }, [nodes, simRunning, simOutputs, interact]);
 
   const { theme } = useTheme();
-  const results = useMemo(() => searchCatalog(search), [search]);
+  const categories = useMemo(
+    () => ["All", ...new Set(searchCatalog("").map((entry) => entry.category))],
+    [],
+  );
+  const results = useMemo(
+    () =>
+      searchCatalog(search).filter(
+        (entry) => partCategory === "All" || entry.category === partCategory,
+      ),
+    [search, partCategory],
+  );
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
+  const selectedWire = edges.find((edge) => edge.id === selectedWireId) ?? null;
   const isDark = theme.mode === "dark";
 
   // Live view of how the schematic splits across boards. Recomputed from the
   // canvas state rather than the saved document so dragging a part between
   // regions updates the crossing count immediately.
-  const partition = useMemo(
-    () => partitionBoards(graphToDoc(nodes, edges, groups)),
-    [nodes, edges, groups],
+  const liveDoc = useMemo(() => graphToDoc(nodes, edges, groups), [nodes, edges, groups]);
+  const partition = useMemo(() => partitionBoards(liveDoc), [liveDoc]);
+  const nets = useMemo(() => buildNets(liveDoc), [liveDoc]);
+  const ercIssues = useMemo(() => runCircuitErc(liveDoc), [liveDoc]);
+  const ercErrors = ercIssues.filter((issue) => issue.severity === "error").length;
+  const netByEndpoint = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const net of nets) {
+      for (const node of net.nodes) map.set(`${node.partId}\0${node.pin}`, net.name);
+    }
+    return map;
+  }, [nets]);
+  const displayEdges = useMemo(
+    () =>
+      edges.map((edge) => {
+        const netName =
+          netByEndpoint.get(`${edge.source}\0${edge.sourceHandle ?? ""}`) ??
+          netByEndpoint.get(`${edge.target}\0${edge.targetHandle ?? ""}`);
+        const highlighted = activeNetName !== null && netName === activeNetName;
+        const faded = activeNetName !== null && !highlighted;
+        return {
+          ...edge,
+          selected: edge.id === selectedWireId,
+          animated: highlighted,
+          style: {
+            ...WIRE_STYLE,
+            strokeWidth: highlighted ? 3 : WIRE_STYLE.strokeWidth,
+            opacity: faded ? 0.16 : 1,
+          },
+        };
+      }),
+    [edges, netByEndpoint, activeNetName, selectedWireId],
   );
   const activeGroup = groups.find((g) => g.id === activeGroupId) ?? null;
   const activeSlice = partition.slices.find((s) => s.group.id === activeGroupId) ?? null;
@@ -705,7 +814,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     >
       <ReactFlow
         nodes={simNodes}
-        edges={edges}
+        edges={displayEdges}
         nodeTypes={circuitNodeTypes}
         onNodesChange={(changes) => {
           onNodesChange(changes);
@@ -716,8 +825,13 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
           if (changes.some((c) => c.type === "remove")) scheduleSave();
         }}
         onConnect={onConnect}
-        onSelectionChange={({ nodes: sel }) => setSelectedId(sel[0]?.id ?? null)}
+        onSelectionChange={({ nodes: selectedNodes, edges: selectedEdges }) => {
+          setSelectedId(selectedNodes[0]?.id ?? null);
+          setSelectedWireId(selectedEdges[0]?.id ?? null);
+        }}
         connectionMode={ConnectionMode.Loose}
+        connectionRadius={30}
+        connectionLineStyle={WIRE_STYLE}
         nodesConnectable={canEdit}
         elementsSelectable
         // Dragging out a region must not pan the canvas at the same time.
@@ -773,7 +887,13 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
 
         {canEdit ? (
           <Panel position="top-left" className="!m-3">
-            <div className="bg-card/90 flex w-64 flex-col rounded-none border shadow-lg backdrop-blur-md">
+            <div className="bg-card/95 flex w-72 flex-col rounded-lg border shadow-lg backdrop-blur-md">
+              <div className="border-b px-3 py-2">
+                <div className="text-[10px] font-semibold tracking-wider uppercase">Symbols</div>
+                <p className="text-muted-foreground mt-0.5 text-[10px]">
+                  Place parts, then drag between pin handles to wire.
+                </p>
+              </div>
               <div className="flex items-center gap-1.5 border-b p-2">
                 <Search className="text-muted-foreground ml-1 size-3.5 shrink-0" />
                 <Input
@@ -785,7 +905,20 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
                 />
                 <ImportDialog onImport={importDoc} />
               </div>
-              <div className="flex max-h-72 flex-col gap-0.5 overflow-y-auto p-1.5">
+              <label className="flex items-center gap-2 border-b px-2.5 py-1.5">
+                <span className="text-muted-foreground text-[10px]">Category</span>
+                <select
+                  value={partCategory}
+                  onChange={(event) => setPartCategory(event.target.value)}
+                  className="bg-background h-7 min-w-0 flex-1 rounded-md border px-1.5 text-[10px]"
+                  aria-label="Part category"
+                >
+                  {categories.map((category) => (
+                    <option key={category}>{category}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="flex max-h-80 flex-col gap-0.5 overflow-y-auto p-1.5">
                 {results.length === 0 ? (
                   <p className="text-muted-foreground p-2 text-xs">
                     No parts match. Ask the copilot to search the web for it.
@@ -808,7 +941,44 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
           </Panel>
         ) : null}
 
-        {selected && canEdit ? (
+        {selectedWire && canEdit ? (
+          <Panel position="top-right" className="!m-3">
+            <div className="bg-card/90 flex w-64 flex-col gap-2 rounded-xl border p-2.5 shadow-lg backdrop-blur-md">
+              <div className="flex items-center gap-1.5">
+                <Cable className="text-primary size-3.5" />
+                <span className="text-xs font-semibold">Wire / net</span>
+              </div>
+              <p className="text-muted-foreground font-mono text-[10px]">
+                {selectedWire.source}.{selectedWire.sourceHandle ?? "?"} → {selectedWire.target}.
+                {selectedWire.targetHandle ?? "?"}
+              </p>
+              <Input
+                value={
+                  typeof (selectedWire.data as { netLabel?: unknown } | undefined)?.netLabel ===
+                  "string"
+                    ? (selectedWire.data as { netLabel: string }).netLabel
+                    : ""
+                }
+                onChange={(event) => patchSelectedWire(event.target.value)}
+                placeholder="Net label, e.g. SDA"
+                aria-label="Net label"
+                className="h-7 font-mono text-xs"
+              />
+              <Button
+                variant="destructive"
+                size="xs"
+                className="self-end"
+                onClick={() => {
+                  setEdges((current) => current.filter((edge) => edge.id !== selectedWire.id));
+                  setSelectedWireId(null);
+                  scheduleSave();
+                }}
+              >
+                <Trash2 className="size-3" /> Delete wire
+              </Button>
+            </div>
+          </Panel>
+        ) : selected && canEdit ? (
           <Panel position="top-right" className="!m-3">
             <div className="bg-card/90 flex w-56 flex-col gap-2 rounded-none border p-2.5 shadow-lg backdrop-blur-md">
               <Input
@@ -865,69 +1035,193 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
 
         {canEdit ? (
           <Panel position="top-center" className="!m-3">
-            <div className="bg-card/90 flex max-w-md flex-col gap-2 rounded-xl border p-2.5 shadow-lg backdrop-blur-md">
-              <div className="flex items-center gap-1.5">
-                <Button
-                  variant={groupTool ? "secondary" : "outline"}
-                  size="xs"
-                  onClick={() => setGroupTool((t) => !t)}
-                  aria-pressed={groupTool}
-                  title="Drag a rectangle around the parts that become one board"
-                >
-                  <SquareDashed className="size-3" /> Board region
-                </Button>
-                <span className="text-muted-foreground text-[10px]">
-                  {groups.length === 0
-                    ? "No regions — the whole schematic is one board."
-                    : `${groups.length} board${groups.length === 1 ? "" : "s"} · ${partition.crossings.length} net${partition.crossings.length === 1 ? "" : "s"} crossing`}
+            <div className="bg-card/95 flex items-center gap-1 rounded-lg border p-1 shadow-lg backdrop-blur-md">
+              <Button
+                variant={groupTool ? "secondary" : "ghost"}
+                size="xs"
+                onClick={() => setGroupTool((value) => !value)}
+                aria-pressed={groupTool}
+                title="Drag a rectangle around the parts that become one board"
+              >
+                <SquareDashed className="size-3" /> Board region
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={nodes.length === 0}
+                onClick={tidySchematic}
+                title="Arrange parts on a readable grid"
+              >
+                <WandSparkles className="size-3" /> Tidy
+              </Button>
+              <Button
+                variant={electricalOpen ? "secondary" : "ghost"}
+                size="xs"
+                onClick={() => setElectricalOpen((value) => !value)}
+                aria-pressed={electricalOpen}
+              >
+                <PanelBottom className="size-3" /> Electrical
+              </Button>
+              <span
+                className={cn(
+                  "ml-1 flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium",
+                  ercErrors > 0
+                    ? "border-destructive/40 text-destructive"
+                    : "border-emerald-500/30 text-emerald-500",
+                )}
+              >
+                {ercErrors > 0 ? (
+                  <AlertTriangle className="size-3" />
+                ) : (
+                  <CircleCheck className="size-3" />
+                )}
+                {ercErrors} ERC · {nets.length} nets
+              </span>
+            </div>
+          </Panel>
+        ) : null}
+
+        {electricalOpen ? (
+          <Panel position="bottom-left" className="!ml-14 !mb-3">
+            <div className="bg-card/95 flex w-[30rem] max-w-[calc(100vw-8rem)] flex-col overflow-hidden rounded-lg border shadow-xl backdrop-blur-md">
+              <div className="flex items-center gap-0.5 border-b p-1">
+                {(
+                  [
+                    ["nets", "Nets", Network],
+                    ["erc", "ERC", ListChecks],
+                    ["boards", "Boards", SquareDashed],
+                  ] as const
+                ).map(([id, label, Icon]) => (
+                  <Button
+                    key={id}
+                    variant={electricalTab === id ? "secondary" : "ghost"}
+                    size="xs"
+                    onClick={() => setElectricalTab(id)}
+                  >
+                    <Icon className="size-3" /> {label}
+                  </Button>
+                ))}
+                <span className="text-muted-foreground ml-auto pr-1 text-[10px]">
+                  {edges.length} wires
                 </span>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => setElectricalOpen(false)}
+                  aria-label="Close electrical panel"
+                >
+                  <ChevronDown className="size-3" />
+                </Button>
               </div>
 
-              {activeGroup ? (
-                <div className="flex flex-col gap-1.5 border-t pt-2">
-                  <div className="flex items-center gap-1.5">
-                    <Input
-                      value={activeGroup.label}
-                      onChange={(e) => patchGroup(activeGroup.id, { label: e.target.value })}
-                      className="h-7 flex-1 text-xs"
-                      aria-label="Board region name"
-                    />
-                    <Button
-                      variant="destructive"
-                      size="xs"
-                      onClick={() => deleteGroup(activeGroup.id)}
-                    >
-                      <Trash2 className="size-3" />
-                    </Button>
-                  </div>
-                  <p className="text-muted-foreground text-[10px] leading-snug">
-                    {activeSlice?.partIds.length ?? 0} parts ·{" "}
-                    {activeSlice?.internalNets.length ?? 0} internal nets ·{" "}
-                    {activeSlice?.crossingNets.length ?? 0} needing a connector
+              {electricalTab === "nets" ? (
+                <div className="grid max-h-40 grid-cols-2 gap-1 overflow-y-auto p-2">
+                  {nets.length === 0 ? (
+                    <p className="text-muted-foreground col-span-2 text-xs">
+                      Draw a wire between pins to create the first net.
+                    </p>
+                  ) : (
+                    nets.map((net) => (
+                      <button
+                        key={net.name}
+                        type="button"
+                        onClick={() =>
+                          setActiveNetName((current) => (current === net.name ? null : net.name))
+                        }
+                        className={cn(
+                          "flex items-center justify-between rounded-md border px-2 py-1.5 text-left",
+                          activeNetName === net.name
+                            ? "border-primary bg-primary/10"
+                            : "hover:bg-muted/50",
+                        )}
+                      >
+                        <span className="font-mono text-[11px]">{net.name}</span>
+                        <span className="text-muted-foreground text-[10px]">
+                          {net.nodes.length} pins
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              ) : electricalTab === "erc" ? (
+                <div className="max-h-40 overflow-y-auto p-2">
+                  {ercIssues.length === 0 ? (
+                    <p className="flex items-center gap-1.5 text-xs text-emerald-500">
+                      <CircleCheck className="size-3.5" /> Electrical rules check passed.
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      {ercIssues.map((issue, index) => (
+                        <button
+                          key={`${issue.code}-${issue.wireId ?? issue.partId ?? index}`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedWireId(issue.wireId ?? null);
+                            setSelectedId(issue.partId ?? null);
+                          }}
+                          className={cn(
+                            "rounded-md border-l-2 px-2 py-1.5 text-left text-[10px] leading-snug",
+                            issue.severity === "error"
+                              ? "border-l-red-500 bg-red-500/5"
+                              : "border-l-amber-500 bg-amber-500/5",
+                          )}
+                        >
+                          <span className="text-muted-foreground mr-1 font-mono text-[9px] uppercase">
+                            {issue.code.replaceAll("_", " ")}
+                          </span>
+                          {issue.message}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex max-h-44 flex-col gap-2 overflow-y-auto p-2">
+                  <p className="text-muted-foreground text-[10px]">
+                    {groups.length === 0
+                      ? "The whole schematic currently maps to one board."
+                      : `${groups.length} board regions · ${partition.crossings.length} crossing nets.`}
                   </p>
-                  {activeSlice && activeSlice.crossingNets.length > 0 ? (
-                    <p className="text-[10px] leading-snug text-amber-500">
-                      Leaves this board: {activeSlice.crossingNets.join(", ")}. Each needs a
-                      connector footprint on both boards.
+                  {activeGroup ? (
+                    <div className="flex flex-col gap-1.5 rounded-md border p-2">
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          value={activeGroup.label}
+                          onChange={(event) =>
+                            patchGroup(activeGroup.id, { label: event.target.value })
+                          }
+                          className="h-7 flex-1 text-xs"
+                          aria-label="Board region name"
+                        />
+                        <Button
+                          variant="destructive"
+                          size="icon-xs"
+                          onClick={() => deleteGroup(activeGroup.id)}
+                        >
+                          <Trash2 className="size-3" />
+                        </Button>
+                      </div>
+                      <p className="text-muted-foreground text-[10px]">
+                        {activeSlice?.partIds.length ?? 0} parts ·{" "}
+                        {activeSlice?.internalNets.length ?? 0} internal ·{" "}
+                        {activeSlice?.crossingNets.length ?? 0} connector nets
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs">
+                      Select a region label, or use Board region and drag around related parts.
+                    </p>
+                  )}
+                  {partition.overlaps.length > 0 ? (
+                    <p className="text-[10px] text-amber-500">
+                      {partition.overlaps
+                        .map((overlap) => `${overlap.aLabel} and ${overlap.bLabel} overlap`)
+                        .join("; ")}
+                      .
                     </p>
                   ) : null}
                 </div>
-              ) : null}
-
-              {partition.overlaps.length > 0 ? (
-                <p className="text-[10px] leading-snug text-amber-500">
-                  {partition.overlaps.map((o) => `${o.aLabel} and ${o.bLabel} overlap`).join("; ")}.
-                  Parts in the shared area go to the first region.
-                </p>
-              ) : null}
-
-              {groups.length > 0 && partition.ungroupedPartIds.length > 0 ? (
-                <p className="text-muted-foreground text-[10px] leading-snug">
-                  {partition.ungroupedPartIds.length} part
-                  {partition.ungroupedPartIds.length === 1 ? "" : "s"} outside every region — they
-                  are on no board yet.
-                </p>
-              ) : null}
+              )}
             </div>
           </Panel>
         ) : null}

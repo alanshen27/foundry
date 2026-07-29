@@ -7,6 +7,7 @@ const projectCreate = vi.fn();
 const projectUpdate = vi.fn();
 const projectBranchCreate = vi.fn();
 const stageStateCreateMany = vi.fn();
+const designDocCreate = vi.fn();
 const workspaceCreate = vi.fn();
 
 vi.mock("../server/access", () => ({
@@ -29,6 +30,9 @@ vi.mock("@foundry/db", () => ({
     },
     stageState: {
       createMany: (...args: unknown[]) => stageStateCreateMany(...args),
+    },
+    designDoc: {
+      create: (...args: unknown[]) => designDocCreate(...args),
     },
     workspace: {
       create: (...args: unknown[]) => workspaceCreate(...args),
@@ -54,6 +58,7 @@ beforeEach(() => {
   projectUpdate.mockReset().mockResolvedValue({});
   projectBranchCreate.mockReset().mockResolvedValue({ id: "branch1", name: "main" });
   stageStateCreateMany.mockReset().mockResolvedValue({ count: 4 });
+  designDocCreate.mockReset().mockResolvedValue({ id: "model-doc1" });
   workspaceCreate.mockReset();
 });
 
@@ -89,9 +94,52 @@ describe("project.create", () => {
     });
     expect(projectBranchCreate).toHaveBeenCalled();
     expect(stageStateCreateMany).toHaveBeenCalled();
+    expect(designDocCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        projectId: "proj1",
+        branchId: "branch1",
+        kind: "MODEL3D",
+        data: expect.objectContaining({
+          version: 5,
+          components: expect.any(Array),
+        }),
+        updatedById: "user1",
+      }),
+    });
     expect(recordAudit).toHaveBeenCalledWith(
       expect.objectContaining({ type: "ProjectCreated", projectId: "proj1", workspaceId: "ws1" }),
     );
     expect(project.slug).toBe("air-quality-monitor");
+  });
+
+  it("creates a starter MODEL3D document for a new branch", async () => {
+    projectFindUnique.mockResolvedValue({ id: "proj1", workspaceId: "ws1" });
+    projectBranchCreate.mockResolvedValue({ id: "branch2", name: "concept" });
+    const caller = projectRouter.createCaller({
+      user: {
+        id: "user1",
+        email: "builder@foundry.local",
+        name: "Builder",
+        avatarUrl: null,
+        supabaseId: null,
+        localPasswordHash: null,
+        createdAt: new Date(),
+      },
+    });
+
+    await caller.createBranch({ projectId: "proj1", name: "Concept" });
+
+    expect(designDocCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        projectId: "proj1",
+        branchId: "branch2",
+        kind: "MODEL3D",
+        data: expect.objectContaining({
+          version: 5,
+          components: expect.any(Array),
+        }),
+        updatedById: "user1",
+      }),
+    });
   });
 });

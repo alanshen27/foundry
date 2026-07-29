@@ -9,19 +9,23 @@ import {
   ArrowUpFromLine,
   Box,
   Circle,
+  CircleDot,
   Combine,
   Cylinder,
   Disc,
   FlipHorizontal2,
+  Hand,
   Layers,
   Minus,
   Move,
+  Palette,
   Pentagon,
   Radius,
   RefreshCw,
   RotateCw,
   Scaling,
   Scissors,
+  Spline,
   Square,
   X,
   type LucideIcon,
@@ -45,24 +49,61 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   plane: Layers,
   rectangle: Square,
   circle: Circle,
+  polygonSketch: Pentagon,
+  slotSketch: Spline,
+  offsetPlane: Layers,
   box: Box,
   cylinder: Cylinder,
+  sphere: CircleDot,
+  prism: Pentagon,
+  cone: Spline,
+  torus: Disc,
+  tube: CircleDot,
+  wedge: Pentagon,
+  ellipsoid: CircleDot,
+  capsule: Disc,
+  hexNut: Pentagon,
+  pushPull: Hand,
+  stretch: Scaling,
   extrude: ArrowUpFromLine,
   revolve: RefreshCw,
+  sweep: Spline,
+  loft: Layers,
+  twistExtrude: RotateCw,
+  draftExtrude: ArrowUpFromLine,
   fillet: Radius,
   chamfer: Pentagon,
   shell: Disc,
   hole: Circle,
+  appearance: Palette,
   mirror: FlipHorizontal2,
   rotate: RotateCw,
   translate: Move,
   scale: Scaling,
+  duplicate: Layers,
   patternLinear: Layers,
   patternCircular: RefreshCw,
   union: Combine,
   subtract: Minus,
   intersect: Scissors,
 };
+
+type CadWorkspace = "solid" | "sketch" | "construct" | "assemble";
+
+const CAD_WORKSPACES: {
+  id: CadWorkspace;
+  label: string;
+  groups: CadToolGroup[];
+}[] = [
+  {
+    id: "solid",
+    label: "SOLID",
+    groups: ["create", "feature", "modify", "direct", "boolean"],
+  },
+  { id: "sketch", label: "SKETCH", groups: ["sketch"] },
+  { id: "construct", label: "CONSTRUCT", groups: ["construct"] },
+  { id: "assemble", label: "ASSEMBLE", groups: ["transform", "pattern"] },
+];
 
 function ToolIconButton({
   tool,
@@ -85,13 +126,14 @@ function ToolIconButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "text-primary relative flex size-8 items-center justify-center rounded-none transition-colors",
-        "hover:bg-muted hover:text-primary",
+        "text-muted-foreground relative flex h-12 min-w-14 flex-col items-center justify-center gap-1 rounded-md px-1.5 transition-colors",
+        "hover:bg-muted hover:text-foreground",
         "disabled:pointer-events-none disabled:opacity-30",
         active && "bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary",
       )}
     >
       <Icon className="size-4" strokeWidth={1.75} />
+      <span className="max-w-16 truncate text-[9px] font-medium leading-none">{tool.label}</span>
     </button>
   );
 }
@@ -117,7 +159,10 @@ function FieldGrid({
     <div className="grid grid-cols-2 gap-2">
       {tool.fields.map((field) => {
         const wide =
-          field.type === "select" || field.type === "boolean" || tool.fields.length === 1;
+          field.type === "select" ||
+          field.type === "text" ||
+          field.type === "boolean" ||
+          tool.fields.length === 1;
         return (
           <label
             key={field.key}
@@ -143,13 +188,22 @@ function FieldGrid({
                 }}
                 className="h-8 font-mono text-xs tabular-nums"
               />
+            ) : field.type === "text" ? (
+              <Input
+                id={`cad-tool-${field.key}`}
+                type="text"
+                value={String(values[field.key] ?? field.default)}
+                placeholder={field.placeholder}
+                onChange={(event) => onChange(field.key, event.target.value)}
+                className="h-8 font-mono text-xs"
+              />
             ) : field.type === "select" ? (
               <select
                 id={`cad-tool-${field.key}`}
                 value={String(values[field.key] ?? field.default)}
                 onChange={(e) => onChange(field.key, e.target.value)}
                 className={cn(
-                  "border-input bg-background h-8 w-full rounded-none border px-2 text-xs outline-none",
+                  "border-input bg-background h-8 w-full rounded-md border px-2 text-xs outline-none",
                   "focus-visible:border-ring focus-visible:ring-ring/40 focus-visible:ring-3",
                 )}
               >
@@ -167,7 +221,7 @@ function FieldGrid({
                 aria-checked={Boolean(values[field.key] ?? field.default)}
                 onClick={() => onChange(field.key, !Boolean(values[field.key] ?? field.default))}
                 className={cn(
-                  "border-input flex h-8 items-center justify-between rounded-none border px-2.5 text-xs",
+                  "border-input flex h-8 items-center justify-between rounded-md border px-2.5 text-xs",
                   "hover:bg-muted/50 transition-colors",
                 )}
               >
@@ -208,6 +262,7 @@ export function CadToolsPanel({
   targetSolid?: string | null;
   onApply: (nextScript: string) => void;
 }) {
+  const [workspaceId, setWorkspaceId] = useState<CadWorkspace>("solid");
   const [groupId, setGroupId] = useState<CadToolGroup>("create");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [values, setValues] = useState<CadToolValues>({});
@@ -224,6 +279,9 @@ export function CadToolsPanel({
   }, []);
 
   const groupTools = byGroup.get(groupId) ?? [];
+  const workspace =
+    CAD_WORKSPACES.find((candidate) => candidate.id === workspaceId) ?? CAD_WORKSPACES[0]!;
+  const workspaceGroups = CAD_TOOL_GROUPS.filter((group) => workspace.groups.includes(group.id));
 
   useEffect(() => {
     if (!activeId) return;
@@ -268,11 +326,37 @@ export function CadToolsPanel({
   const ActiveIcon = active ? (TOOL_ICONS[active.id] ?? Box) : Box;
 
   return (
-    <div className="pointer-events-none absolute top-14 left-3 z-30 flex items-start gap-2">
-      {/* Icon rail */}
-      <div className="bg-card/95 pointer-events-auto flex flex-col overflow-hidden rounded-none border shadow-lg backdrop-blur-md">
-        <div className="border-border/70 flex gap-0.5 border-b p-1">
-          {CAD_TOOL_GROUPS.map((g) => {
+    <div className="pointer-events-none absolute top-12 left-1/2 z-30 flex w-[calc(100%_-_1.5rem)] max-w-[1040px] -translate-x-1/2 flex-col items-center gap-2">
+      {/* Fusion-style command ribbon: workbench families above, tools below. */}
+      <div className="bg-card/95 pointer-events-auto flex w-full min-w-0 flex-col rounded-lg border shadow-lg backdrop-blur-md">
+        <div className="border-border/70 flex items-center gap-0.5 overflow-x-auto border-b px-1.5 pt-1">
+          {CAD_WORKSPACES.map((candidate) => (
+            <button
+              key={candidate.id}
+              type="button"
+              onClick={() => {
+                setWorkspaceId(candidate.id);
+                setGroupId(candidate.groups[0]!);
+                setActiveId(null);
+                setError(null);
+              }}
+              className={cn(
+                "border-b-2 px-2.5 py-1.5 text-[10px] font-semibold tracking-wider transition-colors",
+                workspaceId === candidate.id
+                  ? "border-primary text-primary"
+                  : "text-muted-foreground hover:text-foreground border-transparent",
+              )}
+            >
+              {candidate.label}
+            </button>
+          ))}
+          <span className="text-muted-foreground ml-auto hidden px-2 text-[9px] lg:block">
+            Parametric KCL workspaces
+          </span>
+        </div>
+
+        <div className="border-border/70 flex items-center gap-0.5 overflow-x-auto border-b p-1">
+          {workspaceGroups.map((g) => {
             const count = byGroup.get(g.id)?.length ?? 0;
             if (!count) return null;
             const selected = groupId === g.id;
@@ -287,45 +371,46 @@ export function CadToolsPanel({
                   setError(null);
                 }}
                 className={cn(
-                  "rounded-none px-1.5 py-1 text-[10px] font-medium tracking-wide transition-colors",
+                  "rounded-md px-2.5 py-1 text-[10px] font-medium tracking-wide whitespace-nowrap transition-colors",
                   selected
                     ? "bg-primary/15 text-primary"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground",
                 )}
               >
-                {g.label.slice(0, 3)}
+                {g.label}
               </button>
             );
           })}
         </div>
 
-        <div className="flex flex-col items-center gap-0.5 p-1.5">
-          {groupTools.map((tool) => (
-            <ToolIconButton
-              key={tool.id}
-              tool={tool}
-              disabled={!canEdit || (tool.requiresSolid && !lastSolid)}
-              active={activeId === tool.id}
-              onClick={() => openTool(tool)}
-            />
-          ))}
-        </div>
-
-        {lastSolid ? (
-          <div
-            className="border-border/70 text-muted-foreground border-t px-2 py-1.5 text-center font-mono text-[9px] tracking-tight"
-            title={`Last solid: ${lastSolid}`}
-          >
-            <span className="text-foreground/80 block max-w-18 truncate">{lastSolid}</span>
+        <div className="flex min-h-15 items-center gap-1 overflow-x-auto p-1.5">
+          <div className="flex items-center gap-0.5">
+            {groupTools.map((tool) => (
+              <ToolIconButton
+                key={tool.id}
+                tool={tool}
+                disabled={!canEdit || (tool.requiresSolid && !lastSolid)}
+                active={activeId === tool.id}
+                onClick={() => openTool(tool)}
+              />
+            ))}
           </div>
-        ) : null}
+          {lastSolid ? (
+            <div
+              className="border-border/70 text-muted-foreground ml-1 flex items-center border-l px-2 font-mono text-[9px]"
+              title={`Target solid: ${lastSolid}`}
+            >
+              <span className="text-foreground/80 block max-w-24 truncate">{lastSolid}</span>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {/* Inline inspector — no modal */}
       {active ? (
-        <div className="bg-card/95 pointer-events-auto w-64 animate-in fade-in-0 slide-in-from-left-1 zoom-in-95 overflow-hidden rounded-none border shadow-lg backdrop-blur-md duration-150">
+        <div className="bg-card/95 pointer-events-auto w-72 animate-in fade-in-0 slide-in-from-top-1 zoom-in-95 overflow-hidden rounded-lg border shadow-lg backdrop-blur-md duration-150">
           <div className="border-border/70 flex items-start gap-2.5 border-b px-3 py-2.5">
-            <div className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-none">
+            <div className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-md">
               <ActiveIcon className="size-4" strokeWidth={1.75} />
             </div>
             <div className="min-w-0 flex-1 pt-0.5">
@@ -341,7 +426,7 @@ export function CadToolsPanel({
                 setActiveId(null);
                 setError(null);
               }}
-              className="text-muted-foreground hover:bg-muted hover:text-foreground -mr-1 -mt-0.5 flex size-7 items-center justify-center rounded-none"
+              className="text-muted-foreground hover:bg-muted hover:text-foreground -mr-1 -mt-0.5 flex size-7 items-center justify-center rounded-md"
             >
               <X className="size-3.5" />
             </button>
@@ -349,7 +434,7 @@ export function CadToolsPanel({
 
           <div className="space-y-3 px-3 py-3">
             {active.requiresSolid && lastSolid ? (
-              <div className="bg-muted/50 text-muted-foreground flex items-center gap-2 rounded-none px-2.5 py-1.5 text-[11px]">
+              <div className="bg-muted/50 text-muted-foreground flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[11px]">
                 <span className="shrink-0">Target</span>
                 <span className="text-foreground ml-auto truncate font-mono text-[11px]">
                   {lastSolid}

@@ -5,7 +5,15 @@
 import { parseCadParams, setCadParam } from "./params";
 
 export type CadToolGroup =
-  "sketch" | "create" | "feature" | "modify" | "transform" | "pattern" | "boolean";
+  | "sketch"
+  | "construct"
+  | "create"
+  | "direct"
+  | "feature"
+  | "modify"
+  | "transform"
+  | "pattern"
+  | "boolean";
 
 export type CadToolField =
   | {
@@ -24,6 +32,7 @@ export type CadToolField =
       default: string;
       options: { value: string; label: string }[];
     }
+  | { key: string; label: string; type: "text"; default: string; placeholder?: string }
   | { key: string; label: string; type: "boolean"; default: boolean };
 
 export type CadToolValues = Record<string, number | string | boolean>;
@@ -62,6 +71,15 @@ const AXIS_OPTIONS = [
   { value: "X", label: "X" },
   { value: "Y", label: "Y" },
   { value: "Z", label: "Z" },
+];
+
+const FACE_OPTIONS = [
+  { value: "top", label: "Top (+Z)" },
+  { value: "bottom", label: "Bottom (−Z)" },
+  { value: "right", label: "Right (+X)" },
+  { value: "left", label: "Left (−X)" },
+  { value: "front", label: "Front (−Y)" },
+  { value: "back", label: "Back (+Y)" },
 ];
 
 const MIRROR_PLANE_OPTIONS = [
@@ -182,6 +200,47 @@ export function upsertParams(script: string, params: CadToolValues): string {
   return lines.join("\n");
 }
 
+export type PushPullFace = "top" | "bottom" | "right" | "left" | "front" | "back";
+
+/**
+ * Direct-edit a driving dimension instead of stacking another body transform.
+ * The KCL feature history remains parametric and downstream features rebuild.
+ */
+export function pushPullFace(
+  script: string,
+  face: PushPullFace,
+  distance: number,
+): { script: string; parameter: string; value: number } {
+  if (!Number.isFinite(distance) || distance === 0) {
+    throw new Error("Enter a non-zero push/pull distance.");
+  }
+  const params = parseCadParams(script).filter(
+    (param): param is typeof param & { value: number } => typeof param.value === "number",
+  );
+  const candidates =
+    face === "top" || face === "bottom"
+      ? [/height|extrude|length/i]
+      : face === "right" || face === "left"
+        ? [/width|radius/i]
+        : [/depth|radius/i];
+  const parameter = candidates
+    .map((pattern) => [...params].reverse().find((item) => pattern.test(item.name)))
+    .find(Boolean);
+  if (!parameter) {
+    throw new Error(
+      `This ${face} face has no editable driving dimension. Create a Box, Cylinder, or Extrude first.`,
+    );
+  }
+  const signedDistance =
+    face === "bottom" || face === "left" || face === "back" ? -distance : distance;
+  const value = Math.max(0.1, Math.round((parameter.value + signedDistance) * 1000) / 1000);
+  return {
+    script: setCadParam(script, parameter.name, value),
+    parameter: parameter.name,
+    value,
+  };
+}
+
 function appendBlock(script: string, block: string): string {
   const trimmed = script.replace(/\s+$/, "");
   return `${trimmed}\n\n${block.trim()}\n`;
@@ -265,6 +324,39 @@ export const CAD_TOOLS: CadToolDef[] = [
     ],
   },
   {
+    id: "polygonSketch",
+    label: "Polygon",
+    group: "sketch",
+    description: "Regular closed polygon profile for later extrude, revolve, or loft operations.",
+    fields: [
+      { key: "plane", label: "Plane", type: "select", default: "XY", options: PLANE_OPTIONS },
+      { key: "sides", label: "Sides", type: "number", default: 6, min: 3, step: 1 },
+      { key: "radius", label: "Radius", type: "number", default: 20, unit: "mm", min: 0.1 },
+    ],
+  },
+  {
+    id: "slotSketch",
+    label: "Center slot",
+    group: "sketch",
+    description: "Closed stadium profile defined by center length and slot width.",
+    fields: [
+      { key: "plane", label: "Plane", type: "select", default: "XY", options: PLANE_OPTIONS },
+      { key: "length", label: "Center length", type: "number", default: 36, unit: "mm", min: 0.1 },
+      { key: "width", label: "Slot width", type: "number", default: 12, unit: "mm", min: 0.1 },
+    ],
+  },
+  {
+    id: "offsetPlane",
+    label: "Offset plane",
+    group: "construct",
+    description:
+      "Create a construction plane parallel to a standard origin plane and start a sketch.",
+    fields: [
+      { key: "plane", label: "Base plane", type: "select", default: "XY", options: PLANE_OPTIONS },
+      { key: "offset", label: "Offset", type: "number", default: 20, unit: "mm", step: 1 },
+    ],
+  },
+  {
     id: "box",
     label: "Box",
     group: "create",
@@ -309,6 +401,139 @@ export const CAD_TOOLS: CadToolDef[] = [
         min: 0.1,
         step: 1,
       },
+    ],
+  },
+  {
+    id: "sphere",
+    label: "Sphere",
+    group: "create",
+    description: "Parametric sphere made by revolving a semicircular profile.",
+    fields: [
+      {
+        key: "radius",
+        label: "Radius",
+        type: "number",
+        default: 20,
+        unit: "mm",
+        min: 0.1,
+        step: 0.5,
+      },
+    ],
+  },
+  {
+    id: "prism",
+    label: "Prism",
+    group: "create",
+    description: "Regular polygon prism with editable side count, radius, and height.",
+    fields: [
+      { key: "sides", label: "Sides", type: "number", default: 6, min: 3, step: 1 },
+      { key: "radius", label: "Radius", type: "number", default: 20, unit: "mm", min: 0.1 },
+      { key: "height", label: "Height", type: "number", default: 30, unit: "mm", min: 0.1 },
+    ],
+  },
+  {
+    id: "cone",
+    label: "Cone",
+    group: "create",
+    description: "Cone or frustum lofted between two circular sections.",
+    fields: [
+      { key: "baseRadius", label: "Base R", type: "number", default: 22, unit: "mm", min: 0.1 },
+      { key: "topRadius", label: "Top R", type: "number", default: 4, unit: "mm", min: 0.1 },
+      { key: "height", label: "Height", type: "number", default: 40, unit: "mm", min: 0.1 },
+    ],
+  },
+  {
+    id: "torus",
+    label: "Torus",
+    group: "create",
+    description: "Ring solid made by revolving a circular section.",
+    fields: [
+      { key: "majorRadius", label: "Major R", type: "number", default: 24, unit: "mm", min: 0.2 },
+      { key: "minorRadius", label: "Tube R", type: "number", default: 6, unit: "mm", min: 0.1 },
+    ],
+  },
+  {
+    id: "tube",
+    label: "Tube",
+    group: "create",
+    description: "Hollow cylinder with editable outside radius, wall, and height.",
+    fields: [
+      { key: "outerRadius", label: "Outer R", type: "number", default: 18, unit: "mm", min: 0.2 },
+      { key: "wall", label: "Wall", type: "number", default: 3, unit: "mm", min: 0.1 },
+      { key: "height", label: "Height", type: "number", default: 40, unit: "mm", min: 0.1 },
+    ],
+  },
+  {
+    id: "wedge",
+    label: "Wedge",
+    group: "create",
+    description: "Triangular wedge for brackets, ramps, and supports.",
+    fields: [
+      { key: "width", label: "Width", type: "number", default: 40, unit: "mm", min: 0.1 },
+      { key: "height", label: "Height", type: "number", default: 25, unit: "mm", min: 0.1 },
+      { key: "depth", label: "Depth", type: "number", default: 30, unit: "mm", min: 0.1 },
+    ],
+  },
+  {
+    id: "ellipsoid",
+    label: "Ellipsoid",
+    group: "create",
+    description: "Smooth form with independent X, Y, and Z radii.",
+    fields: [
+      { key: "xRadius", label: "X radius", type: "number", default: 28, unit: "mm", min: 0.1 },
+      { key: "yRadius", label: "Y radius", type: "number", default: 20, unit: "mm", min: 0.1 },
+      { key: "zRadius", label: "Z radius", type: "number", default: 14, unit: "mm", min: 0.1 },
+    ],
+  },
+  {
+    id: "capsule",
+    label: "Capsule",
+    group: "create",
+    description: "Extrude a slot profile into a rounded-end enclosure, rail, or link.",
+    fields: [
+      { key: "length", label: "Center length", type: "number", default: 42, unit: "mm", min: 0.1 },
+      { key: "width", label: "Width", type: "number", default: 16, unit: "mm", min: 0.1 },
+      { key: "height", label: "Height", type: "number", default: 8, unit: "mm", min: 0.1 },
+    ],
+  },
+  {
+    id: "hexNut",
+    label: "Hex nut",
+    group: "create",
+    description: "Parametric six-sided fastener body with a centered through bore.",
+    fields: [
+      {
+        key: "outerRadius",
+        label: "Outer radius",
+        type: "number",
+        default: 10,
+        unit: "mm",
+        min: 0.2,
+      },
+      { key: "boreRadius", label: "Bore radius", type: "number", default: 4, unit: "mm", min: 0.1 },
+      { key: "height", label: "Height", type: "number", default: 6, unit: "mm", min: 0.1 },
+    ],
+  },
+  {
+    id: "pushPull",
+    label: "Push / Pull",
+    group: "direct",
+    description: "Move a principal face by editing its driving dimension.",
+    requiresSolid: true,
+    fields: [
+      { key: "face", label: "Face", type: "select", default: "top", options: FACE_OPTIONS },
+      { key: "distance", label: "Distance", type: "number", default: 5, unit: "mm", step: 1 },
+    ],
+  },
+  {
+    id: "stretch",
+    label: "Form stretch",
+    group: "direct",
+    description: "Stretch or compress the current body along one axis.",
+    requiresSolid: true,
+    fields: [
+      { key: "axis", label: "Axis", type: "select", default: "Z", options: AXIS_OPTIONS },
+      { key: "factor", label: "Factor", type: "number", default: 1.15, min: 0.01, step: 0.05 },
     ],
   },
   {
@@ -357,6 +582,52 @@ export const CAD_TOOLS: CadToolDef[] = [
       },
       { key: "axis", label: "Axis", type: "select", default: "Y", options: AXIS_OPTIONS },
       { key: "angle", label: "Angle", type: "number", default: 360, unit: "deg", min: 1, step: 5 },
+    ],
+  },
+  {
+    id: "sweep",
+    label: "Sweep",
+    group: "feature",
+    description: "Sweep a circular section along a straight and curved path.",
+    fields: [
+      { key: "radius", label: "Profile R", type: "number", default: 3, unit: "mm", min: 0.1 },
+      { key: "length", label: "Run", type: "number", default: 40, unit: "mm", min: 0.1 },
+      { key: "bend", label: "Bend X", type: "number", default: 12, unit: "mm" },
+      { key: "rise", label: "Rise", type: "number", default: 18, unit: "mm" },
+    ],
+  },
+  {
+    id: "loft",
+    label: "Loft",
+    group: "feature",
+    description: "Blend between two parametric circular sections.",
+    fields: [
+      { key: "startRadius", label: "Start R", type: "number", default: 20, unit: "mm", min: 0.1 },
+      { key: "endRadius", label: "End R", type: "number", default: 10, unit: "mm", min: 0.1 },
+      { key: "height", label: "Height", type: "number", default: 40, unit: "mm", min: 0.1 },
+    ],
+  },
+  {
+    id: "twistExtrude",
+    label: "Twist",
+    group: "feature",
+    description: "Extrude a polygon while twisting it through a controlled angle.",
+    fields: [
+      { key: "radius", label: "Radius", type: "number", default: 18, unit: "mm", min: 0.1 },
+      { key: "sides", label: "Sides", type: "number", default: 6, min: 3, step: 1 },
+      { key: "height", label: "Height", type: "number", default: 50, unit: "mm", min: 0.1 },
+      { key: "angle", label: "Twist", type: "number", default: 120, unit: "deg", step: 10 },
+    ],
+  },
+  {
+    id: "draftExtrude",
+    label: "Draft",
+    group: "feature",
+    description: "Extrude a profile with tapered side walls.",
+    fields: [
+      { key: "radius", label: "Radius", type: "number", default: 20, unit: "mm", min: 0.1 },
+      { key: "height", label: "Height", type: "number", default: 35, unit: "mm", min: 0.1 },
+      { key: "angle", label: "Draft", type: "number", default: 8, unit: "deg", step: 1 },
     ],
   },
   {
@@ -433,6 +704,27 @@ export const CAD_TOOLS: CadToolDef[] = [
     ],
   },
   {
+    id: "appearance",
+    label: "Appearance",
+    group: "modify",
+    description: "Apply body color, metalness, roughness, and opacity.",
+    requiresSolid: true,
+    fields: [
+      { key: "color", label: "Color", type: "text", default: "#ff6b2c", placeholder: "#RRGGBB" },
+      { key: "metalness", label: "Metal", type: "number", default: 0, unit: "%", min: 0, step: 5 },
+      { key: "roughness", label: "Rough", type: "number", default: 50, unit: "%", min: 0, step: 5 },
+      {
+        key: "opacity",
+        label: "Opacity",
+        type: "number",
+        default: 100,
+        unit: "%",
+        min: 0,
+        step: 5,
+      },
+    ],
+  },
+  {
     id: "mirror",
     label: "Mirror",
     group: "transform",
@@ -482,6 +774,18 @@ export const CAD_TOOLS: CadToolDef[] = [
       { key: "x", label: "X", type: "number", default: 1, min: 0.01, step: 0.1 },
       { key: "y", label: "Y", type: "number", default: 1, min: 0.01, step: 0.1 },
       { key: "z", label: "Z", type: "number", default: 1, min: 0.01, step: 0.1 },
+    ],
+  },
+  {
+    id: "duplicate",
+    label: "Duplicate",
+    group: "transform",
+    description: "Clone the current body and place the copy at an XYZ offset.",
+    requiresSolid: true,
+    fields: [
+      { key: "x", label: "X", type: "number", default: 30, unit: "mm", step: 1 },
+      { key: "y", label: "Y", type: "number", default: 0, unit: "mm", step: 1 },
+      { key: "z", label: "Z", type: "number", default: 0, unit: "mm", step: 1 },
     ],
   },
   {
@@ -551,7 +855,9 @@ export const CAD_TOOLS: CadToolDef[] = [
 
 export const CAD_TOOL_GROUPS: { id: CadToolGroup; label: string }[] = [
   { id: "sketch", label: "Sketch" },
+  { id: "construct", label: "Construct" },
   { id: "create", label: "Create" },
+  { id: "direct", label: "Direct" },
   { id: "feature", label: "Feature" },
   { id: "modify", label: "Modify" },
   { id: "transform", label: "Transform" },
@@ -650,6 +956,58 @@ ${profile} = circle(${sketch}, center = [0, 0], radius = ${rName})`,
       );
       return { script: next, target: profile };
     }
+    case "polygonSketch": {
+      const plane = str(values, "plane", "XY");
+      const sidesName = nextBinding(script, "polygonSides");
+      const radiusName = nextBinding(script, "polygonRadius");
+      const sketch = nextBinding(script, "sketch");
+      const profile = nextBinding(script, "profile");
+      let next = upsertParams(script, {
+        [sidesName]: Math.max(3, Math.round(num(values, "sides", 6))),
+        [radiusName]: num(values, "radius", 20),
+      });
+      next = appendBlock(
+        next,
+        `${sketch} = startSketchOn(${plane})
+${profile} = polygon(${sketch}, radius = ${radiusName}, numSides = ${sidesName}, center = [0, 0])`,
+      );
+      return { script: next, target: profile };
+    }
+    case "slotSketch": {
+      const plane = str(values, "plane", "XY");
+      const lengthName = nextBinding(script, "slotLength");
+      const widthName = nextBinding(script, "slotWidth");
+      const sketch = nextBinding(script, "sketch");
+      const profile = nextBinding(script, "profile");
+      let next = upsertParams(script, {
+        [lengthName]: num(values, "length", 36),
+        [widthName]: num(values, "width", 12),
+      });
+      next = appendBlock(
+        next,
+        `${sketch} = startSketchOn(${plane})
+${profile} = startProfile(${sketch}, at = [-${lengthName} / 2, -${widthName} / 2])
+  |> line(end = [${lengthName}, 0])
+  |> tangentialArc(end = [0, ${widthName}])
+  |> line(end = [-${lengthName}, 0])
+  |> tangentialArc(end = [0, -${widthName}])
+  |> close()`,
+      );
+      return { script: next, target: profile };
+    }
+    case "offsetPlane": {
+      const plane = str(values, "plane", "XY");
+      const offsetName = nextBinding(script, "planeOffset");
+      const construction = nextBinding(script, "constructionPlane");
+      const sketch = nextBinding(script, "sketch");
+      let next = upsertParams(script, { [offsetName]: num(values, "offset", 20) });
+      next = appendBlock(
+        next,
+        `${construction} = offsetPlane(${plane}, offset = ${offsetName})
+${sketch} = startSketchOn(${construction})`,
+      );
+      return { script: next, target: sketch };
+    }
     case "box": {
       const plane = str(values, "plane", "XY");
       const wName = nextBinding(script, "width");
@@ -691,6 +1049,228 @@ ${body} = circle(${sketch}, center = [0, 0], radius = ${rName})
   |> extrude(length = ${hName})`,
       );
       return { script: next, target: body };
+    }
+    case "sphere": {
+      const radiusName = nextBinding(script, "sphereRadius");
+      const sketch = nextBinding(script, "sketch");
+      const profile = nextBinding(script, "profile");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, { [radiusName]: num(values, "radius", 20) });
+      next = appendBlock(
+        next,
+        `${sketch} = startSketchOn(XZ)
+${profile} = startProfile(${sketch}, at = [0, -${radiusName}])
+  |> arc(endAbsolute = [0, ${radiusName}], interiorAbsolute = [${radiusName}, 0])
+  |> close()
+${body} = revolve(${profile}, axis = Y, angle = 360deg)`,
+      );
+      return { script: next, target: body };
+    }
+    case "prism": {
+      const sidesName = nextBinding(script, "prismSides");
+      const radiusName = nextBinding(script, "prismRadius");
+      const heightName = nextBinding(script, "prismHeight");
+      const sketch = nextBinding(script, "sketch");
+      const profile = nextBinding(script, "profile");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, {
+        [sidesName]: Math.max(3, Math.round(num(values, "sides", 6))),
+        [radiusName]: num(values, "radius", 20),
+        [heightName]: num(values, "height", 30),
+      });
+      next = appendBlock(
+        next,
+        `${sketch} = startSketchOn(XY)
+${profile} = polygon(${sketch}, radius = ${radiusName}, numSides = ${sidesName}, center = [0, 0])
+${body} = extrude(${profile}, length = ${heightName})`,
+      );
+      return { script: next, target: body };
+    }
+    case "cone": {
+      const baseName = nextBinding(script, "coneBaseRadius");
+      const topName = nextBinding(script, "coneTopRadius");
+      const heightName = nextBinding(script, "coneHeight");
+      const lowerSketch = nextBinding(script, "sketch");
+      const lower = nextBinding(script, "profile");
+      const upperSketch = nextBinding(script, "sketch");
+      const upper = nextBinding(script, "profile");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, {
+        [baseName]: num(values, "baseRadius", 22),
+        [topName]: num(values, "topRadius", 4),
+        [heightName]: num(values, "height", 40),
+      });
+      next = appendBlock(
+        next,
+        `${lowerSketch} = startSketchOn(XY)
+${lower} = circle(${lowerSketch}, center = [0, 0], radius = ${baseName})
+${upperSketch} = startSketchOn(offsetPlane(XY, offset = ${heightName}))
+${upper} = circle(${upperSketch}, center = [0, 0], radius = ${topName})
+${body} = loft([${lower}, ${upper}])`,
+      );
+      return { script: next, target: body };
+    }
+    case "torus": {
+      const majorName = nextBinding(script, "torusMajorRadius");
+      const minorName = nextBinding(script, "torusTubeRadius");
+      const sketch = nextBinding(script, "sketch");
+      const profile = nextBinding(script, "profile");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, {
+        [majorName]: num(values, "majorRadius", 24),
+        [minorName]: num(values, "minorRadius", 6),
+      });
+      next = appendBlock(
+        next,
+        `${sketch} = startSketchOn(XZ)
+${profile} = circle(${sketch}, center = [${majorName}, 0], radius = ${minorName})
+${body} = revolve(${profile}, axis = Y, angle = 360deg)`,
+      );
+      return { script: next, target: body };
+    }
+    case "tube": {
+      const outerName = nextBinding(script, "tubeOuterRadius");
+      const wallName = nextBinding(script, "tubeWall");
+      const heightName = nextBinding(script, "tubeHeight");
+      const outerSketch = nextBinding(script, "sketch");
+      const innerSketch = nextBinding(script, "sketch");
+      const outerBody = nextBinding(script, "body");
+      const innerBody = nextBinding(script, "body");
+      const body = nextBinding(script, "body");
+      const outer = num(values, "outerRadius", 18);
+      const wall = Math.min(outer - 0.1, Math.max(0.1, num(values, "wall", 3)));
+      let next = upsertParams(script, {
+        [outerName]: outer,
+        [wallName]: wall,
+        [heightName]: num(values, "height", 40),
+      });
+      next = appendBlock(
+        next,
+        `${outerSketch} = startSketchOn(XY)
+${outerBody} = circle(${outerSketch}, center = [0, 0], radius = ${outerName})
+  |> extrude(length = ${heightName})
+${innerSketch} = startSketchOn(XY)
+${innerBody} = circle(${innerSketch}, center = [0, 0], radius = ${outerName} - ${wallName})
+  |> extrude(length = ${heightName})
+${body} = subtract(${outerBody}, tools = [${innerBody}])`,
+      );
+      return { script: next, target: body };
+    }
+    case "wedge": {
+      const widthName = nextBinding(script, "wedgeWidth");
+      const heightName = nextBinding(script, "wedgeHeight");
+      const depthName = nextBinding(script, "wedgeDepth");
+      const sketch = nextBinding(script, "sketch");
+      const profile = nextBinding(script, "profile");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, {
+        [widthName]: num(values, "width", 40),
+        [heightName]: num(values, "height", 25),
+        [depthName]: num(values, "depth", 30),
+      });
+      next = appendBlock(
+        next,
+        `${sketch} = startSketchOn(XZ)
+${profile} = startProfile(${sketch}, at = [-${widthName} / 2, -${heightName} / 2])
+  |> line(end = [${widthName}, 0])
+  |> line(end = [-${widthName}, ${heightName}])
+  |> close()
+${body} = extrude(${profile}, length = ${depthName}, symmetric = true)`,
+      );
+      return { script: next, target: body };
+    }
+    case "ellipsoid": {
+      const xName = nextBinding(script, "ellipsoidX");
+      const yName = nextBinding(script, "ellipsoidY");
+      const zName = nextBinding(script, "ellipsoidZ");
+      const sketch = nextBinding(script, "sketch");
+      const profile = nextBinding(script, "profile");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, {
+        [xName]: num(values, "xRadius", 28),
+        [yName]: num(values, "yRadius", 20),
+        [zName]: num(values, "zRadius", 14),
+      });
+      next = appendBlock(
+        next,
+        `${sketch} = startSketchOn(XZ)
+${profile} = startProfile(${sketch}, at = [0, -1])
+  |> arc(endAbsolute = [0, 1], interiorAbsolute = [1, 0])
+  |> close()
+${body} = revolve(${profile}, axis = Y, angle = 360deg)
+  |> scale(x = ${xName}, y = ${yName}, z = ${zName})`,
+      );
+      return { script: next, target: body };
+    }
+    case "capsule": {
+      const lengthName = nextBinding(script, "capsuleLength");
+      const widthName = nextBinding(script, "capsuleWidth");
+      const heightName = nextBinding(script, "capsuleHeight");
+      const sketch = nextBinding(script, "sketch");
+      const profile = nextBinding(script, "profile");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, {
+        [lengthName]: num(values, "length", 42),
+        [widthName]: num(values, "width", 16),
+        [heightName]: num(values, "height", 8),
+      });
+      next = appendBlock(
+        next,
+        `${sketch} = startSketchOn(XY)
+${profile} = startProfile(${sketch}, at = [-${lengthName} / 2, -${widthName} / 2])
+  |> line(end = [${lengthName}, 0])
+  |> tangentialArc(end = [0, ${widthName}])
+  |> line(end = [-${lengthName}, 0])
+  |> tangentialArc(end = [0, -${widthName}])
+  |> close()
+${body} = extrude(${profile}, length = ${heightName})`,
+      );
+      return { script: next, target: body };
+    }
+    case "hexNut": {
+      const outerName = nextBinding(script, "nutOuterRadius");
+      const boreName = nextBinding(script, "nutBoreRadius");
+      const heightName = nextBinding(script, "nutHeight");
+      const outerSketch = nextBinding(script, "sketch");
+      const outerBody = nextBinding(script, "body");
+      const boreSketch = nextBinding(script, "sketch");
+      const boreBody = nextBinding(script, "body");
+      const body = nextBinding(script, "body");
+      const outer = num(values, "outerRadius", 10);
+      const bore = Math.min(outer - 0.1, Math.max(0.1, num(values, "boreRadius", 4)));
+      let next = upsertParams(script, {
+        [outerName]: outer,
+        [boreName]: bore,
+        [heightName]: num(values, "height", 6),
+      });
+      next = appendBlock(
+        next,
+        `${outerSketch} = startSketchOn(XY)
+${outerBody} = polygon(${outerSketch}, radius = ${outerName}, numSides = 6, center = [0, 0])
+  |> extrude(length = ${heightName})
+${boreSketch} = startSketchOn(XY)
+${boreBody} = circle(${boreSketch}, center = [0, 0], radius = ${boreName})
+  |> extrude(length = ${heightName})
+${body} = subtract(${outerBody}, tools = [${boreBody}])`,
+      );
+      return { script: next, target: body };
+    }
+    case "pushPull": {
+      const face = str(values, "face", "top") as PushPullFace;
+      const result = pushPullFace(script, face, num(values, "distance", 5));
+      return { script: result.script, target: solid };
+    }
+    case "stretch": {
+      const axis = str(values, "axis", "Z");
+      const factor = Math.max(0.01, num(values, "factor", 1.15));
+      const scaleName = nextBinding(script, `formScale${axis}`);
+      let next = upsertParams(script, { [scaleName]: factor });
+      next = pipeOntoSolid(
+        next,
+        solid!,
+        `|> scale(x = ${axis === "X" ? scaleName : 1}, y = ${axis === "Y" ? scaleName : 1}, z = ${axis === "Z" ? scaleName : 1})`,
+      );
+      return { script: next, target: solid };
     }
     case "extrude": {
       const lenName = nextBinding(script, "extrudeLen");
@@ -758,6 +1338,100 @@ ${body} = revolve(${profile}, axis = ${axis}, angle = ${aName}deg)`,
       );
       return { script: next, target: body };
     }
+    case "sweep": {
+      const radiusName = nextBinding(script, "sweepRadius");
+      const runName = nextBinding(script, "sweepRun");
+      const bendName = nextBinding(script, "sweepBend");
+      const riseName = nextBinding(script, "sweepRise");
+      const profileSketch = nextBinding(script, "sketch");
+      const profile = nextBinding(script, "profile");
+      const pathSketch = nextBinding(script, "sketch");
+      const path = nextBinding(script, "path");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, {
+        [radiusName]: num(values, "radius", 3),
+        [runName]: num(values, "length", 40),
+        [bendName]: num(values, "bend", 12),
+        [riseName]: num(values, "rise", 18),
+      });
+      next = appendBlock(
+        next,
+        `${profileSketch} = startSketchOn(YZ)
+${profile} = circle(${profileSketch}, center = [0, 0], radius = ${radiusName})
+${pathSketch} = startSketchOn(XZ)
+${path} = startProfile(${pathSketch}, at = [0, 0])
+  |> xLine(length = ${runName})
+  |> tangentialArc(end = [${bendName}, ${riseName}])
+${body} = sweep(${profile}, path = ${path})`,
+      );
+      return { script: next, target: body };
+    }
+    case "loft": {
+      const startName = nextBinding(script, "loftStartRadius");
+      const endName = nextBinding(script, "loftEndRadius");
+      const heightName = nextBinding(script, "loftHeight");
+      const lowerSketch = nextBinding(script, "sketch");
+      const lower = nextBinding(script, "profile");
+      const upperSketch = nextBinding(script, "sketch");
+      const upper = nextBinding(script, "profile");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, {
+        [startName]: num(values, "startRadius", 20),
+        [endName]: num(values, "endRadius", 10),
+        [heightName]: num(values, "height", 40),
+      });
+      next = appendBlock(
+        next,
+        `${lowerSketch} = startSketchOn(XY)
+${lower} = circle(${lowerSketch}, center = [0, 0], radius = ${startName})
+${upperSketch} = startSketchOn(offsetPlane(XY, offset = ${heightName}))
+${upper} = circle(${upperSketch}, center = [0, 0], radius = ${endName})
+${body} = loft([${lower}, ${upper}])`,
+      );
+      return { script: next, target: body };
+    }
+    case "twistExtrude": {
+      const radiusName = nextBinding(script, "twistRadius");
+      const sidesName = nextBinding(script, "twistSides");
+      const heightName = nextBinding(script, "twistHeight");
+      const angleName = nextBinding(script, "twistAngle");
+      const sketch = nextBinding(script, "sketch");
+      const profile = nextBinding(script, "profile");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, {
+        [radiusName]: num(values, "radius", 18),
+        [sidesName]: Math.max(3, Math.round(num(values, "sides", 6))),
+        [heightName]: num(values, "height", 50),
+        [angleName]: num(values, "angle", 120),
+      });
+      next = appendBlock(
+        next,
+        `${sketch} = startSketchOn(XY)
+${profile} = polygon(${sketch}, radius = ${radiusName}, numSides = ${sidesName}, center = [0, 0])
+${body} = extrude(${profile}, length = ${heightName}, twistAngle = ${angleName}deg, twistAngleStep = 12deg)`,
+      );
+      return { script: next, target: body };
+    }
+    case "draftExtrude": {
+      const radiusName = nextBinding(script, "draftRadius");
+      const heightName = nextBinding(script, "draftHeight");
+      const angleName = nextBinding(script, "draftAngle");
+      const sketch = nextBinding(script, "sketch");
+      const profile = nextBinding(script, "profile");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, {
+        [radiusName]: num(values, "radius", 20),
+        [heightName]: num(values, "height", 35),
+        [angleName]: num(values, "angle", 8),
+      });
+      next = appendBlock(
+        next,
+        `${sketch} = startSketchOn(XY)
+${profile} = circle(${sketch}, center = [0, 0], radius = ${radiusName})
+${body} = extrude(${profile}, length = ${heightName}, draftAngle = ${angleName}deg)`,
+      );
+      return { script: next, target: body };
+    }
     case "fillet": {
       const rName = nextBinding(script, "filletRadius");
       const r = num(values, "radius", 2);
@@ -799,6 +1473,21 @@ ${body} = revolve(${profile}, axis = ${axis}, angle = ${aName}deg)`,
         `${holeSketch} = startSketchOn(${solid}, face = END)
   |> circle(center = [0, 0], radius = ${dName} / 2)
   |> extrude(length = -${depthName})`,
+      );
+      return { script: next, target: solid };
+    }
+    case "appearance": {
+      const color = str(values, "color", "#ff6b2c").trim();
+      if (!/^#[0-9a-f]{6}$/i.test(color)) {
+        throw new Error("Color must be a six-digit hex value such as #ff6b2c.");
+      }
+      const metalness = Math.min(100, Math.max(0, num(values, "metalness", 0)));
+      const roughness = Math.min(100, Math.max(0, num(values, "roughness", 50)));
+      const opacity = Math.min(100, Math.max(0, num(values, "opacity", 100)));
+      const next = pipeOntoSolid(
+        script,
+        solid!,
+        `|> appearance(color = "${color}", metalness = ${metalness}, roughness = ${roughness}, opacity = ${opacity})`,
       );
       return { script: next, target: solid };
     }
@@ -844,6 +1533,23 @@ ${body} = revolve(${profile}, axis = ${axis}, angle = ${aName}deg)`,
       let next = upsertParams(script, { [xName]: x, [yName]: y, [zName]: z });
       next = pipeOntoSolid(next, solid!, `|> scale(x = ${xName}, y = ${yName}, z = ${zName})`);
       return { script: next, target: solid };
+    }
+    case "duplicate": {
+      const xName = nextBinding(script, "copyX");
+      const yName = nextBinding(script, "copyY");
+      const zName = nextBinding(script, "copyZ");
+      const body = nextBinding(script, "body");
+      let next = upsertParams(script, {
+        [xName]: num(values, "x", 30),
+        [yName]: num(values, "y", 0),
+        [zName]: num(values, "z", 0),
+      });
+      next = appendBlock(
+        next,
+        `${body} = clone(${solid})
+  |> translate(x = ${xName}, y = ${yName}, z = ${zName})`,
+      );
+      return { script: next, target: body };
     }
     case "patternLinear": {
       const instances = Math.max(2, Math.round(num(values, "instances", 3)));

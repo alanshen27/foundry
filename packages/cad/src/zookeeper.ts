@@ -91,11 +91,9 @@ function stringMap(raw: Record<string, unknown>): Record<string, string> {
 
 function errorDetail(msg: ServerMessage): string {
   const err = msg.error;
-  if (typeof err === "string") return err;
-  if (err && typeof err === "object" && "detail" in err) {
-    return String((err as { detail?: unknown }).detail ?? "Zoo Zookeeper error");
-  }
-  return "Zoo Zookeeper error";
+  return typeof err === "string" || (err && typeof err === "object")
+    ? "The CAD generation service rejected the request."
+    : "The CAD generation service could not complete the request.";
 }
 
 /**
@@ -153,7 +151,7 @@ export async function zookeeperPrompt(
           `[zookeeper] ok conversation=${result.data.conversationId} files=${Object.keys(result.data.files).length}`,
         );
       } else {
-        console.warn(`[zookeeper] failed: ${result.error}`);
+        console.warn("[zookeeper] request failed");
       }
       resolve(result);
     };
@@ -228,15 +226,15 @@ export async function zookeeperPrompt(
             },
           });
         }
-      } catch (err) {
-        console.warn("[zookeeper] bad message", err);
+      } catch {
+        console.warn("[zookeeper] ignored an invalid service message");
       }
     });
 
-    ws.on("error", (err) => {
+    ws.on("error", () => {
       finish({
         ok: false,
-        error: err instanceof Error ? err.message : "Zoo Zookeeper WebSocket error",
+        error: "The CAD generation service connection failed.",
       });
     });
 

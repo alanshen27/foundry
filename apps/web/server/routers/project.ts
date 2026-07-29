@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { prisma } from "@foundry/db";
+import { cadDoc } from "@foundry/cad";
+import { prisma, type Prisma } from "@foundry/db";
 import { slugify, STAGES } from "@foundry/domain";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
@@ -77,6 +78,15 @@ export const projectRouter = router({
       });
       await prisma.stageState.createMany({
         data: STAGES.map((stage) => ({ projectId: project.id, branchId: branch.id, stage })),
+      });
+      await prisma.designDoc.create({
+        data: {
+          projectId: project.id,
+          branchId: branch.id,
+          kind: "MODEL3D",
+          data: cadDoc("") as unknown as Prisma.InputJsonValue,
+          updatedById: ctx.user.id,
+        },
       });
 
       await recordAudit({
@@ -169,10 +179,10 @@ export const projectRouter = router({
           requireReady: true,
         });
         await getObjectStorage().put(key, new Uint8Array(png), "image/png");
-      } catch (err) {
+      } catch {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `Preview render failed: ${err instanceof Error ? err.message : String(err)}`,
+          message: "The project preview could not be rendered.",
         });
       }
 
@@ -215,6 +225,15 @@ export const projectRouter = router({
           branchId: branch.id,
           stage,
         })),
+      });
+      await prisma.designDoc.create({
+        data: {
+          projectId: project.id,
+          branchId: branch.id,
+          kind: "MODEL3D",
+          data: cadDoc("") as unknown as Prisma.InputJsonValue,
+          updatedById: ctx.user.id,
+        },
       });
       await recordAudit({
         type: "ProjectBranchCreated",

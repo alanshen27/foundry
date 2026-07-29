@@ -25,6 +25,45 @@ import {
   type PadInstance,
 } from "@/lib/pcb/geometry";
 
+/** Total centerline length of a routed polyline, in millimetres. */
+export function trackLength(points: { xMm: number; yMm: number }[]): number {
+  let length = 0;
+  for (let index = 1; index < points.length; index++) {
+    const from = points[index - 1]!;
+    const to = points[index]!;
+    length += Math.hypot(to.xMm - from.xMm, to.yMm - from.yMm);
+  }
+  return length;
+}
+
+/**
+ * Produce the shortest one-corner horizontal/vertical + 45° candidate between
+ * two pads. This is a guided route, not an obstacle-avoiding autorouter: DRC
+ * remains authoritative and undo removes the candidate as one operation.
+ */
+export function route45Points(
+  from: { xMm: number; yMm: number },
+  to: { xMm: number; yMm: number },
+): { xMm: number; yMm: number }[] {
+  const dx = to.xMm - from.xMm;
+  const dy = to.yMm - from.yMm;
+  if (dx === 0 || dy === 0 || Math.abs(Math.abs(dx) - Math.abs(dy)) < 1e-9) {
+    return [{ ...from }, { ...to }];
+  }
+
+  const corner =
+    Math.abs(dx) > Math.abs(dy)
+      ? {
+          xMm: from.xMm + Math.sign(dx) * (Math.abs(dx) - Math.abs(dy)),
+          yMm: from.yMm,
+        }
+      : {
+          xMm: from.xMm,
+          yMm: from.yMm + Math.sign(dy) * (Math.abs(dy) - Math.abs(dx)),
+        };
+  return [{ ...from }, corner, { ...to }];
+}
+
 /** Copper within this distance is touching. Guards float error, not a real gap. */
 const TOUCH_EPS = 1e-6;
 

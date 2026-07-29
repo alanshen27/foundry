@@ -25,22 +25,17 @@ const HIDE_DEV_OVERLAY_CSS = `
 `;
 
 /**
- * playwright-core deliberately ships no browser binaries, so a missing Chromium
- * is a deploy problem, not a bug in the caller. Say that plainly — the raw
- * Playwright error tells the copilot to run `pnpm exec playwright install`,
- * which is useless advice inside a running dyno.
+ * Convert launch failures to public-safe messages. Raw Playwright errors can
+ * include absolute deployment paths, command lines, and host details.
  */
 function describeLaunchFailure(err: unknown): Error {
   const message = err instanceof Error ? err.message : String(err);
-  if (!/Executable doesn't exist/i.test(message)) {
-    return err instanceof Error ? err : new Error(message);
+  if (/Executable doesn't exist/i.test(message)) {
+    return new Error(
+      "The rendering service is unavailable in this deployment. Contact a workspace administrator.",
+    );
   }
-  return new Error(
-    "Chromium is not installed in this deployment. The build must run " +
-      "`playwright install --only-shell chromium` with PLAYWRIGHT_BROWSERS_PATH pointing " +
-      "somewhere under /opt/render/project — see render.yaml. Original error: " +
-      message,
-  );
+  return new Error("The rendering service could not start. Try again shortly.");
 }
 
 async function getBrowser(): Promise<Browser> {

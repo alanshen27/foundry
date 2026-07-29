@@ -22,22 +22,22 @@ describe("screenshotRenderPage browser launch", () => {
     launch.mockReset();
   });
 
-  it("explains a missing Chromium instead of telling the dyno to run an installer", async () => {
+  it("hides deployment paths when the renderer is unavailable", async () => {
     const { screenshotRenderPage } = await loadRender();
     launch.mockRejectedValue(new Error(MISSING_EXECUTABLE));
 
     await expect(
       screenshotRenderPage("http://localhost/render/cad", { width: 800, height: 600 }),
-    ).rejects.toThrow(/Chromium is not installed in this deployment/);
+    ).rejects.toThrow(/rendering service is unavailable/i);
   });
 
-  it("keeps the original error for failures that are not a missing binary", async () => {
+  it("hides runtime details for other launch failures", async () => {
     const { screenshotRenderPage } = await loadRender();
     launch.mockRejectedValue(new Error("Target page, context or browser has been closed"));
 
     await expect(
       screenshotRenderPage("http://localhost/render/cad", { width: 800, height: 600 }),
-    ).rejects.toThrow(/browser has been closed/);
+    ).rejects.toThrow("The rendering service could not start. Try again shortly.");
   });
 
   it("rewrites the missing-binary error for extract_product_images too", async () => {
@@ -45,7 +45,7 @@ describe("screenshotRenderPage browser launch", () => {
     launch.mockRejectedValue(new Error(MISSING_EXECUTABLE));
 
     await expect(extractProductImages("https://example.com/part")).rejects.toThrow(
-      /Chromium is not installed in this deployment/,
+      /rendering service is unavailable/i,
     );
   });
 });

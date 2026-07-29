@@ -17,15 +17,21 @@ import { getCad, getZooEngineToken } from "../cad";
 import { getObjectStorage } from "../storage";
 import { withKclProjectDir } from "../kcl-project-dir";
 
-const FORMAT_MIME: Record<CadAssetFormat, string> = {
-  stl: "model/stl",
-  step: "model/step",
-  stp: "model/step",
-  obj: "model/obj",
-  gltf: "model/gltf+json",
-  glb: "model/gltf-binary",
-  ply: "model/ply",
-};
+function formatMime(format: CadAssetFormat): string {
+  if (format === "stl") return "model/stl";
+  if (format === "step" || format === "stp" || format === "ste") return "model/step";
+  if (format === "obj") return "model/obj";
+  if (format === "gltf") return "model/gltf+json";
+  if (format === "glb") return "model/gltf-binary";
+  if (format === "ply") return "model/ply";
+  if (format === "fbx") return "model/fbx";
+  if (format === "kcl") return "text/plain";
+  if (format === "svg") return "image/svg+xml";
+  if (format === "kicad_sch" || format === "kicad_pcb" || format === "kicad_pro") {
+    return "application/x-kicad";
+  }
+  return "application/octet-stream";
+}
 
 export const cadRouter = router({
   /** Short-lived use: Zoo WebRTC client token for the mechanical viewport. */
@@ -84,7 +90,10 @@ export const cadRouter = router({
           : await cad.boundingBoxKcl({ code: component.content, unit: "mm" });
 
       if (!result.ok) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: result.error });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "The selected model could not be measured. Check its latest feature.",
+        });
       }
       return {
         componentId: component.id,
@@ -95,7 +104,8 @@ export const cadRouter = router({
     }),
 
   /**
-   * Upload a mesh/B-Rep file for KCL foreign import (STL/STEP/OBJ/…).
+   * Upload a design resource. Engine-readable formats become geometry; native
+   * source/electronics formats remain preserved UNVERIFIED references.
    * Stores under projects/{id}/cad/imports/… and creates an UNVERIFIED artifact.
    */
   importMesh: protectedProcedure
@@ -104,8 +114,8 @@ export const cadRouter = router({
         projectId: z.string(),
         branchId: z.string(),
         filename: z.string().min(1).max(160),
-        /** Base64 body; ~10 MB decoded max for CAD imports. */
-        contentBase64: z.string().max(14_000_000),
+        /** Base64 body; ~25 MB decoded max for design imports. */
+        contentBase64: z.string().max(35_000_000),
         lengthUnit: z.enum(["mm", "cm", "m", "in", "ft", "yd"]).optional(),
       }),
     )
@@ -118,7 +128,7 @@ export const cadRouter = router({
       if (!format) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Unsupported format. Use STL, STEP, OBJ, GLTF/GLB, or PLY.",
+          message: "This file extension is not supported by the design importer.",
         });
       }
 
@@ -126,14 +136,17 @@ export const cadRouter = router({
       if (body.byteLength === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Empty file" });
       }
-      if (body.byteLength > 10_000_000) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "File exceeds 10 MB limit" });
+      if (body.byteLength > 25_000_000) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "File exceeds the 25 MB import limit",
+        });
       }
 
       const path = importAssetPath(input.filename, format);
       const safeName = path.split("/").pop() ?? input.filename;
       const key = `projects/${input.projectId}/cad/imports/${randomUUID()}-${safeName}`;
-      const mimeType = FORMAT_MIME[format];
+      const mimeType = formatMime(format);
       const stored = await getObjectStorage().put(key, body, mimeType);
 
       const artifact = await prisma.artifact.create({

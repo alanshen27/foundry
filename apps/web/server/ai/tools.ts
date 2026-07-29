@@ -1721,13 +1721,10 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
                   ],
                 };
               }
-              console.warn("[render_model_views] Zoo MCP snapshot failed:", snap.error);
+              console.warn("[render_model_views] Zoo snapshot was unavailable.");
             }
-          } catch (err) {
-            console.warn(
-              "[render_model_views] Zoo MCP unavailable, falling back to viewport:",
-              err instanceof Error ? err.message : err,
-            );
+          } catch {
+            console.warn("[render_model_views] Zoo snapshot was unavailable; using viewport.");
           }
 
           const token = mintRenderToken({ projectId, branchId, kind: "model3d" });
@@ -1751,9 +1748,9 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
               images.push({ view, key, imageUrl: `/api/files/${key}` });
             }
             return { ok: true, source: "viewport", images };
-          } catch (err) {
+          } catch {
             return {
-              error: `Rendering failed: ${err instanceof Error ? err.message : String(err)}. If the browser is missing, run: pnpm exec playwright install chromium`,
+              error: "Rendering failed. Try again or contact a workspace administrator.",
             };
           }
         }),
@@ -1792,9 +1789,9 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             const key = `projects/${projectId}/ai/circuit-${Date.now()}.png`;
             await getObjectStorage().put(key, new Uint8Array(png), "image/png");
             return { ok: true, key, imageUrl: `/api/files/${key}` };
-          } catch (err) {
+          } catch {
             return {
-              error: `Rendering failed: ${err instanceof Error ? err.message : String(err)}. If the browser is missing, run: pnpm exec playwright install chromium`,
+              error: "Rendering failed. Try again or contact a workspace administrator.",
             };
           }
         }),
@@ -1829,9 +1826,9 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             const key = `projects/${projectId}/ai/pcb-${Date.now()}.png`;
             await getObjectStorage().put(key, new Uint8Array(png), "image/png");
             return { ok: true, key, imageUrl: `/api/files/${key}` };
-          } catch (err) {
+          } catch {
             return {
-              error: `Rendering failed: ${err instanceof Error ? err.message : String(err)}. If the browser is missing, run: pnpm exec playwright install chromium`,
+              error: "Rendering failed. Try again or contact a workspace administrator.",
             };
           }
         }),

@@ -324,6 +324,8 @@ export function docToGraph(
       sourceHandle: w.from.pin,
       target: w.to.part,
       targetHandle: w.to.pin,
+      label: w.label,
+      data: { netLabel: w.label },
       type: "smoothstep",
       style: WIRE_STYLE,
     })),

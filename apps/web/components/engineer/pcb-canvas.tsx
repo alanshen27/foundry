@@ -30,6 +30,7 @@ import {
   Layers3,
   LayoutGrid,
   MousePointer2,
+  PanelRight,
   Plus,
   Redo2,
   RotateCw,
@@ -37,8 +38,10 @@ import {
   ShieldCheck,
   Spline,
   Square,
+  Ruler,
   Trash2,
   Undo2,
+  WandSparkles,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -68,7 +71,15 @@ import {
 import { EMPTY_CIRCUIT, normalizeCircuitDoc } from "@/lib/circuit/catalog";
 import { circuitForGroup, partitionBoards } from "@/lib/circuit/groups";
 import { buildRatsnest, netsByPad, padNetMap } from "@/lib/pcb/netlist";
-import { buildCopperGraph, padAt, trackAt, viaAt, zoneAt } from "@/lib/pcb/routing";
+import {
+  buildCopperGraph,
+  padAt,
+  route45Points,
+  trackAt,
+  trackLength,
+  viaAt,
+  zoneAt,
+} from "@/lib/pcb/routing";
 import { runDrc } from "@/lib/pcb/drc";
 import { fabricationFiles } from "@/lib/pcb/export";
 import { trpc } from "@/lib/trpc";
@@ -92,7 +103,8 @@ const PICK_MM = 0.4;
 /** Undo depth. Deep enough for a routing session, bounded so state stays small. */
 const HISTORY_LIMIT = 60;
 
-type Tool = "select" | "route" | "via" | "zone";
+type Tool = "select" | "route" | "via" | "zone" | "measure";
+type InspectorTab = "board" | "rules" | "drc" | "inspect";
 
 type LayerKey = "Edge.Cuts" | "F.Cu" | "B.Cu" | "F.SilkS" | "courtyard" | "ratsnest";
 
@@ -454,6 +466,8 @@ export function PcbCanvas({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [footprintCategory, setFootprintCategory] = useState("All");
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("inspect");
   const [viewMode, setViewMode] = useState<"2d" | "3d">("2d");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: PAD, y: PAD });
@@ -470,6 +484,11 @@ export function PcbCanvas({
   const [zoneDraft, setZoneDraft] = useState<PcbPoint[] | null>(null);
   /** Net to pour into new zones, and the net highlighted on the canvas. */
   const [activeNet, setActiveNet] = useState<string | null>(null);
+  const [measurement, setMeasurement] = useState<{
+    from: PcbPoint;
+    to: PcbPoint;
+    complete: boolean;
+  } | null>(null);
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
     "Edge.Cuts": true,
     "F.Cu": true,
@@ -649,6 +668,26 @@ export function PcbCanvas({
     [pushHistory, scheduleSave],
   );
 
+  const arrangeFootprints = useCallback(() => {
+    if (docRef.current.footprints.length === 0) return;
+    pushHistory();
+    setDoc((current) => {
+      const columns = Math.max(1, Math.ceil(Math.sqrt(current.footprints.length)));
+      const rows = Math.ceil(current.footprints.length / columns);
+      const cellW = Math.max(8, (current.board.widthMm - 8) / columns);
+      const cellH = Math.max(8, (current.board.heightMm - 8) / rows);
+      return {
+        ...current,
+        footprints: current.footprints.map((footprint, index) => ({
+          ...footprint,
+          xMm: Math.round((4 + ((index % columns) + 0.5) * cellW) * 20) / 20,
+          yMm: Math.round((4 + (Math.floor(index / columns) + 0.5) * cellH) * 20) / 20,
+        })),
+      };
+    });
+    scheduleSave();
+  }, [pushHistory, scheduleSave]);
+
   const deleteSelected = useCallback(() => {
     if (!selectedId) return;
     pushHistory();
@@ -796,6 +835,25 @@ export function PcbCanvas({
     [pushHistory, scheduleSave],
   );
 
+  /**
+   * Route one remaining airwire with a reviewable 45° candidate. The normal
+   * DRC immediately evaluates clearance and shorts, so this remains an assist
+   * rather than pretending to be an obstacle-aware autorouter.
+   */
+  const guideNextAirwire = useCallback(() => {
+    const airwire =
+      (activeNet ? ratsnest.airwires.find((candidate) => candidate.net === activeNet) : null) ??
+      ratsnest.airwires[0];
+    if (!airwire) return;
+    const points = route45Points(
+      { xMm: airwire.from.xMm, yMm: airwire.from.yMm },
+      { xMm: airwire.to.xMm, yMm: airwire.to.yMm },
+    );
+    commitTrack(points, activeLayer, airwire.net);
+    setActiveNet(airwire.net);
+    setShowDrc(true);
+  }, [activeLayer, activeNet, commitTrack, ratsnest.airwires]);
+
   /** Place a via, and when routing, use it to continue on the opposite layer. */
   const placeVia = useCallback(
     (at: PcbPoint, net?: string) => {
@@ -886,6 +944,7 @@ export function PcbCanvas({
       e.currentTarget.setPointerCapture(e.pointerId);
       setSelectedId(id);
       setSelectedTrackId(null);
+      setInspectorTab("inspect");
       if (!canEdit) return;
       const fp = docRef.current.footprints.find((f) => f.id === id);
       if (!fp) return;
@@ -925,6 +984,16 @@ export function PcbCanvas({
 
       const mm = clientToMm(e.clientX, e.clientY);
       if (!mm) return;
+
+      if (tool === "measure") {
+        const point = quantize(mm);
+        setMeasurement((current) =>
+          !current || current.complete
+            ? { from: point, to: point, complete: false }
+            : { from: current.from, to: point, complete: true },
+        );
+        return;
+      }
 
       if (tool === "route" && canEdit) {
         const head = draft?.points[draft.points.length - 1] ?? null;
@@ -979,6 +1048,7 @@ export function PcbCanvas({
       if (via || track || zone) {
         setSelectedTrackId(via?.id ?? track?.id ?? zone!.id);
         setSelectedId(null);
+        setInspectorTab("inspect");
         return;
       }
       setSelectedId(null);
@@ -1024,8 +1094,13 @@ export function PcbCanvas({
         const mm = pointerMm;
         if (mm) {
           // A pour outline is not angle-constrained, so it only snaps to grid.
-          if (tool === "zone") setCursorMm(quantize(mm));
+          if (tool === "zone" || tool === "measure") setCursorMm(quantize(mm));
           else setCursorMm(routePoint(mm, draft?.points[draft.points.length - 1] ?? null).point);
+          if (tool === "measure") {
+            setMeasurement((current) =>
+              current && !current.complete ? { ...current, to: quantize(mm) } : current,
+            );
+          }
         }
       }
       const drag = dragRef.current;
@@ -1056,7 +1131,17 @@ export function PcbCanvas({
     panDragRef.current = null;
   }, [scheduleSave]);
 
-  const results = useMemo(() => searchFootprints(search), [search]);
+  const footprintCategories = useMemo(
+    () => ["All", ...new Set(searchFootprints("").map((entry) => entry.category))],
+    [],
+  );
+  const results = useMemo(
+    () =>
+      searchFootprints(search).filter(
+        (entry) => footprintCategory === "All" || entry.category === footprintCategory,
+      ),
+    [search, footprintCategory],
+  );
   const selected = doc.footprints.find((f) => f.id === selectedId) ?? null;
   const selectedDef = selected ? footprintDef(selected.libraryId) : null;
   const selectedPart = selected?.partId
@@ -1066,6 +1151,22 @@ export function PcbCanvas({
     ratsnest.issues.unlinkedParts.length +
     ratsnest.issues.unmappedPins.length +
     ratsnest.issues.danglingFootprints.length;
+  const totalTrackLength = useMemo(
+    () => doc.tracks.reduce((sum, track) => sum + trackLength(track.points), 0),
+    [doc.tracks],
+  );
+  const netLengths = useMemo(() => {
+    const lengths = new Map<string, number>();
+    for (const track of doc.tracks) {
+      const name = track.net ?? "Unassigned";
+      lengths.set(name, (lengths.get(name) ?? 0) + trackLength(track.points));
+    }
+    return [...lengths.entries()].sort((a, b) => b[1] - a[1]);
+  }, [doc.tracks]);
+  const routingPercent =
+    ratsnest.totalConnections === 0
+      ? 100
+      : Math.round((ratsnest.routedCount / ratsnest.totalConnections) * 100);
 
   /**
    * Editor keys. Bound on window rather than the SVG so they work without the
@@ -1093,6 +1194,7 @@ export function PcbCanvas({
       switch (e.key.toLowerCase()) {
         case "escape":
           if (draft || zoneDraft) cancelDraft();
+          else if (measurement) setMeasurement(null);
           else {
             setSelectedId(null);
             setSelectedTrackId(null);
@@ -1118,10 +1220,15 @@ export function PcbCanvas({
         case "r":
           if (canEdit) setTool("route");
           break;
+        case "m":
+          setTool("measure");
+          setMeasurement(null);
+          break;
         case "s":
           setTool("select");
           setDraft(null);
           setZoneDraft(null);
+          setMeasurement(null);
           break;
         case "delete":
         case "backspace":
@@ -1147,6 +1254,7 @@ export function PcbCanvas({
   }, [
     draft,
     zoneDraft,
+    measurement,
     canEdit,
     selectedId,
     selectedTrackId,
@@ -1189,6 +1297,12 @@ export function PcbCanvas({
     <div className="bg-background absolute inset-0 flex">
       {/* Library */}
       <aside className="bg-card/40 hidden w-64 shrink-0 flex-col border-r md:flex">
+        <div className="border-b px-3 py-2">
+          <div className="text-[10px] font-semibold tracking-wider uppercase">Footprints</div>
+          <p className="text-muted-foreground mt-0.5 text-[10px]">
+            Place packages, then route the schematic airwires.
+          </p>
+        </div>
         <div className="flex items-center gap-1.5 border-b px-2.5 py-2">
           <Search className="text-muted-foreground size-3.5 shrink-0" />
           <Input
@@ -1200,6 +1314,19 @@ export function PcbCanvas({
             disabled={!canEdit}
           />
         </div>
+        <label className="flex items-center gap-2 border-b px-2.5 py-1.5">
+          <span className="text-muted-foreground text-[10px]">Category</span>
+          <select
+            value={footprintCategory}
+            onChange={(event) => setFootprintCategory(event.target.value)}
+            className="bg-background h-7 min-w-0 flex-1 rounded-md border px-1.5 text-[10px]"
+            aria-label="Footprint category"
+          >
+            {footprintCategories.map((category) => (
+              <option key={category}>{category}</option>
+            ))}
+          </select>
+        </label>
         <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1.5">
           {results.map((entry) => (
             <button
@@ -1216,9 +1343,19 @@ export function PcbCanvas({
             </button>
           ))}
         </div>
-        <p className="text-muted-foreground border-t px-2.5 py-2 text-[10px] leading-snug">
-          R route · V via · Z pour · X swap layer · S select · shift free angle · Esc cancel
-        </p>
+        <div className="flex flex-col gap-1 border-t p-2">
+          <Button
+            variant="outline"
+            size="xs"
+            disabled={!canEdit || doc.footprints.length === 0}
+            onClick={arrangeFootprints}
+          >
+            <WandSparkles className="size-3" /> Arrange footprints
+          </Button>
+          <p className="text-muted-foreground text-[10px] leading-snug">
+            R route · V via · Z pour · M measure · X swap layer · S select · Esc cancel
+          </p>
+        </div>
       </aside>
 
       {/* Canvas */}
@@ -1295,6 +1432,16 @@ export function PcbCanvas({
                   <Spline className="size-3" />
                 </Button>
                 <Button
+                  variant="ghost"
+                  size="xs"
+                  disabled={!canEdit || ratsnest.airwires.length === 0}
+                  onClick={guideNextAirwire}
+                  title="Guide next airwire — add a 45° candidate, then review DRC"
+                >
+                  <WandSparkles className="size-3" />
+                  <span className="ml-1">Guide</span>
+                </Button>
+                <Button
                   variant={tool === "via" ? "secondary" : "ghost"}
                   size="xs"
                   disabled={!canEdit}
@@ -1313,6 +1460,18 @@ export function PcbCanvas({
                   title="Copper pour (Z) — click to outline, click the first point to close"
                 >
                   <LayoutGrid className="size-3" />
+                </Button>
+                <Button
+                  variant={tool === "measure" ? "secondary" : "ghost"}
+                  size="xs"
+                  onClick={() => {
+                    setTool("measure");
+                    setMeasurement(null);
+                  }}
+                  aria-pressed={tool === "measure"}
+                  title="Measure between two points (M)"
+                >
+                  <Ruler className="size-3" />
                 </Button>
               </div>
 
@@ -1354,6 +1513,23 @@ export function PcbCanvas({
                 ))}
               </div>
 
+              <label className="bg-card/90 flex items-center gap-1 rounded-none border px-1.5 py-0.5 shadow-lg backdrop-blur-md">
+                <span className="text-muted-foreground text-[10px]">Width</span>
+                <select
+                  value={doc.rules.trackWidthMm}
+                  disabled={!canEdit}
+                  onChange={(event) => patchRules({ trackWidthMm: Number(event.target.value) })}
+                  className="bg-transparent font-mono text-[10px] outline-none"
+                  aria-label="Active track width"
+                >
+                  {[0.15, 0.2, 0.25, 0.4, 0.6, 1].map((width) => (
+                    <option key={width} value={width}>
+                      {width} mm
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <div className="bg-card/90 flex items-center gap-0.5 rounded-none border p-0.5 shadow-lg backdrop-blur-md">
                 <Button
                   variant="ghost"
@@ -1379,7 +1555,10 @@ export function PcbCanvas({
                 <Button
                   variant={showDrc ? "secondary" : "ghost"}
                   size="xs"
-                  onClick={() => setShowDrc((s) => !s)}
+                  onClick={() => {
+                    setShowDrc((value) => !value);
+                    setInspectorTab("drc");
+                  }}
                   aria-pressed={showDrc}
                   title="Toggle DRC markers"
                 >
@@ -1399,6 +1578,14 @@ export function PcbCanvas({
                   title="Download Gerber + drill files"
                 >
                   <Download className="size-3" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => setInspectorTab("inspect")}
+                  title="Open selection inspector"
+                >
+                  <PanelRight className="size-3" />
                 </Button>
               </div>
             </>
@@ -1577,6 +1764,47 @@ export function PcbCanvas({
                   />
                 ) : null}
 
+                {measurement ? (
+                  <g pointerEvents="none">
+                    <line
+                      x1={measurement.from.xMm}
+                      y1={measurement.from.yMm}
+                      x2={measurement.to.xMm}
+                      y2={measurement.to.yMm}
+                      stroke="var(--color-primary)"
+                      strokeWidth={0.12}
+                      strokeDasharray="0.5 0.25"
+                    />
+                    {[measurement.from, measurement.to].map((point, index) => (
+                      <circle
+                        key={index}
+                        cx={point.xMm}
+                        cy={point.yMm}
+                        r={0.32}
+                        fill="var(--color-background)"
+                        stroke="var(--color-primary)"
+                        strokeWidth={0.1}
+                      />
+                    ))}
+                    <text
+                      x={(measurement.from.xMm + measurement.to.xMm) / 2}
+                      y={(measurement.from.yMm + measurement.to.yMm) / 2 - 0.8}
+                      fill="var(--color-primary)"
+                      fontSize={1.2}
+                      textAnchor="middle"
+                      paintOrder="stroke"
+                      stroke="var(--color-background)"
+                      strokeWidth={0.4}
+                    >
+                      {Math.hypot(
+                        measurement.to.xMm - measurement.from.xMm,
+                        measurement.to.yMm - measurement.from.yMm,
+                      ).toFixed(2)}{" "}
+                      mm
+                    </text>
+                  </g>
+                ) : null}
+
                 {/* Snap indicator, so it is obvious which pad a click will take. */}
                 {tool !== "select" && cursorMm ? (
                   <circle
@@ -1644,7 +1872,14 @@ export function PcbCanvas({
                           ? "Click to place a via"
                           : tool === "zone"
                             ? `Click to outline a pour on ${activeLayer}`
-                            : "Autosaves · drag to place · Alt-drag to pan · scroll to zoom"}
+                            : tool === "measure"
+                              ? measurement
+                                ? `${Math.hypot(
+                                    measurement.to.xMm - measurement.from.xMm,
+                                    measurement.to.yMm - measurement.from.yMm,
+                                  ).toFixed(2)} mm · click to finish or start another measurement`
+                                : "Click the first measurement point"
+                              : "Autosaves · drag to place · Alt-drag to pan · scroll to zoom"}
               </span>
             </div>
           </>
@@ -1652,371 +1887,477 @@ export function PcbCanvas({
       </div>
 
       {/* Inspector */}
-      <aside className="bg-card/40 hidden w-60 shrink-0 flex-col gap-3 overflow-y-auto border-l p-3 md:flex">
-        <div>
-          <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Board</h2>
-          <div className="flex flex-col gap-1.5">
-            <BoardField
-              label="Width"
-              value={doc.board.widthMm}
-              unit="mm"
-              step={0.5}
-              disabled={!canEdit}
-              onChange={(n) => patchBoard({ widthMm: n })}
-            />
-            <BoardField
-              label="Height"
-              value={doc.board.heightMm}
-              unit="mm"
-              step={0.5}
-              disabled={!canEdit}
-              onChange={(n) => patchBoard({ heightMm: n })}
-            />
-            <BoardField
-              label="Thickness"
-              value={doc.board.thicknessMm}
-              unit="mm"
-              step={0.1}
-              disabled={!canEdit}
-              onChange={(n) => patchBoard({ thicknessMm: n })}
-            />
-            <BoardField
-              label="Corner R"
-              value={doc.board.cornerRadiusMm}
-              unit="mm"
-              step={0.25}
-              disabled={!canEdit}
-              onChange={(n) => patchBoard({ cornerRadiusMm: n })}
-            />
-          </div>
+      <aside className="bg-card/40 hidden w-72 shrink-0 flex-col gap-3 overflow-y-auto border-l p-3 md:flex">
+        <div className="bg-card sticky top-0 z-10 -mx-3 -mt-3 grid grid-cols-4 border-b p-1">
+          {(
+            [
+              ["board", "Board"],
+              ["rules", "Rules"],
+              ["drc", `DRC ${drc.errorCount}`],
+              ["inspect", "Inspect"],
+            ] as const
+          ).map(([id, label]) => (
+            <Button
+              key={id}
+              variant={inspectorTab === id ? "secondary" : "ghost"}
+              size="xs"
+              className="px-1"
+              onClick={() => setInspectorTab(id)}
+            >
+              {label}
+            </Button>
+          ))}
         </div>
 
-        <div>
-          <div className="mb-2 flex items-center gap-1.5">
-            <Layers className="text-muted-foreground size-3.5" />
-            <h2 className="text-xs font-semibold tracking-wide uppercase">Layers</h2>
-          </div>
-          <div className="flex flex-col gap-1">
-            {LAYER_META.map((layer) => (
-              <label key={layer.id} className="flex items-center gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={layers[layer.id]}
-                  onChange={(e) => setLayers((l) => ({ ...l, [layer.id]: e.target.checked }))}
-                  className="accent-primary size-3.5"
+        {inspectorTab === "board" ? (
+          <>
+            <div>
+              <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Board</h2>
+              <div className="flex flex-col gap-1.5">
+                <BoardField
+                  label="Width"
+                  value={doc.board.widthMm}
+                  unit="mm"
+                  step={0.5}
+                  disabled={!canEdit}
+                  onChange={(n) => patchBoard({ widthMm: n })}
                 />
-                <span
-                  className="size-2.5 rounded-none"
-                  style={{ background: layer.color }}
-                  aria-hidden
+                <BoardField
+                  label="Height"
+                  value={doc.board.heightMm}
+                  unit="mm"
+                  step={0.5}
+                  disabled={!canEdit}
+                  onChange={(n) => patchBoard({ heightMm: n })}
                 />
-                <span className="font-mono text-[11px]">{layer.label}</span>
-              </label>
-            ))}
-          </div>
-        </div>
+                <BoardField
+                  label="Thickness"
+                  value={doc.board.thicknessMm}
+                  unit="mm"
+                  step={0.1}
+                  disabled={!canEdit}
+                  onChange={(n) => patchBoard({ thicknessMm: n })}
+                />
+                <BoardField
+                  label="Corner R"
+                  value={doc.board.cornerRadiusMm}
+                  unit="mm"
+                  step={0.25}
+                  disabled={!canEdit}
+                  onChange={(n) => patchBoard({ cornerRadiusMm: n })}
+                />
+              </div>
+            </div>
 
-        <div>
-          <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Board</h2>
-          <div className="flex flex-col gap-1.5">
-            <label className="flex items-center gap-2 text-xs">
-              <span className="text-muted-foreground w-16 shrink-0">Name</span>
-              <Input
-                value={doc.name ?? ""}
-                disabled={!canEdit}
-                onChange={(e) => patchBoardMeta({ name: e.target.value })}
-                className="h-7 text-xs"
-                aria-label="Board name"
-              />
-            </label>
-            <label className="flex items-center gap-2 text-xs">
-              <span className="text-muted-foreground w-16 shrink-0">Region</span>
-              <select
-                value={doc.groupId ?? ""}
-                disabled={!canEdit}
-                onChange={(e) => patchBoardMeta({ groupId: e.target.value || undefined })}
-                className="bg-background h-7 flex-1 rounded-md border px-1.5 text-xs"
-                aria-label="Schematic region"
-              >
-                <option value="">whole schematic</option>
-                {fullCircuit.groups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {doc.groupId && !fullCircuit.groups.some((g) => g.id === doc.groupId) ? (
-              <p className="text-[10px] leading-snug text-amber-500">
-                This board points at a schematic region that no longer exists.
-              </p>
-            ) : null}
-            {boardSlice ? (
-              <p className="text-muted-foreground text-[10px] leading-snug">
-                {boardSlice.partIds.length} part
-                {boardSlice.partIds.length === 1 ? "" : "s"} in this region ·{" "}
-                {doc.footprints.filter((f) => f.partId).length} linked here
-              </p>
-            ) : null}
-            {boardSlice && boardSlice.crossingNets.length > 0 ? (
-              <p className="text-[10px] leading-snug text-amber-500">
-                Leaves this board: {boardSlice.crossingNets.join(", ")} — each needs a connector
-                footprint, and is excluded from this board&apos;s ratsnest.
-              </p>
-            ) : null}
-            {boards.length > 1 ? (
-              <Button
-                variant="destructive"
-                size="xs"
-                className="mt-0.5 self-start"
-                disabled={!canEdit}
-                onClick={deleteBoard}
-              >
-                <Trash2 className="size-3" /> Delete board
-              </Button>
-            ) : null}
-          </div>
-        </div>
-
-        <div>
-          <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Design rules</h2>
-          <div className="flex flex-col gap-1.5">
-            <BoardField
-              label="Clearance"
-              value={doc.rules.clearanceMm}
-              unit="mm"
-              step={0.05}
-              disabled={!canEdit}
-              onChange={(n) => patchRules({ clearanceMm: n })}
-            />
-            <BoardField
-              label="Track width"
-              value={doc.rules.trackWidthMm}
-              unit="mm"
-              step={0.05}
-              disabled={!canEdit}
-              onChange={(n) => patchRules({ trackWidthMm: n })}
-            />
-            <BoardField
-              label="Via Ø"
-              value={doc.rules.viaDiameterMm}
-              unit="mm"
-              step={0.05}
-              disabled={!canEdit}
-              onChange={(n) => patchRules({ viaDiameterMm: n })}
-            />
-            <BoardField
-              label="Via drill"
-              value={doc.rules.viaDrillMm}
-              unit="mm"
-              step={0.05}
-              disabled={!canEdit}
-              onChange={(n) => patchRules({ viaDrillMm: n })}
-            />
-          </div>
-        </div>
-
-        <div>
-          <div className="mb-2 flex items-center gap-1.5">
-            {drc.errorCount > 0 ? (
-              <AlertTriangle className="size-3.5 text-red-500" />
-            ) : (
-              <ShieldCheck className="size-3.5 text-emerald-500" />
-            )}
-            <h2 className="text-xs font-semibold tracking-wide uppercase">
-              DRC · {drc.errorCount} error{drc.errorCount === 1 ? "" : "s"}
-            </h2>
-          </div>
-          {drc.violations.length === 0 ? (
-            <p className="text-muted-foreground text-[10px]">
-              No rule violations. Board is routable as drawn.
-            </p>
-          ) : (
-            <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto">
-              {drc.violations.slice(0, 40).map((v, i) => (
-                <li
-                  key={i}
-                  className={cn(
-                    "rounded border-l-2 px-1.5 py-1 text-[10px] leading-snug",
-                    v.severity === "error"
-                      ? "border-l-red-500 bg-red-500/5"
-                      : "border-l-amber-500 bg-amber-500/5",
-                  )}
-                >
-                  <span className="text-muted-foreground font-mono text-[9px]">{v.rule}</span>
-                  <br />
-                  {v.message}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {selectedTrackId
-          ? (() => {
-              const track = doc.tracks.find((t) => t.id === selectedTrackId);
-              const zone = doc.zones.find((z) => z.id === selectedTrackId);
-              return (
-                <div>
-                  <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Copper</h2>
-                  <p className="text-muted-foreground mb-1.5 text-[10px]">
-                    {track
-                      ? `Track on ${track.layer}${track.net ? ` · ${track.net}` : ""}`
-                      : zone
-                        ? `Pour on ${zone.layer} · ${zone.net ?? "no net"}`
-                        : "Via"}
-                  </p>
-                  {track ? (
-                    <BoardField
-                      label="Width"
-                      value={track.widthMm}
-                      unit="mm"
-                      step={0.05}
-                      disabled={!canEdit}
-                      onChange={(n) => {
-                        pushHistory(`track:${track.id}:width`);
-                        setDoc((d) => ({
-                          ...d,
-                          tracks: d.tracks.map((t) =>
-                            t.id === track.id ? { ...t, widthMm: Math.max(0.05, n) } : t,
-                          ),
-                        }));
-                        scheduleSave();
-                      }}
+            <div>
+              <div className="mb-2 flex items-center gap-1.5">
+                <Layers className="text-muted-foreground size-3.5" />
+                <h2 className="text-xs font-semibold tracking-wide uppercase">Layers</h2>
+              </div>
+              <div className="flex flex-col gap-1">
+                {LAYER_META.map((layer) => (
+                  <label key={layer.id} className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={layers[layer.id]}
+                      onChange={(e) => setLayers((l) => ({ ...l, [layer.id]: e.target.checked }))}
+                      className="accent-primary size-3.5"
                     />
-                  ) : null}
+                    <span
+                      className="size-2.5 rounded-none"
+                      style={{ background: layer.color }}
+                      aria-hidden
+                    />
+                    <span className="font-mono text-[11px]">{layer.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Board</h2>
+              <div className="flex flex-col gap-1.5">
+                <label className="flex items-center gap-2 text-xs">
+                  <span className="text-muted-foreground w-16 shrink-0">Name</span>
+                  <Input
+                    value={doc.name ?? ""}
+                    disabled={!canEdit}
+                    onChange={(e) => patchBoardMeta({ name: e.target.value })}
+                    className="h-7 text-xs"
+                    aria-label="Board name"
+                  />
+                </label>
+                <label className="flex items-center gap-2 text-xs">
+                  <span className="text-muted-foreground w-16 shrink-0">Region</span>
+                  <select
+                    value={doc.groupId ?? ""}
+                    disabled={!canEdit}
+                    onChange={(e) => patchBoardMeta({ groupId: e.target.value || undefined })}
+                    className="bg-background h-7 flex-1 rounded-md border px-1.5 text-xs"
+                    aria-label="Schematic region"
+                  >
+                    <option value="">whole schematic</option>
+                    {fullCircuit.groups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {doc.groupId && !fullCircuit.groups.some((g) => g.id === doc.groupId) ? (
+                  <p className="text-[10px] leading-snug text-amber-500">
+                    This board points at a schematic region that no longer exists.
+                  </p>
+                ) : null}
+                {boardSlice ? (
+                  <p className="text-muted-foreground text-[10px] leading-snug">
+                    {boardSlice.partIds.length} part
+                    {boardSlice.partIds.length === 1 ? "" : "s"} in this region ·{" "}
+                    {doc.footprints.filter((f) => f.partId).length} linked here
+                  </p>
+                ) : null}
+                {boardSlice && boardSlice.crossingNets.length > 0 ? (
+                  <p className="text-[10px] leading-snug text-amber-500">
+                    Leaves this board: {boardSlice.crossingNets.join(", ")} — each needs a connector
+                    footprint, and is excluded from this board&apos;s ratsnest.
+                  </p>
+                ) : null}
+                {boards.length > 1 ? (
                   <Button
                     variant="destructive"
                     size="xs"
-                    className="mt-1.5"
+                    className="mt-0.5 self-start"
                     disabled={!canEdit}
-                    onClick={zone ? deleteSelectedZone : deleteSelectedTrack}
+                    onClick={deleteBoard}
                   >
-                    <Trash2 className="size-3" /> Delete
+                    <Trash2 className="size-3" /> Delete board
                   </Button>
-                </div>
-              );
-            })()
-          : null}
-
-        {selected ? (
-          <div>
-            <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Footprint</h2>
-            <div className="flex flex-col gap-1.5">
-              <label className="flex items-center gap-2 text-xs">
-                <span className="text-muted-foreground w-16 shrink-0">Ref</span>
-                <Input
-                  value={selected.refDes}
-                  disabled={!canEdit}
-                  onChange={(e) => patchSelected({ refDes: e.target.value })}
-                  className="h-7 font-mono text-xs"
-                  aria-label="Reference designator"
-                />
-              </label>
-              <label className="flex items-center gap-2 text-xs">
-                <span className="text-muted-foreground w-16 shrink-0">Value</span>
-                <Input
-                  value={selected.value ?? ""}
-                  disabled={!canEdit}
-                  onChange={(e) => patchSelected({ value: e.target.value })}
-                  className="h-7 font-mono text-xs"
-                  aria-label="Footprint value"
-                />
-              </label>
-              <BoardField
-                label="X"
-                value={selected.xMm}
-                unit="mm"
-                step={0.05}
-                disabled={!canEdit}
-                onChange={(n) => patchSelected({ xMm: n })}
-              />
-              <BoardField
-                label="Y"
-                value={selected.yMm}
-                unit="mm"
-                step={0.05}
-                disabled={!canEdit}
-                onChange={(n) => patchSelected({ yMm: n })}
-              />
-              <p className="text-muted-foreground text-[10px]">
-                {selected.libraryId} · {selected.side}
-              </p>
-
-              <div className="mt-1 border-t pt-2">
-                <h3 className="text-muted-foreground mb-1 text-[10px] font-semibold tracking-wide uppercase">
-                  Nets
-                </h3>
-                {selected.partId ? (
-                  <p className="text-muted-foreground mb-1 text-[10px]">
-                    Schematic part{" "}
-                    <span className="text-foreground font-mono">
-                      {selectedPart?.label ?? selectedPart?.id ?? selected.partId}
-                    </span>
-                    {selectedPart ? null : " (missing)"}
-                  </p>
-                ) : (
-                  <p className="text-muted-foreground mb-1 text-[10px]">
-                    Not linked to a schematic part — no nets.
-                  </p>
-                )}
-                <div className="flex flex-col gap-0.5">
-                  {(selectedDef?.pads ?? [])
-                    .filter((pad) => pad.pin)
-                    .map((pad) => {
-                      const net = padNets.get(`${selected.id}:${pad.pin}`);
-                      return (
-                        <div
-                          key={pad.pin}
-                          className="flex items-center justify-between gap-2 font-mono text-[10px]"
-                        >
-                          <span className="text-muted-foreground">{pad.pin}</span>
-                          <span className={net ? "text-foreground" : "text-muted-foreground/60"}>
-                            {net ?? "—"}
-                          </span>
-                        </div>
-                      );
-                    })}
-                </div>
+                ) : null}
               </div>
-              <div className="flex flex-wrap gap-1.5 pt-1">
+            </div>
+          </>
+        ) : null}
+
+        {inspectorTab === "rules" ? (
+          <div>
+            <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Design rules</h2>
+            <div className="mb-3 grid grid-cols-3 gap-1">
+              {[
+                {
+                  label: "Fine",
+                  clearanceMm: 0.15,
+                  trackWidthMm: 0.15,
+                  viaDiameterMm: 0.5,
+                  viaDrillMm: 0.25,
+                },
+                {
+                  label: "Default",
+                  clearanceMm: 0.2,
+                  trackWidthMm: 0.25,
+                  viaDiameterMm: 0.6,
+                  viaDrillMm: 0.3,
+                },
+                {
+                  label: "Power",
+                  clearanceMm: 0.3,
+                  trackWidthMm: 0.6,
+                  viaDiameterMm: 0.9,
+                  viaDrillMm: 0.45,
+                },
+              ].map((preset) => (
                 <Button
-                  variant="outline"
-                  size="xs"
-                  disabled={!canEdit}
-                  onClick={() => patchSelected({ rotationDeg: (selected.rotationDeg + 90) % 360 })}
-                >
-                  <RotateCw className="size-3" /> Rotate
-                </Button>
-                <Button
+                  key={preset.label}
                   variant="outline"
                   size="xs"
                   disabled={!canEdit}
                   onClick={() =>
-                    patchSelected({
-                      side: (selected.side === "front" ? "back" : "front") as PcbSide,
+                    patchRules({
+                      clearanceMm: preset.clearanceMm,
+                      trackWidthMm: preset.trackWidthMm,
+                      viaDiameterMm: preset.viaDiameterMm,
+                      viaDrillMm: preset.viaDrillMm,
                     })
                   }
                 >
-                  <FlipHorizontal2 className="size-3" /> Flip
+                  {preset.label}
                 </Button>
-                <Button
-                  variant="destructive"
-                  size="xs"
-                  disabled={!canEdit}
-                  className="ml-auto"
-                  onClick={deleteSelected}
-                >
-                  <Trash2 className="size-3" />
-                </Button>
-              </div>
+              ))}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <BoardField
+                label="Clearance"
+                value={doc.rules.clearanceMm}
+                unit="mm"
+                step={0.05}
+                disabled={!canEdit}
+                onChange={(n) => patchRules({ clearanceMm: n })}
+              />
+              <BoardField
+                label="Track width"
+                value={doc.rules.trackWidthMm}
+                unit="mm"
+                step={0.05}
+                disabled={!canEdit}
+                onChange={(n) => patchRules({ trackWidthMm: n })}
+              />
+              <BoardField
+                label="Via Ø"
+                value={doc.rules.viaDiameterMm}
+                unit="mm"
+                step={0.05}
+                disabled={!canEdit}
+                onChange={(n) => patchRules({ viaDiameterMm: n })}
+              />
+              <BoardField
+                label="Via drill"
+                value={doc.rules.viaDrillMm}
+                unit="mm"
+                step={0.05}
+                disabled={!canEdit}
+                onChange={(n) => patchRules({ viaDrillMm: n })}
+              />
             </div>
           </div>
-        ) : (
-          <p className="text-muted-foreground text-xs">
-            Select a footprint or place one from the library. Origin is the top-left of Edge.Cuts.
-          </p>
-        )}
+        ) : null}
+
+        {inspectorTab === "drc" ? (
+          <div>
+            <div className="mb-2 flex items-center gap-1.5">
+              {drc.errorCount > 0 ? (
+                <AlertTriangle className="size-3.5 text-red-500" />
+              ) : (
+                <ShieldCheck className="size-3.5 text-emerald-500" />
+              )}
+              <h2 className="text-xs font-semibold tracking-wide uppercase">
+                DRC · {drc.errorCount} error{drc.errorCount === 1 ? "" : "s"}
+              </h2>
+            </div>
+            {drc.violations.length === 0 ? (
+              <p className="text-muted-foreground text-[10px]">
+                No rule violations. Board is routable as drawn.
+              </p>
+            ) : (
+              <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto">
+                {drc.violations.slice(0, 40).map((v, i) => (
+                  <li
+                    key={i}
+                    className={cn(
+                      "rounded border-l-2 px-1.5 py-1 text-[10px] leading-snug",
+                      v.severity === "error"
+                        ? "border-l-red-500 bg-red-500/5"
+                        : "border-l-amber-500 bg-amber-500/5",
+                    )}
+                  >
+                    <span className="text-muted-foreground font-mono text-[9px]">{v.rule}</span>
+                    <br />
+                    {v.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : null}
+
+        {inspectorTab === "inspect" ? (
+          <>
+            <div>
+              <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Net lengths</h2>
+              {netLengths.length === 0 ? (
+                <p className="text-muted-foreground text-[10px]">
+                  Route a net to see its copper length.
+                </p>
+              ) : (
+                <div className="flex max-h-32 flex-col gap-0.5 overflow-y-auto">
+                  {netLengths.map(([name, length]) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setActiveNet(name === "Unassigned" ? null : name)}
+                      className={cn(
+                        "flex items-center justify-between rounded-md px-1.5 py-1 font-mono text-[10px]",
+                        activeNet === name ? "bg-primary/10 text-primary" : "hover:bg-muted/50",
+                      )}
+                    >
+                      <span>{name}</span>
+                      <span>{length.toFixed(2)} mm</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {selectedTrackId
+              ? (() => {
+                  const track = doc.tracks.find((t) => t.id === selectedTrackId);
+                  const zone = doc.zones.find((z) => z.id === selectedTrackId);
+                  return (
+                    <div>
+                      <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Copper</h2>
+                      <p className="text-muted-foreground mb-1.5 text-[10px]">
+                        {track
+                          ? `Track on ${track.layer}${track.net ? ` · ${track.net}` : ""} · ${trackLength(track.points).toFixed(2)} mm`
+                          : zone
+                            ? `Pour on ${zone.layer} · ${zone.net ?? "no net"}`
+                            : "Via"}
+                      </p>
+                      {track ? (
+                        <BoardField
+                          label="Width"
+                          value={track.widthMm}
+                          unit="mm"
+                          step={0.05}
+                          disabled={!canEdit}
+                          onChange={(n) => {
+                            pushHistory(`track:${track.id}:width`);
+                            setDoc((d) => ({
+                              ...d,
+                              tracks: d.tracks.map((t) =>
+                                t.id === track.id ? { ...t, widthMm: Math.max(0.05, n) } : t,
+                              ),
+                            }));
+                            scheduleSave();
+                          }}
+                        />
+                      ) : null}
+                      <Button
+                        variant="destructive"
+                        size="xs"
+                        className="mt-1.5"
+                        disabled={!canEdit}
+                        onClick={zone ? deleteSelectedZone : deleteSelectedTrack}
+                      >
+                        <Trash2 className="size-3" /> Delete
+                      </Button>
+                    </div>
+                  );
+                })()
+              : null}
+
+            {selected ? (
+              <div>
+                <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Footprint</h2>
+                <div className="flex flex-col gap-1.5">
+                  <label className="flex items-center gap-2 text-xs">
+                    <span className="text-muted-foreground w-16 shrink-0">Ref</span>
+                    <Input
+                      value={selected.refDes}
+                      disabled={!canEdit}
+                      onChange={(e) => patchSelected({ refDes: e.target.value })}
+                      className="h-7 font-mono text-xs"
+                      aria-label="Reference designator"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 text-xs">
+                    <span className="text-muted-foreground w-16 shrink-0">Value</span>
+                    <Input
+                      value={selected.value ?? ""}
+                      disabled={!canEdit}
+                      onChange={(e) => patchSelected({ value: e.target.value })}
+                      className="h-7 font-mono text-xs"
+                      aria-label="Footprint value"
+                    />
+                  </label>
+                  <BoardField
+                    label="X"
+                    value={selected.xMm}
+                    unit="mm"
+                    step={0.05}
+                    disabled={!canEdit}
+                    onChange={(n) => patchSelected({ xMm: n })}
+                  />
+                  <BoardField
+                    label="Y"
+                    value={selected.yMm}
+                    unit="mm"
+                    step={0.05}
+                    disabled={!canEdit}
+                    onChange={(n) => patchSelected({ yMm: n })}
+                  />
+                  <p className="text-muted-foreground text-[10px]">
+                    {selected.libraryId} · {selected.side}
+                  </p>
+
+                  <div className="mt-1 border-t pt-2">
+                    <h3 className="text-muted-foreground mb-1 text-[10px] font-semibold tracking-wide uppercase">
+                      Nets
+                    </h3>
+                    {selected.partId ? (
+                      <p className="text-muted-foreground mb-1 text-[10px]">
+                        Schematic part{" "}
+                        <span className="text-foreground font-mono">
+                          {selectedPart?.label ?? selectedPart?.id ?? selected.partId}
+                        </span>
+                        {selectedPart ? null : " (missing)"}
+                      </p>
+                    ) : (
+                      <p className="text-muted-foreground mb-1 text-[10px]">
+                        Not linked to a schematic part — no nets.
+                      </p>
+                    )}
+                    <div className="flex flex-col gap-0.5">
+                      {(selectedDef?.pads ?? [])
+                        .filter((pad) => pad.pin)
+                        .map((pad) => {
+                          const net = padNets.get(`${selected.id}:${pad.pin}`);
+                          return (
+                            <div
+                              key={pad.pin}
+                              className="flex items-center justify-between gap-2 font-mono text-[10px]"
+                            >
+                              <span className="text-muted-foreground">{pad.pin}</span>
+                              <span
+                                className={net ? "text-foreground" : "text-muted-foreground/60"}
+                              >
+                                {net ?? "—"}
+                              </span>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      disabled={!canEdit}
+                      onClick={() =>
+                        patchSelected({ rotationDeg: (selected.rotationDeg + 90) % 360 })
+                      }
+                    >
+                      <RotateCw className="size-3" /> Rotate
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      disabled={!canEdit}
+                      onClick={() =>
+                        patchSelected({
+                          side: (selected.side === "front" ? "back" : "front") as PcbSide,
+                        })
+                      }
+                    >
+                      <FlipHorizontal2 className="size-3" /> Flip
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="xs"
+                      disabled={!canEdit}
+                      className="ml-auto"
+                      onClick={deleteSelected}
+                    >
+                      <Trash2 className="size-3" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-xs">
+                Select a footprint or place one from the library. Origin is the top-left of
+                Edge.Cuts.
+              </p>
+            )}
+          </>
+        ) : null}
 
         <p
           className={cn(
@@ -2032,7 +2373,9 @@ export function PcbCanvas({
           <br />
           {ratsnest.routedCount}/{ratsnest.totalConnections} routed · {ratsnest.airwires.length}{" "}
           airwire
-          {ratsnest.airwires.length === 1 ? "" : "s"} left
+          {ratsnest.airwires.length === 1 ? "" : "s"} left · {routingPercent}% complete
+          <br />
+          {totalTrackLength.toFixed(2)} mm total copper length
           {issueCount > 0 ? (
             <>
               <br />

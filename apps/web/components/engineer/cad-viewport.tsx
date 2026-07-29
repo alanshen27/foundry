@@ -42,6 +42,7 @@ import {
   type NavTool,
   type ViewportInput,
 } from "@/lib/cad/viewport-input";
+import { safeCadError } from "@/lib/cad/safe-error";
 import { cn } from "@/lib/utils";
 
 export type CadView = "orbit" | "iso" | "front" | "top" | "right" | "back" | "left" | "bottom";
@@ -238,7 +239,22 @@ function inputFormatForMesh(asset: CadMeshAsset): zoo.InputFormat3d {
   if (fmt === "obj") return { type: "obj", coords: ZOO_COORDS, units };
   if (fmt === "ply") return { type: "ply", coords: ZOO_COORDS, units };
   if (fmt === "gltf" || fmt === "glb") return { type: "gltf" };
-  if (fmt === "step" || fmt === "stp") return { type: "step", coords: ZOO_COORDS };
+  if (fmt === "step" || fmt === "stp" || fmt === "ste") {
+    return { type: "step", coords: ZOO_COORDS };
+  }
+  if (fmt === "fbx") return { type: "fbx" };
+  if (fmt === "sat" || fmt === "sab" || fmt === "smb" || fmt === "smt") {
+    return { type: "acis", coords: ZOO_COORDS };
+  }
+  if (fmt === "catpart" || fmt === "catproduct") {
+    return { type: "catia", coords: ZOO_COORDS };
+  }
+  if (fmt === "prt" || fmt === "asm" || fmt === "g" || fmt === "neu") {
+    return { type: "creo" };
+  }
+  if (fmt === "ipt" || fmt === "iam") return { type: "inventor", coords: ZOO_COORDS };
+  if (fmt === "x_t" || fmt === "x_b") return { type: "parasolid", coords: ZOO_COORDS };
+  if (fmt === "sldprt") return { type: "sldprt" };
   return { type: "stl", coords: ZOO_COORDS, units };
 }
 
@@ -260,8 +276,7 @@ async function importMeshes(rtc: zoo.WebRTC, assets: CadMeshAsset[]): Promise<vo
   }
 }
 
-const AUTH_TOKEN_INVALID_MSG =
-  "Zoo rejected the API token (auth_token_invalid). Regenerate ZOO_API_TOKEN at https://zoo.dev/account and restart the dev server.";
+const AUTH_TOKEN_INVALID_MSG = "The CAD service rejected its authentication token.";
 
 /**
  * Token-only Clients leave `oauth2` undefined. @kittycad/lib WebRTC still calls
@@ -306,6 +321,7 @@ function ToolbarBtn({
       aria-label={title}
       aria-pressed={active}
       disabled={disabled}
+      onPointerDown={(event) => event.stopPropagation()}
       onClick={onClick}
       className={cn(active && "bg-primary/15 text-primary", "text-primary", className)}
     >
@@ -333,9 +349,14 @@ function ViewCube({
       type="button"
       disabled={disabled}
       title={label}
-      onClick={() => onSelect(id)}
+      aria-label={`${label} view`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect(id);
+      }}
       className={cn(
-        "flex items-center justify-center rounded-none border text-[10px] font-semibold transition-colors",
+        "flex items-center justify-center rounded-md border text-[10px] font-semibold transition-colors",
         "border-border/80 bg-background/90 hover:bg-primary/15 hover:text-primary disabled:opacity-40",
         active === id && "border-primary bg-primary/20 text-primary",
         extra,
@@ -346,7 +367,10 @@ function ViewCube({
   );
 
   return (
-    <div className="bg-card/95 pointer-events-auto absolute right-3 bottom-12 z-20 w-[132px] rounded-none border p-2.5 shadow-lg backdrop-blur-md">
+    <div
+      className="bg-card/95 pointer-events-auto absolute right-3 bottom-16 z-20 w-[132px] rounded-xl border p-2.5 shadow-lg backdrop-blur-md"
+      onPointerDown={(event) => event.stopPropagation()}
+    >
       <div className="text-muted-foreground mb-1.5 text-center text-[10px] font-medium tracking-wider uppercase">
         View cube
       </div>
@@ -370,6 +394,33 @@ function ViewCube({
         <span className="text-emerald-500">Y</span>
         <span className="text-sky-500">Z</span>
       </div>
+    </div>
+  );
+}
+
+function CoordinatePlaneOverlay({ view }: { view: StandardView | null }) {
+  const transform =
+    view === "top" || view === "bottom"
+      ? "perspective(900px) rotateX(0deg)"
+      : view === "front" || view === "back"
+        ? "perspective(900px) rotateX(68deg)"
+        : view === "left" || view === "right"
+          ? "perspective(900px) rotateX(68deg) rotateZ(90deg)"
+          : "perspective(900px) rotateX(66deg) rotateZ(-35deg)";
+  return (
+    <div className="pointer-events-none absolute inset-0 z-[1] overflow-hidden" aria-hidden="true">
+      <div
+        className="absolute top-[18%] left-[-25%] h-[110%] w-[150%] origin-center opacity-25"
+        style={{
+          transform,
+          backgroundImage:
+            "linear-gradient(rgba(82,168,255,.22) 1px, transparent 1px), linear-gradient(90deg, rgba(82,168,255,.22) 1px, transparent 1px), linear-gradient(rgba(82,168,255,.09) 1px, transparent 1px), linear-gradient(90deg, rgba(82,168,255,.09) 1px, transparent 1px)",
+          backgroundSize: "80px 80px, 80px 80px, 16px 16px, 16px 16px",
+          maskImage: "radial-gradient(ellipse at center, black 5%, transparent 72%)",
+        }}
+      />
+      <div className="absolute top-1/2 left-[12%] h-px w-[76%] bg-red-500/35" />
+      <div className="absolute top-[12%] left-1/2 h-[76%] w-px bg-emerald-500/35" />
     </div>
   );
 }
@@ -461,8 +512,8 @@ export function CadViewport({
     if (!rtc) return;
     try {
       await sendCmd(rtc, cmd);
-    } catch (err) {
-      console.warn("viewport command failed", err);
+    } catch {
+      console.warn("A CAD viewport command could not be completed.");
     }
   }, []);
 
@@ -470,7 +521,7 @@ export function CadViewport({
     async (next: CadView) => {
       if (next !== "orbit") setActiveView(next);
       await runCmd(cameraCmd(next, fitPadding));
-      await runCmd({ type: "zoom_to_fit", padding: fitPadding });
+      await runCmd({ type: "zoom_to_fit", padding: fitPadding, animated: false });
     },
     [runCmd, fitPadding],
   );
@@ -482,7 +533,7 @@ export function CadViewport({
   const home = useCallback(async () => {
     setActiveView("iso");
     await runCmd({ type: "view_isometric", padding: fitPadding });
-    await runCmd({ type: "zoom_to_fit", padding: fitPadding });
+    await runCmd({ type: "zoom_to_fit", padding: fitPadding, animated: false });
   }, [runCmd, fitPadding]);
 
   const setNav = useCallback(
@@ -565,7 +616,7 @@ export function CadViewport({
     const token = engine.token?.trim();
     if (!token) {
       setStatus("error");
-      const message = "Zoo engine token is empty — set ZOO_API_TOKEN in .env";
+      const message = safeCadError(new Error("CAD service token is empty"), "session");
       setError(message);
       onErrorRef.current?.(message);
       onReadyRef.current?.();
@@ -618,11 +669,7 @@ export function CadViewport({
         const t = setTimeout(() => {
           if (authPoll) clearInterval(authPoll);
           reject(
-            new Error(
-              authFailed
-                ? AUTH_TOKEN_INVALID_MSG
-                : "Zoo engine connection timed out. If the console shows a WebAssembly magic-word error, the KCL WASM file is missing — run `pnpm --filter @foundry/web copy:kcl-wasm` and reload.",
-            ),
+            new Error(authFailed ? AUTH_TOKEN_INVALID_MSG : "CAD engine connection timed out"),
           );
         }, 45_000);
         const finish = (fn: () => void) => {
@@ -690,7 +737,7 @@ export function CadViewport({
 
     void connect().catch((err) => {
       if (cancelled) return;
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeCadError(err, "connection");
       setStatus("error");
       setError(message);
       onErrorRef.current?.(message);
@@ -741,7 +788,7 @@ export function CadViewport({
           await importMeshes(rtc, meshes);
         } catch (err) {
           if (cancelled || gen !== execGenRef.current) return;
-          const message = err instanceof Error ? err.message : String(err);
+          const message = safeCadError(err, "import");
           setStatus("error");
           setError(message);
           onErrorRef.current?.(message);
@@ -754,15 +801,6 @@ export function CadViewport({
         const useProject = Boolean(files && entry && Object.keys(files).length > 0);
         let submitResult: unknown;
         if (useProject) {
-          const entrySrc = files![entry!] ?? "";
-          console.groupCollapsed(`[CadViewport] submit project · main=${entry}`);
-          console.log(entrySrc);
-          console.log(
-            "files",
-            Object.keys(files!).sort(),
-            Object.fromEntries(Object.entries(files!).map(([p, s]) => [p, `${s.length} chars`])),
-          );
-          console.groupEnd();
           const project = new Map(Object.entries(files!));
           // Runtime accepts Map<path, source>; typings only list string.
           submitResult = await (
@@ -772,21 +810,16 @@ export function CadViewport({
             ) => Promise<unknown>
           )(project, { mainKclPathName: entry! });
         } else {
-          console.groupCollapsed("[CadViewport] submit single script");
-          console.log(kcl);
-          console.groupEnd();
           submitResult = await rtc.executor().submit(kcl);
         }
         if (cancelled || gen !== execGenRef.current) return;
 
-        console.log("[CadViewport] submit result", submitResult);
-
         const failMessage = kclSubmitErrorMessage(submitResult);
         if (failMessage) {
-          console.error("[CadViewport] KCL failed:", failMessage, submitResult);
+          const message = safeCadError(failMessage, "execution");
           setStatus("error");
-          setError(failMessage);
-          onErrorRef.current?.(failMessage);
+          setError(message);
+          onErrorRef.current?.(message);
           onReadyRef.current?.();
           return;
         }
@@ -844,7 +877,7 @@ export function CadViewport({
 
     void run().catch((err) => {
       if (cancelled || gen !== execGenRef.current) return;
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeCadError(err, "execution");
       setStatus("error");
       setError(message);
       onErrorRef.current?.(message);
@@ -990,6 +1023,7 @@ export function CadViewport({
         ref={hostRef}
         className="absolute inset-0 [&_video]:h-full [&_video]:w-full [&_video]:object-contain"
       />
+      {chrome && scenery ? <CoordinatePlaneOverlay view={activeView} /> : null}
       {hoverLabel && !headless ? (
         <div
           className="pointer-events-none absolute z-40 -translate-x-1/2 -translate-y-[calc(100%+10px)] rounded-none border bg-card/95 px-2 py-1 font-mono text-[11px] font-medium shadow-lg backdrop-blur-md"
@@ -1001,8 +1035,8 @@ export function CadViewport({
 
       {chrome && status !== "error" ? (
         <>
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center px-3 pt-3">
-            <div className="bg-card/95 pointer-events-auto flex max-w-[min(100%,920px)] items-center gap-0.5 overflow-x-auto rounded-none border px-1.5 py-1 shadow-lg backdrop-blur-md">
+          <div className="pointer-events-none absolute inset-x-0 bottom-14 z-20 flex justify-center px-3 pb-3">
+            <div className="bg-card/95 pointer-events-auto flex max-w-[min(100%,920px)] items-center gap-0.5 overflow-x-auto rounded-xl border px-1.5 py-1 shadow-lg backdrop-blur-md">
               <ToolbarBtn
                 title="Orbit"
                 active={navTool === "orbit"}
@@ -1113,7 +1147,7 @@ export function CadViewport({
 
           <ViewCube active={activeView} disabled={!ready} onSelect={(v) => void applyView(v)} />
 
-          <div className="bg-card/90 text-muted-foreground pointer-events-none absolute bottom-3 left-3 z-20 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-none border px-2.5 py-1.5 text-[11px] shadow backdrop-blur-md">
+          <div className="bg-card/90 text-muted-foreground pointer-events-none absolute top-3 left-40 z-20 hidden flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-2.5 py-1.5 text-[11px] shadow backdrop-blur-md lg:flex">
             <span className="text-foreground/85 font-medium">Zoo · mm · Z-up</span>
             <span className="bg-border hidden h-3 w-px sm:block" />
             <span className="hidden sm:inline">Orbit: drag</span>

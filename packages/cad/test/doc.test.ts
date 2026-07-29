@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { isPlausibleZooOpId } from "../src/zoo";
 import {
+  DEFAULT_ASSEMBLY_KCL,
   DEFAULT_KCL,
   addCadComponent,
   addCadComponents,
   buildKclProject,
+  cadAssetFormatFromName,
   cadDoc,
   displayNameFromCadPath,
   importMeshAsPart,
@@ -75,6 +77,25 @@ describe("normalizeCadDoc", () => {
     const again = normalizeCadDoc(created);
     expect(again.components).toHaveLength(created.components.length);
     expect(again.script).toContain("height = 9");
+  });
+
+  it("repairs blank KCL components in persisted v5 docs", () => {
+    const created = cadDoc(DEFAULT_KCL);
+    const raw = {
+      ...created,
+      components: created.components.map((component) =>
+        component.kind === "instructions" ? component : { ...component, content: "   " },
+      ),
+    };
+
+    const repaired = normalizeCadDoc(raw);
+
+    expect(repaired.components.find((component) => component.kind === "part")?.content).toBe(
+      DEFAULT_KCL,
+    );
+    expect(repaired.components.find((component) => component.kind === "assembly")?.content).toBe(
+      DEFAULT_ASSEMBLY_KCL,
+    );
   });
 });
 
@@ -224,6 +245,24 @@ describe("foreign mesh import", () => {
 
   it("detects non-import scripts", () => {
     expect(isForeignImportOnlyScript(DEFAULT_KCL)).toBe(false);
+  });
+
+  it("accepts common native CAD and electronics extensions as preserved resources", () => {
+    expect(cadAssetFormatFromName("assembly.F3D")).toBe("f3d");
+    expect(cadAssetFormatFromName("controller.kicad_pcb")).toBe("kicad_pcb");
+    expect(cadAssetFormatFromName("housing.SLDASM")).toBe("sldasm");
+  });
+
+  it("creates a clearly labeled movable proxy for source-only formats", () => {
+    const kcl = kclForForeignImport({
+      path: "imports/controller.kicad_pcb",
+      name: "controller",
+      format: "kicad_pcb",
+    });
+    expect(kcl).toContain("UNVERIFIED");
+    expect(kcl).toContain("electronics reference");
+    expect(kcl).toContain("sourceProxy = extrude");
+    expect(parseForeignImports(kcl)).toEqual([]);
   });
 });
 

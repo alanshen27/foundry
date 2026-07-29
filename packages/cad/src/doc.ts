@@ -150,7 +150,104 @@ function withMirror(doc: Omit<CadDoc, "script">): CadDoc {
   return next;
 }
 
-const ASSET_FORMATS = new Set<CadAssetFormat>(["stl", "step", "stp", "obj", "gltf", "glb", "ply"]);
+const ASSET_FORMATS = new Set<CadAssetFormat>([
+  "kcl",
+  "stl",
+  "step",
+  "stp",
+  "ste",
+  "obj",
+  "gltf",
+  "glb",
+  "ply",
+  "fbx",
+  "sat",
+  "sab",
+  "smb",
+  "smt",
+  "catpart",
+  "catproduct",
+  "prt",
+  "asm",
+  "g",
+  "neu",
+  "ipt",
+  "iam",
+  "x_t",
+  "x_b",
+  "sldprt",
+  "sldasm",
+  "f3d",
+  "cam360",
+  "ige",
+  "iges",
+  "igs",
+  "3mf",
+  "3dm",
+  "skp",
+  "dwg",
+  "dxf",
+  "svg",
+  "jt",
+  "tsm",
+  "wire",
+  "123dx",
+  "sch",
+  "brd",
+  "kicad_sch",
+  "kicad_pcb",
+  "kicad_pro",
+  "kicad_prl",
+]);
+
+const ENGINE_IMPORT_FORMATS = new Set<CadAssetFormat>([
+  "stl",
+  "step",
+  "stp",
+  "ste",
+  "obj",
+  "gltf",
+  "glb",
+  "ply",
+  "fbx",
+  "sat",
+  "sab",
+  "smb",
+  "smt",
+  "catpart",
+  "catproduct",
+  "prt",
+  "asm",
+  "g",
+  "neu",
+  "ipt",
+  "iam",
+  "x_t",
+  "x_b",
+  "sldprt",
+]);
+
+const ELECTRONICS_FORMATS = new Set<CadAssetFormat>([
+  "sch",
+  "brd",
+  "kicad_sch",
+  "kicad_pcb",
+  "kicad_pro",
+  "kicad_prl",
+]);
+
+export type CadAssetImportMode = "native-kcl" | "engine" | "reference" | "electronics";
+
+export function cadAssetImportMode(format: CadAssetFormat): CadAssetImportMode {
+  if (format === "kcl") return "native-kcl";
+  if (ENGINE_IMPORT_FORMATS.has(format)) return "engine";
+  if (ELECTRONICS_FORMATS.has(format)) return "electronics";
+  return "reference";
+}
+
+export function isEngineCadAssetFormat(format: CadAssetFormat): boolean {
+  return ENGINE_IMPORT_FORMATS.has(format);
+}
 
 export function cadAssetFormatFromName(filename: string): CadAssetFormat | null {
   const ext = filename.trim().toLowerCase().split(".").pop();
@@ -162,7 +259,7 @@ export function cadAssetFormatFromName(filename: string): CadAssetFormat | null 
 export function importAssetPath(filename: string, format: CadAssetFormat): string {
   const base = filename.replace(/\.[^.]+$/, "");
   const slug = slugifyCadName(base || "import");
-  const ext = format === "stp" ? "step" : format;
+  const ext = format === "stp" || format === "ste" ? "step" : format;
   return `imports/${slug}.${ext}`;
 }
 
@@ -176,6 +273,30 @@ export function kclForForeignImport(
   const file = asset.path.split("/").pop() ?? asset.path;
   const alias =
     slugifyCadName(asset.name || file.replace(/\.[^.]+$/, "")).replace(/-/g, "_") || "mesh";
+  const mode = cadAssetImportMode(asset.format);
+  if (mode !== "engine") {
+    const title =
+      mode === "electronics"
+        ? `${asset.format.toUpperCase()} electronics reference`
+        : `${asset.format.toUpperCase()} source reference`;
+    const color = mode === "electronics" ? "#23b26d" : "#718096";
+    return `// UNVERIFIED — ${title} preserved at "${asset.path}".
+// The original file stays downloadable. This movable proxy intentionally does
+// not claim to decode proprietary feature history or electronics topology.
+sourceWidth = 40
+sourceDepth = 28
+sourceHeight = 8
+sourceSketch = startSketchOn(XY)
+sourceProfile = startProfile(sourceSketch, at = [-sourceWidth / 2, -sourceDepth / 2])
+  |> line(end = [sourceWidth, 0])
+  |> line(end = [0, sourceDepth])
+  |> line(end = [-sourceWidth, 0])
+  |> line(endAbsolute = [profileStartX(%), profileStartY(%)])
+  |> close()
+sourceProxy = extrude(sourceProfile, length = sourceHeight)
+  |> appearance(color = "${color}", metalness = 10, roughness = 65)
+`;
+  }
   const needsUnit = asset.format === "stl" || asset.format === "obj" || asset.format === "ply";
   const unit = asset.lengthUnit ?? "mm";
   const attr = needsUnit ? `@(lengthUnit = ${unit})\n` : "";
@@ -190,7 +311,7 @@ ${alias}
 export function parseForeignImports(kcl: string): { path: string; alias: string }[] {
   const out: { path: string; alias: string }[] = [];
   const re =
-    /^\s*import\s+["']([^"']+\.(?:stl|step|stp|obj|gltf|glb|ply))["']\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/gim;
+    /^\s*import\s+["']([^"']+\.(?:stl|step|stp|ste|obj|gltf|glb|ply|fbx|sat|sab|smb|smt|catpart|catproduct|prt|asm|g|neu|ipt|iam|x_t|x_b|sldprt))["']\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/gim;
   let m: RegExpExecArray | null;
   while ((m = re.exec(kcl)) !== null) {
     out.push({ path: m[1]!, alias: m[2]! });
@@ -729,7 +850,15 @@ function normalizeComponent(raw: unknown): CadComponent | null {
   // Only parts need the …/main.kcl layout. Assemblies stay at assembly/*.kcl
   // (MCP copies the entry to root main.kcl for execute).
   const path = kind === "part" ? toZooKclPath(c.path) : c.path;
-  const content = kind === "instructions" ? c.content : rewriteKclModuleImportPaths(c.content);
+  const rewritten = kind === "instructions" ? c.content : rewriteKclModuleImportPaths(c.content);
+  // Older or interrupted saves can leave a structurally valid v5 component
+  // with blank KCL. Never hand an empty program to the Zoo executor.
+  const content =
+    kind === "part" && !rewritten.trim()
+      ? DEFAULT_KCL
+      : kind === "assembly" && !rewritten.trim()
+        ? DEFAULT_ASSEMBLY_KCL
+        : rewritten;
   const name =
     kind === "part" && path !== c.path && c.name === "main" ? displayNameFromCadPath(path) : c.name;
   return {

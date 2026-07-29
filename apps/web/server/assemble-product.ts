@@ -99,7 +99,7 @@ export async function assembleProductWithZooMcp(params: {
     signal: params.signal,
   });
   if (!iterated.ok) {
-    throw new Error(`Zoo Zookeeper assembly preview failed: ${iterated.error}`);
+    throw new Error("CAD assembly generation failed.");
   }
 
   const assemblyOut =
@@ -120,13 +120,14 @@ export async function assembleProductWithZooMcp(params: {
   );
 
   if (!executed.ok) {
-    warnings.push(`Zoo MCP execute_kcl: ${executed.error}`);
+    const message = "CAD assembly validation failed.";
+    warnings.push(message);
     return {
       doc,
       assemblyPath: params.assembly.path,
       placed: usable.map((p) => ({ path: p.path })),
       zooOpId: iterated.data.id,
-      executeMessage: executed.error,
+      executeMessage: message,
       warnings,
     };
   }

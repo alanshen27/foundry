@@ -23,6 +23,8 @@ export type CircuitWire = {
   id: string;
   from: { part: string; pin: string };
   to: { part: string; pin: string };
+  /** Optional human-readable net name, shared transitively across the wire graph. */
+  label?: string;
 };
 
 /**
@@ -458,7 +460,25 @@ export function normalizeCircuitDoc(raw: unknown): CircuitDoc {
     return {
       version: 2,
       parts: (doc.parts as CircuitPart[]).filter((p) => p && p.id && p.type),
-      wires: Array.isArray(doc.wires) ? (doc.wires as CircuitWire[]) : [],
+      wires: Array.isArray(doc.wires)
+        ? (doc.wires as CircuitWire[])
+            .filter(
+              (wire) =>
+                wire &&
+                typeof wire.id === "string" &&
+                typeof wire.from?.part === "string" &&
+                typeof wire.from?.pin === "string" &&
+                typeof wire.to?.part === "string" &&
+                typeof wire.to?.pin === "string",
+            )
+            .map((wire) => ({
+              ...wire,
+              label:
+                typeof wire.label === "string" && wire.label.trim()
+                  ? wire.label.trim().slice(0, 80)
+                  : undefined,
+            }))
+        : [],
       groups: normalizeGroups(doc.groups),
       sketchFileId:
         typeof doc.sketchFileId === "string" && doc.sketchFileId

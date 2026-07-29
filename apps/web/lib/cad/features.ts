@@ -55,6 +55,13 @@ const OPERATION_LABELS: Array<{
     isSolid: true,
   },
   {
+    pattern: /\bclone\s*\(/,
+    operation: "clone",
+    label: "Duplicate",
+    kind: "transform",
+    isSolid: true,
+  },
+  {
     pattern: /\btranslate\s*\(/,
     operation: "translate",
     label: "Move",
@@ -97,6 +104,13 @@ const OPERATION_LABELS: Array<{
     isSolid: true,
   },
   {
+    pattern: /\bappearance\s*\(/,
+    operation: "appearance",
+    label: "Appearance",
+    kind: "modify",
+    isSolid: true,
+  },
+  {
     pattern: /\bsubtract\s*\(/,
     operation: "subtract",
     label: "Subtract",
@@ -121,6 +135,20 @@ const OPERATION_LABELS: Array<{
     pattern: /\bextrude\s*\(/,
     operation: "extrude",
     label: "Extrude",
+    kind: "solid",
+    isSolid: true,
+  },
+  {
+    pattern: /\bsweep\s*\(/,
+    operation: "sweep",
+    label: "Sweep",
+    kind: "solid",
+    isSolid: true,
+  },
+  {
+    pattern: /\bloft\s*\(/,
+    operation: "loft",
+    label: "Loft",
     kind: "solid",
     isSolid: true,
   },
@@ -157,7 +185,7 @@ const OPERATION_LABELS: Array<{
 const TOP_LEVEL_ASSIGNMENT = /^([A-Za-z_]\w*)\s*=\s*(.*)$/;
 const LITERAL_ASSIGNMENT = /^(-?\d+(?:\.\d+)?|true|false|"(?:[^"\\]|\\.)*")\s*(?:\/\/.*)?$/;
 const IMPORT_ASSIGNMENT =
-  /^\s*import\s+["']([^"']+\.(?:stl|step|stp|obj|gltf|glb|ply))["']\s+as\s+([A-Za-z_]\w*)\s*$/i;
+  /^\s*import\s+["']([^"']+\.(?:stl|step|stp|ste|obj|gltf|glb|ply|fbx|sat|sab|smb|smt|catpart|catproduct|prt|asm|g|neu|ipt|iam|x_t|x_b|sldprt))["']\s+as\s+([A-Za-z_]\w*)\s*$/i;
 
 function describeFeature(source: string) {
   for (const candidate of OPERATION_LABELS) {

@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { CircuitDoc } from "@/lib/circuit/catalog";
 import { normalizePcbDoc, type PcbDoc } from "@/lib/pcb/doc";
 import { buildRatsnest } from "@/lib/pcb/netlist";
-import { buildCopperGraph, padAt, trackAt, viaAt } from "@/lib/pcb/routing";
+import {
+  buildCopperGraph,
+  padAt,
+  route45Points,
+  trackAt,
+  trackLength,
+  viaAt,
+} from "@/lib/pcb/routing";
 import { boardPads, pointPadDistance, segmentSegmentDistance } from "@/lib/pcb/geometry";
 
 function circuit(partial: Partial<CircuitDoc> = {}): CircuitDoc {
@@ -66,6 +73,32 @@ const JOINING_TRACK = {
     { xMm: 19.25, yMm: 10 },
   ],
 };
+
+describe("guided routing geometry", () => {
+  it("creates a horizontal plus 45-degree candidate", () => {
+    expect(route45Points({ xMm: 0, yMm: 0 }, { xMm: 10, yMm: 4 })).toEqual([
+      { xMm: 0, yMm: 0 },
+      { xMm: 6, yMm: 0 },
+      { xMm: 10, yMm: 4 },
+    ]);
+  });
+
+  it("keeps direct horizontal, vertical, and diagonal routes direct", () => {
+    expect(route45Points({ xMm: 1, yMm: 2 }, { xMm: 8, yMm: 2 })).toHaveLength(2);
+    expect(route45Points({ xMm: 1, yMm: 2 }, { xMm: 1, yMm: 9 })).toHaveLength(2);
+    expect(route45Points({ xMm: 1, yMm: 2 }, { xMm: 6, yMm: 7 })).toHaveLength(2);
+  });
+
+  it("measures every segment in a track", () => {
+    expect(
+      trackLength([
+        { xMm: 0, yMm: 0 },
+        { xMm: 3, yMm: 4 },
+        { xMm: 6, yMm: 8 },
+      ]),
+    ).toBe(10);
+  });
+});
 
 describe("normalizePcbDoc — copper", () => {
   it("defaults tracks, vias and rules on a legacy document", () => {

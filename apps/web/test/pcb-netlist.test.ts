@@ -37,6 +37,12 @@ function board(footprints: PcbDoc["footprints"]): PcbDoc {
 }
 
 describe("buildNets", () => {
+  it("uses a schematic net label instead of a generated name", () => {
+    const named = dividerCircuit();
+    named.wires[0]!.label = "SENSE";
+    expect(buildNets(named)[0]?.name).toBe("SENSE");
+  });
+
   it("finds one net per wired pin pair", () => {
     const nets = buildNets(dividerCircuit());
     expect(nets).toHaveLength(3);

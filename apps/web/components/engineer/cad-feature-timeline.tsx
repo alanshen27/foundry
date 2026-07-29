@@ -38,7 +38,7 @@ export function CadFeatureTimeline({
 
   return (
     <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex justify-center">
-      <div className="bg-card/95 pointer-events-auto flex max-w-full items-center overflow-hidden rounded-none border shadow-lg backdrop-blur-md">
+      <div className="bg-card/95 pointer-events-auto flex max-w-full items-center overflow-hidden rounded-xl border shadow-lg backdrop-blur-md">
         <button
           type="button"
           title="Clear feature selection"
@@ -65,7 +65,7 @@ export function CadFeatureTimeline({
                 title={`${feature.label}\nLines ${feature.lineStart}–${feature.lineEnd}`}
                 onClick={() => onSelect(selected ? null : feature)}
                 className={cn(
-                  "group flex h-8 min-w-8 shrink-0 items-center gap-1.5 rounded-none border px-2 text-[10px] transition-colors",
+                  "group flex h-8 min-w-8 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[10px] transition-colors",
                   selected
                     ? "border-primary/50 bg-primary/15 text-primary"
                     : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",

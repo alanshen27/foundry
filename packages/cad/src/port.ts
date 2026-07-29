@@ -6,8 +6,55 @@
 /** Part / assembly KCL, or markdown assembly instructions. */
 export type CadComponentKind = "part" | "assembly" | "instructions";
 
-/** Mesh / B-Rep files referenced by KCL foreign `import` statements. */
-export type CadAssetFormat = "stl" | "step" | "stp" | "obj" | "gltf" | "glb" | "ply";
+/** Native, neutral, mesh, drawing, and electronics project resources. */
+export type CadAssetFormat =
+  | "kcl"
+  | "stl"
+  | "step"
+  | "stp"
+  | "ste"
+  | "obj"
+  | "gltf"
+  | "glb"
+  | "ply"
+  | "fbx"
+  | "sat"
+  | "sab"
+  | "smb"
+  | "smt"
+  | "catpart"
+  | "catproduct"
+  | "prt"
+  | "asm"
+  | "g"
+  | "neu"
+  | "ipt"
+  | "iam"
+  | "x_t"
+  | "x_b"
+  | "sldprt"
+  | "sldasm"
+  | "f3d"
+  | "cam360"
+  | "ige"
+  | "iges"
+  | "igs"
+  | "3mf"
+  | "3dm"
+  | "skp"
+  | "dwg"
+  | "dxf"
+  | "svg"
+  | "jt"
+  | "tsm"
+  | "wire"
+  | "123dx"
+  | "sch"
+  | "brd"
+  | "kicad_sch"
+  | "kicad_pcb"
+  | "kicad_pro"
+  | "kicad_prl";
 
 export type CadAsset = {
   id: string;
@@ -41,7 +88,7 @@ export type CadDoc = {
   engine: "zoo";
   activeId: string;
   components: CadComponent[];
-  /** Foreign mesh/B-Rep files for KCL `import "…"`. */
+  /** Imported resources. Engine-readable geometry may be referenced by KCL. */
   assets?: CadAsset[];
   /** Executable KCL for the active part/assembly (compat mirror). */
   script: string;
