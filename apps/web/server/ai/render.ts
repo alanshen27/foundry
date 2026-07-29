@@ -24,6 +24,25 @@ const HIDE_DEV_OVERLAY_CSS = `
   html, body { overflow: hidden !important; }
 `;
 
+/**
+ * playwright-core deliberately ships no browser binaries, so a missing Chromium
+ * is a deploy problem, not a bug in the caller. Say that plainly — the raw
+ * Playwright error tells the copilot to run `pnpm exec playwright install`,
+ * which is useless advice inside a running dyno.
+ */
+function describeLaunchFailure(err: unknown): Error {
+  const message = err instanceof Error ? err.message : String(err);
+  if (!/Executable doesn't exist/i.test(message)) {
+    return err instanceof Error ? err : new Error(message);
+  }
+  return new Error(
+    "Chromium is not installed in this deployment. The build must run " +
+      "`playwright install --only-shell chromium` with PLAYWRIGHT_BROWSERS_PATH pointing " +
+      "somewhere under /opt/render/project — see render.yaml. Original error: " +
+      message,
+  );
+}
+
 async function getBrowser(): Promise<Browser> {
   browserPromise ??= chromium
     .launch({
@@ -36,12 +55,22 @@ async function getBrowser(): Promise<Browser> {
         "--single-process",
       ],
     })
-    .then((browser) => {
-      browser.on("disconnected", () => {
+    .then(
+      (browser) => {
+        browser.on("disconnected", () => {
+          browserPromise = null;
+        });
+        return browser;
+      },
+      (err: unknown) => {
+        // Belt-and-braces: withBrowserPage's closeBrowser() already clears the
+        // slot once the job settles. `disconnected` never fires for a browser
+        // that failed to start, so clear it here too and keep getBrowser()
+        // retryable on its own terms.
         browserPromise = null;
-      });
-      return browser;
-    });
+        throw describeLaunchFailure(err);
+      },
+    );
   return browserPromise;
 }
 

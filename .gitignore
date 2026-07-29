@@ -17,6 +17,8 @@ coverage/
 # test artifacts
 playwright-report/
 test-results/
+# Chromium download target when PLAYWRIGHT_BROWSERS_PATH is repo-relative (Render)
+.playwright/
 
 # local adapters
 .local-storage/
