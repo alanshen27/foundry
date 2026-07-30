@@ -1,11 +1,18 @@
 export type CadErrorContext = "connection" | "execution" | "import" | "session";
 
 function rawMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-    return typeof message === "string" ? message : "";
+  try {
+    if (error instanceof Error) {
+      return typeof error.message === "string" ? error.message : "";
+    }
+    if (typeof error === "string") return error;
+    if (error && typeof error === "object" && "message" in error) {
+      const message = (error as { message?: unknown }).message;
+      return typeof message === "string" ? message : "";
+    }
+  } catch {
+    // Proxies and custom `message` getters can throw. Error presentation must
+    // remain safe even when the original failure object is hostile.
   }
   return "";
 }

@@ -27,4 +27,17 @@ describe("safeCadError", () => {
       "This file could not be imported. Check that it is a supported design file and is not damaged.",
     );
   });
+
+  it("does not let a hostile message getter break error handling", () => {
+    const hostile = Object.defineProperty({}, "message", {
+      get() {
+        throw new Error("secret from getter");
+      },
+    });
+
+    expect(() => safeCadError(hostile, "connection")).not.toThrow();
+    expect(safeCadError(hostile, "connection")).toBe(
+      "The CAD workspace could not start. Try again or contact a workspace administrator.",
+    );
+  });
 });
