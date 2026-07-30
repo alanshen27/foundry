@@ -98,13 +98,19 @@ function ParamsPanel({
   onSetInline: (field: CadFeatureField, value: number) => void;
   onMeasure: () => void;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
+
+  useEffect(() => {
+    if (feature) setCollapsed(false);
+  }, [feature?.id]);
 
   return (
     <div className="bg-card/90 absolute top-32 right-3 z-30 w-64 rounded-lg border shadow-lg backdrop-blur-md">
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+        aria-controls="cad-inspector-content"
         className="flex w-full items-center gap-2 px-3 py-2"
       >
         <SlidersHorizontal className="text-primary size-3.5" />
@@ -115,7 +121,7 @@ function ParamsPanel({
         {collapsed ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
       </button>
       {!collapsed ? (
-        <div className="max-h-[62vh] overflow-y-auto border-t">
+        <div id="cad-inspector-content" className="max-h-[62vh] overflow-y-auto border-t">
           {feature ? (
             <div className="border-b px-3 py-2.5">
               <p className="truncate text-xs font-medium" title={feature.label}>

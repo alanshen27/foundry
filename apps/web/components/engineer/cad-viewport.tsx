@@ -15,12 +15,9 @@ import {
   Axis3d,
   BoxSelect,
   Camera,
-  Crosshair,
   Focus,
-  Home,
   Maximize2,
   Move,
-  RotateCcw,
   Scan,
   Square,
   ZoomOut,
@@ -75,16 +72,6 @@ function streamSize(host: HTMLElement, maxEdge: number): { width: number; height
   const quantize = (edge: number) => Math.max(Math.round((edge * dpr * scale) / 4) * 4, 240);
   return { width: quantize(cssW), height: quantize(cssH) };
 }
-
-const STANDARD_VIEWS: { id: StandardView; label: string; title: string }[] = [
-  { id: "iso", label: "Iso", title: "Isometric" },
-  { id: "front", label: "F", title: "Front (−Y)" },
-  { id: "back", label: "Bk", title: "Back (+Y)" },
-  { id: "left", label: "L", title: "Left (−X)" },
-  { id: "right", label: "R", title: "Right (+X)" },
-  { id: "top", label: "T", title: "Top (+Z)" },
-  { id: "bottom", label: "B", title: "Bottom (−Z)" },
-];
 
 /** Margin left around the model when fitting the camera. */
 const FIT_PADDING = 0.18;
@@ -374,28 +361,27 @@ function ViewCube({
 
   return (
     <div
-      className="bg-card/95 pointer-events-auto absolute right-3 bottom-16 z-20 w-[132px] rounded-xl border p-2.5 shadow-lg backdrop-blur-md"
+      className="bg-card/95 pointer-events-auto absolute right-3 bottom-14 z-20 w-[108px] rounded-lg border p-1.5 shadow-lg backdrop-blur-md"
+      role="group"
+      aria-label="Standard camera views"
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <div className="text-muted-foreground mb-1.5 text-center text-[10px] font-medium tracking-wider uppercase">
-        View cube
-      </div>
       <div className="grid grid-cols-3 gap-1">
         <div />
-        {cell("top", "Top", "h-8")}
+        {cell("top", "Top", "h-7")}
         <div />
-        {cell("left", "L", "h-8")}
-        {cell("front", "Front", "h-8")}
-        {cell("right", "R", "h-8")}
+        {cell("left", "L", "h-7")}
+        {cell("front", "F", "h-7")}
+        {cell("right", "R", "h-7")}
         <div />
-        {cell("bottom", "Bot", "h-8")}
+        {cell("bottom", "Bot", "h-7")}
         <div />
       </div>
-      <div className="mt-1.5 grid grid-cols-2 gap-1">
-        {cell("back", "Back", "h-7")}
-        {cell("iso", "Iso", "h-7")}
+      <div className="mt-1 grid grid-cols-2 gap-1">
+        {cell("back", "Back", "h-6")}
+        {cell("iso", "Iso", "h-6")}
       </div>
-      <div className="text-muted-foreground mt-2 flex items-center justify-center gap-2 text-[9px]">
+      <div className="text-muted-foreground mt-1 flex items-center justify-center gap-2 text-[8px]">
         {(["X", "Y", "Z"] as const).map((axis) => {
           const projected = projectCadAxis(axis, orientation);
           return (
@@ -557,10 +543,6 @@ export function CadViewport({
   const fit = useCallback(async () => {
     await runCmd({ type: "zoom_to_fit", padding: fitPadding });
   }, [runCmd, fitPadding]);
-
-  const home = useCallback(async () => {
-    await applyView("iso");
-  }, [applyView]);
 
   const setNav = useCallback(
     async (tool: NavTool) => {
@@ -1089,24 +1071,18 @@ export function CadViewport({
                 <BoxSelect className="size-3.5" />
               </ToolbarBtn>
               <Divider />
-              {STANDARD_VIEWS.map((v) => (
-                <ToolbarBtn
-                  key={v.id}
-                  title={v.title}
-                  active={activeView === v.id}
-                  disabled={!ready}
-                  onClick={() => void applyView(v.id)}
-                  className="min-w-7 px-1 text-[10px] font-semibold"
-                >
-                  {v.label}
-                </ToolbarBtn>
-              ))}
+              <ToolbarBtn
+                title="Isometric view"
+                active={activeView === "iso"}
+                disabled={!ready}
+                onClick={() => void applyView("iso")}
+                className="min-w-8 px-1 text-[9px] font-semibold"
+              >
+                ISO
+              </ToolbarBtn>
               <Divider />
               <ToolbarBtn title="Fit all" disabled={!ready} onClick={() => void fit()}>
                 <Maximize2 className="size-3.5" />
-              </ToolbarBtn>
-              <ToolbarBtn title="Home / isometric" disabled={!ready} onClick={() => void home()}>
-                <Home className="size-3.5" />
               </ToolbarBtn>
               <ToolbarBtn
                 title="Zoom in"
@@ -1122,21 +1098,6 @@ export function CadViewport({
               >
                 <ZoomOut className="size-3.5" />
               </ToolbarBtn>
-              <ToolbarBtn
-                title="Center on scene"
-                disabled={!ready}
-                onClick={() => void runCmd({ type: "default_camera_center_to_scene" })}
-              >
-                <Crosshair className="size-3.5" />
-              </ToolbarBtn>
-              <ToolbarBtn
-                title="Reset to iso"
-                disabled={!ready}
-                onClick={() => void applyView("iso")}
-              >
-                <RotateCcw className="size-3.5" />
-              </ToolbarBtn>
-              <Divider />
               <ToolbarBtn
                 title={
                   projection === "perspective"
@@ -1187,13 +1148,10 @@ export function CadViewport({
             onSelect={(v) => void applyView(v)}
           />
 
-          <div className="bg-card/90 text-muted-foreground pointer-events-none absolute top-3 left-40 z-20 hidden flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-2.5 py-1.5 text-[11px] shadow backdrop-blur-md lg:flex">
-            <span className="text-foreground/85 font-medium">Zoo · mm · Z-up</span>
-            <span className="bg-border hidden h-3 w-px sm:block" />
-            <span className="hidden sm:inline">Orbit: drag</span>
-            <span className="hidden sm:inline">Pan: shift/right-drag</span>
-            <span className="hidden sm:inline">Zoom: scroll or alt+drag</span>
-            {navTool === "select" ? <span className="hidden sm:inline">Select: click</span> : null}
+          <div className="bg-card/80 text-muted-foreground pointer-events-none absolute top-14 left-3 z-20 hidden items-center gap-2 rounded-md border px-2 py-1 text-[9px] shadow-sm backdrop-blur-md xl:flex">
+            <span className="text-foreground/85 font-medium">mm · Z-up</span>
+            <span className="bg-border h-3 w-px" />
+            <span>Drag orbit · Shift-drag pan · Scroll zoom</span>
           </div>
         </>
       ) : null}

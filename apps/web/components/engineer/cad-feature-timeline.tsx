@@ -1,10 +1,13 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   Box,
   Boxes,
   CircleDashed,
   Combine,
+  ChevronDown,
+  ChevronUp,
   FileInput,
   History,
   Move3d,
@@ -34,20 +37,31 @@ export function CadFeatureTimeline({
   selectedId: string | null;
   onSelect: (feature: CadFeature | null) => void;
 }) {
+  const [expanded, setExpanded] = useState(Boolean(selectedId));
+
+  useEffect(() => {
+    if (selectedId) setExpanded(true);
+  }, [selectedId]);
+
   if (features.length === 0) return null;
 
   return (
     <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex justify-center">
       <div
-        className="bg-card/95 pointer-events-auto flex max-w-full items-center overflow-hidden rounded-xl border shadow-lg backdrop-blur-md"
+        className="bg-card/95 pointer-events-auto flex max-w-full items-center overflow-hidden rounded-lg border shadow-lg backdrop-blur-md"
         role="region"
         aria-label="CAD feature timeline"
       >
         <button
           type="button"
-          title="Clear feature selection"
+          title={expanded ? "Collapse feature timeline" : "Expand feature timeline"}
+          aria-expanded={expanded}
+          aria-controls="cad-feature-list"
           aria-pressed={!selectedId}
-          onClick={() => onSelect(null)}
+          onClick={() => {
+            onSelect(null);
+            setExpanded((current) => !current);
+          }}
           className={cn(
             "border-border/70 flex h-10 shrink-0 items-center gap-1.5 border-r px-2.5 text-[10px] font-medium",
             selectedId
@@ -57,35 +71,42 @@ export function CadFeatureTimeline({
         >
           <History className="size-3.5" />
           History
+          <span className="text-muted-foreground font-mono">{features.length}</span>
+          {expanded ? <ChevronDown className="size-3" /> : <ChevronUp className="size-3" />}
         </button>
-        <div className="flex max-w-[min(72vw,760px)] items-center gap-0.5 overflow-x-auto p-1">
-          {features.map((feature, index) => {
-            const Icon = FEATURE_ICONS[feature.kind];
-            const selected = selectedId === feature.id;
-            return (
-              <button
-                key={feature.id}
-                type="button"
-                aria-pressed={selected}
-                aria-label={`Feature ${index + 1}: ${feature.operation}, lines ${feature.lineStart} through ${feature.lineEnd}`}
-                title={`${feature.label}\nLines ${feature.lineStart}–${feature.lineEnd}`}
-                onClick={() => onSelect(selected ? null : feature)}
-                className={cn(
-                  "group flex h-8 min-w-8 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[10px] transition-colors",
-                  selected
-                    ? "border-primary/50 bg-primary/15 text-primary"
-                    : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-              >
-                <span className="font-mono text-[9px] opacity-60">{index + 1}</span>
-                <Icon className="size-3.5" strokeWidth={1.75} />
-                <span className={cn("max-w-24 truncate", !selected && "hidden sm:inline")}>
-                  {feature.operation}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        {expanded ? (
+          <div
+            id="cad-feature-list"
+            className="flex max-w-[min(72vw,760px)] items-center gap-0.5 overflow-x-auto p-1"
+          >
+            {features.map((feature, index) => {
+              const Icon = FEATURE_ICONS[feature.kind];
+              const selected = selectedId === feature.id;
+              return (
+                <button
+                  key={feature.id}
+                  type="button"
+                  aria-pressed={selected}
+                  aria-label={`Feature ${index + 1}: ${feature.operation}, lines ${feature.lineStart} through ${feature.lineEnd}`}
+                  title={`${feature.label}\nLines ${feature.lineStart}–${feature.lineEnd}`}
+                  onClick={() => onSelect(selected ? null : feature)}
+                  className={cn(
+                    "group flex h-8 min-w-8 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[10px] transition-colors",
+                    selected
+                      ? "border-primary/50 bg-primary/15 text-primary"
+                      : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                >
+                  <span className="font-mono text-[9px] opacity-60">{index + 1}</span>
+                  <Icon className="size-3.5" strokeWidth={1.75} />
+                  <span className={cn("max-w-24 truncate", !selected && "hidden sm:inline")}>
+                    {feature.operation}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
     </div>
   );

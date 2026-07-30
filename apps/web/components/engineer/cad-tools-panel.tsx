@@ -11,6 +11,8 @@ import {
   Circle,
   CircleDot,
   Combine,
+  ChevronDown,
+  ChevronUp,
   Cylinder,
   Disc,
   FlipHorizontal2,
@@ -28,6 +30,7 @@ import {
   Spline,
   Square,
   X,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -265,6 +268,7 @@ export function CadToolsPanel({
   const [workspaceId, setWorkspaceId] = useState<CadWorkspace>("solid");
   const [groupId, setGroupId] = useState<CadToolGroup>("create");
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const [values, setValues] = useState<CadToolValues>({});
   const [error, setError] = useState<string | null>(null);
 
@@ -326,10 +330,26 @@ export function CadToolsPanel({
   const ActiveIcon = active ? (TOOL_ICONS[active.id] ?? Box) : Box;
 
   return (
-    <div className="pointer-events-none absolute top-12 left-1/2 z-30 flex w-[calc(100%_-_1.5rem)] max-w-[1040px] -translate-x-1/2 flex-col items-center gap-2">
+    <div className="pointer-events-none absolute top-12 left-1/2 z-30 flex w-[calc(100%_-_1.5rem)] max-w-[880px] -translate-x-1/2 flex-col items-center gap-2">
       {/* Fusion-style command ribbon: workbench families above, tools below. */}
       <div className="bg-card/95 pointer-events-auto flex w-full min-w-0 flex-col rounded-lg border shadow-lg backdrop-blur-md">
-        <div className="border-border/70 flex items-center gap-0.5 overflow-x-auto border-b px-1.5 pt-1">
+        <div
+          className={cn(
+            "border-border/70 flex min-h-9 items-center gap-0.5 overflow-x-auto px-1.5",
+            expanded && "border-b",
+          )}
+        >
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-controls="cad-tool-ribbon"
+            onClick={() => setExpanded((current) => !current)}
+            className="hover:bg-muted text-foreground mr-1 flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[10px] font-semibold"
+          >
+            <Wrench className="text-primary size-3.5" />
+            Tools
+            {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+          </button>
           {CAD_WORKSPACES.map((candidate) => (
             <button
               key={candidate.id}
@@ -339,9 +359,10 @@ export function CadToolsPanel({
                 setGroupId(candidate.groups[0]!);
                 setActiveId(null);
                 setError(null);
+                setExpanded(true);
               }}
               className={cn(
-                "border-b-2 px-2.5 py-1.5 text-[10px] font-semibold tracking-wider transition-colors",
+                "h-9 border-b-2 px-2.5 text-[10px] font-semibold tracking-wider transition-colors",
                 workspaceId === candidate.id
                   ? "border-primary text-primary"
                   : "text-muted-foreground hover:text-foreground border-transparent",
@@ -350,60 +371,64 @@ export function CadToolsPanel({
               {candidate.label}
             </button>
           ))}
-          <span className="text-muted-foreground ml-auto hidden px-2 text-[9px] lg:block">
-            Parametric KCL workspaces
+          <span className="text-muted-foreground ml-auto hidden shrink-0 px-2 font-mono text-[9px] lg:block">
+            {lastSolid ?? "No solid"}
           </span>
         </div>
 
-        <div className="border-border/70 flex items-center gap-0.5 overflow-x-auto border-b p-1">
-          {workspaceGroups.map((g) => {
-            const count = byGroup.get(g.id)?.length ?? 0;
-            if (!count) return null;
-            const selected = groupId === g.id;
-            return (
-              <button
-                key={g.id}
-                type="button"
-                title={g.label}
-                onClick={() => {
-                  setGroupId(g.id);
-                  setActiveId(null);
-                  setError(null);
-                }}
-                className={cn(
-                  "rounded-md px-2.5 py-1 text-[10px] font-medium tracking-wide whitespace-nowrap transition-colors",
-                  selected
-                    ? "bg-primary/15 text-primary"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-              >
-                {g.label}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="flex min-h-15 items-center gap-1 overflow-x-auto p-1.5">
-          <div className="flex items-center gap-0.5">
-            {groupTools.map((tool) => (
-              <ToolIconButton
-                key={tool.id}
-                tool={tool}
-                disabled={!canEdit || (tool.requiresSolid && !lastSolid)}
-                active={activeId === tool.id}
-                onClick={() => openTool(tool)}
-              />
-            ))}
-          </div>
-          {lastSolid ? (
-            <div
-              className="border-border/70 text-muted-foreground ml-1 flex items-center border-l px-2 font-mono text-[9px]"
-              title={`Target solid: ${lastSolid}`}
-            >
-              <span className="text-foreground/80 block max-w-24 truncate">{lastSolid}</span>
+        {expanded ? (
+          <div id="cad-tool-ribbon">
+            <div className="border-border/70 flex items-center gap-0.5 overflow-x-auto border-b p-1">
+              {workspaceGroups.map((g) => {
+                const count = byGroup.get(g.id)?.length ?? 0;
+                if (!count) return null;
+                const selected = groupId === g.id;
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    title={g.label}
+                    onClick={() => {
+                      setGroupId(g.id);
+                      setActiveId(null);
+                      setError(null);
+                    }}
+                    className={cn(
+                      "rounded-md px-2.5 py-1 text-[10px] font-medium tracking-wide whitespace-nowrap transition-colors",
+                      selected
+                        ? "bg-primary/15 text-primary"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                    )}
+                  >
+                    {g.label}
+                  </button>
+                );
+              })}
             </div>
-          ) : null}
-        </div>
+
+            <div className="flex min-h-15 items-center gap-1 overflow-x-auto p-1.5">
+              <div className="flex items-center gap-0.5">
+                {groupTools.map((tool) => (
+                  <ToolIconButton
+                    key={tool.id}
+                    tool={tool}
+                    disabled={!canEdit || (tool.requiresSolid && !lastSolid)}
+                    active={activeId === tool.id}
+                    onClick={() => openTool(tool)}
+                  />
+                ))}
+              </div>
+              {lastSolid ? (
+                <div
+                  className="border-border/70 text-muted-foreground ml-1 flex items-center border-l px-2 font-mono text-[9px]"
+                  title={`Target solid: ${lastSolid}`}
+                >
+                  <span className="text-foreground/80 block max-w-24 truncate">{lastSolid}</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {/* Inline inspector — no modal */}
