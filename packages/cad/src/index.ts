@@ -40,6 +40,7 @@ export {
   getActiveComponent,
   listComponentsByKind,
   setActiveComponent,
+  assemblyDropTargetId,
   updateComponentContent,
   removeCadComponents,
   addCadComponent,

@@ -11,10 +11,12 @@ import {
   Axis3d,
   Boxes,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Code,
   FilePlus,
   FileText,
+  GripVertical,
   Layers,
   Lock,
   PanelLeftClose,
@@ -32,6 +34,7 @@ import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import {
   addCadAsset,
   addCadComponent,
+  assemblyDropTargetId,
   cadAssetImportMode,
   displayNameFromCadPath,
   getActiveComponent,
@@ -39,6 +42,7 @@ import {
   insertPartIntoAssembly,
   normalizeCadDoc,
   setActiveComponent,
+  slugifyCadName,
   upsertPartScript,
   updateComponentContent,
   type CadComponent,
@@ -283,6 +287,11 @@ function ComponentTree({
   onInsertPart: (assemblyId: string, partId: string) => void;
 }) {
   const groups: CadComponentKind[] = ["part", "assembly", "instructions"];
+  const [openGroups, setOpenGroups] = useState<Record<CadComponentKind, boolean>>({
+    part: true,
+    assembly: true,
+    instructions: false,
+  });
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1">
       <div className="mx-2 my-2 overflow-hidden rounded-lg border">
@@ -303,76 +312,117 @@ function ComponentTree({
         const meta = KIND_META[kind];
         const Icon = meta.icon;
         const items = doc.components.filter((c) => c.kind === kind);
+        const open = openGroups[kind];
         return (
           <div key={kind} className="mb-2">
-            <div className="text-muted-foreground flex items-center gap-1.5 px-2.5 py-1 text-[12px]">
-              <Icon className="size-3 opacity-70" />
-              <span className="flex-1 font-medium">{meta.label}</span>
+            <div className="text-muted-foreground flex items-center px-1.5 py-0.5 text-[12px]">
+              <button
+                type="button"
+                aria-expanded={open}
+                onClick={() => setOpenGroups((current) => ({ ...current, [kind]: !open }))}
+                className="hover:bg-muted flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left"
+              >
+                {open ? (
+                  <ChevronDown className="size-3 shrink-0" />
+                ) : (
+                  <ChevronRight className="size-3 shrink-0" />
+                )}
+                <Icon className="size-3 shrink-0 opacity-70" />
+                <span className="min-w-0 flex-1 truncate font-medium">{meta.label}</span>
+                <span className="font-mono text-[9px] opacity-70">{items.length}</span>
+              </button>
               {canEdit ? (
                 <button
                   type="button"
                   title={`Add ${kind}`}
                   onClick={() => onAdd(kind)}
-                  className="hover:bg-muted rounded p-0.5"
+                  className="hover:bg-muted ml-1 rounded p-1"
                 >
                   <FilePlus className="size-3" />
                 </button>
               ) : null}
             </div>
-            {items.map((c) => {
-              // Parts live at parts/<name>/main.kcl — show the part name, not "main.kcl".
-              const label = c.name || displayNameFromCadPath(c.path);
-              const ext = c.kind === "instructions" ? ".md" : ".kcl";
-              const canDropPart = kind === "assembly" && canEdit;
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  draggable={kind === "part" && canEdit}
-                  onDragStart={(event) => {
-                    if (kind !== "part") return;
-                    event.dataTransfer.effectAllowed = "copy";
-                    event.dataTransfer.setData("application/x-foundry-cad-part", c.id);
-                    event.dataTransfer.setData("text/plain", c.id);
-                  }}
-                  onDragOver={(event) => {
-                    if (!canDropPart) return;
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "copy";
-                  }}
-                  onDrop={(event) => {
-                    if (!canDropPart) return;
-                    event.preventDefault();
-                    const partId =
-                      event.dataTransfer.getData("application/x-foundry-cad-part") ||
-                      event.dataTransfer.getData("text/plain");
-                    if (partId) onInsertPart(c.id, partId);
-                  }}
-                  onClick={() => onSelect(c.id)}
-                  className={cn(
-                    "hover:bg-muted/60 flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs",
-                    activeId === c.id && "bg-muted text-foreground font-medium",
-                    canDropPart && "border-primary/0 hover:border-primary/30 border-y",
-                  )}
-                >
-                  <Layers className="text-muted-foreground size-3 shrink-0 opacity-60" />
-                  <span className="min-w-0 flex-1 truncate font-mono" title={c.path}>
-                    {label}
-                    {ext}
-                  </span>
-                  {kind === "part" && canEdit ? (
-                    <span className="text-muted-foreground text-[8px]">drag</span>
-                  ) : null}
-                </button>
-              );
-            })}
-            {items.length === 0 ? (
-              <p className="text-muted-foreground px-2.5 py-1 text-[11px]">None yet</p>
-            ) : null}
-            {kind === "assembly" && items.length > 0 ? (
-              <p className="text-muted-foreground px-2.5 py-1 text-[9px]">
-                Drop a Part onto an assembly to place it.
-              </p>
+            {open ? (
+              <>
+                {items.map((c) => {
+                  // Parts live at parts/<name>/main.kcl — show the part name, not "main.kcl".
+                  const label = c.name || displayNameFromCadPath(c.path);
+                  const ext = c.kind === "instructions" ? ".md" : ".kcl";
+                  const canDropPart = kind === "assembly" && canEdit;
+                  const imported = Boolean(
+                    kind === "part" &&
+                    doc.assets?.some(
+                      (asset) =>
+                        c.content.includes(asset.path) ||
+                        c.name === asset.name ||
+                        c.name === slugifyCadName(asset.name),
+                    ),
+                  );
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      draggable={kind === "part" && canEdit}
+                      title={
+                        kind === "part" && canEdit
+                          ? `${c.path} — drag onto the CAD canvas to place`
+                          : c.path
+                      }
+                      onDragStart={(event) => {
+                        if (kind !== "part") return;
+                        event.dataTransfer.effectAllowed = "copy";
+                        event.dataTransfer.setData("application/x-foundry-cad-part", c.id);
+                        event.dataTransfer.setData("text/plain", c.id);
+                      }}
+                      onDragOver={(event) => {
+                        if (!canDropPart) return;
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "copy";
+                      }}
+                      onDrop={(event) => {
+                        if (!canDropPart) return;
+                        event.preventDefault();
+                        const partId =
+                          event.dataTransfer.getData("application/x-foundry-cad-part") ||
+                          event.dataTransfer.getData("text/plain");
+                        if (partId) onInsertPart(c.id, partId);
+                      }}
+                      onClick={() => onSelect(c.id)}
+                      className={cn(
+                        "hover:bg-muted/60 flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs",
+                        activeId === c.id && "bg-muted text-foreground font-medium",
+                        canDropPart && "border-primary/0 hover:border-primary/30 border-y",
+                        kind === "part" && canEdit && "cursor-grab active:cursor-grabbing",
+                      )}
+                    >
+                      <Layers className="text-muted-foreground size-3 shrink-0 opacity-60" />
+                      <span className="min-w-0 flex-1 truncate font-mono">
+                        {label}
+                        {ext}
+                      </span>
+                      {imported ? (
+                        <span className="bg-primary/10 text-primary rounded px-1 py-0.5 text-[8px] font-medium">
+                          imported
+                        </span>
+                      ) : null}
+                      {kind === "part" && canEdit ? (
+                        <GripVertical
+                          className="text-muted-foreground size-3 shrink-0"
+                          aria-label="Drag part to canvas"
+                        />
+                      ) : null}
+                    </button>
+                  );
+                })}
+                {items.length === 0 ? (
+                  <p className="text-muted-foreground px-2.5 py-1 text-[11px]">None yet</p>
+                ) : null}
+                {kind === "assembly" && items.length > 0 ? (
+                  <p className="text-muted-foreground px-2.5 py-1 text-[9px]">
+                    Drop a part here or anywhere on the canvas.
+                  </p>
+                ) : null}
+              </>
             ) : null}
           </div>
         );
@@ -511,6 +561,7 @@ export function ModelEditor({
   const [showTree, setShowTree] = useState(true);
   const [showCode, setShowCode] = useState(false);
   const [showGizmo, setShowGizmo] = useState(true);
+  const [partDragActive, setPartDragActive] = useState(false);
   const [cameraOrientation, setCameraOrientation] = useState<CameraOrientation>(() =>
     orientationForView("iso"),
   );
@@ -817,6 +868,9 @@ export function ModelEditor({
   const targetSolid =
     selectedFeature?.isSolid && selectedFeature.kind !== "import" ? selectedFeature.binding : null;
   const manipulatorTarget = isKcl && active ? (targetSolid ?? findLastSolid(active.content)) : null;
+  const canvasAssemblyId = doc
+    ? assemblyDropTargetId(doc, active?.id ?? activeId ?? undefined)
+    : null;
   const canUndo = historyRef.current.past.length > 0;
   const canRedo = historyRef.current.future.length > 0;
 
@@ -927,6 +981,31 @@ export function ModelEditor({
 
       <div
         className="bg-background relative min-w-0 flex-1"
+        onDragEnter={(event) => {
+          if (!editable || !canvasAssemblyId) return;
+          if (Array.from(event.dataTransfer.types).includes("application/x-foundry-cad-part")) {
+            setPartDragActive(true);
+          }
+        }}
+        onDragOver={(event) => {
+          if (!editable || !canvasAssemblyId) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }}
+        onDragLeave={(event) => {
+          const next = event.relatedTarget;
+          if (next instanceof Node && event.currentTarget.contains(next)) return;
+          setPartDragActive(false);
+        }}
+        onDrop={(event) => {
+          setPartDragActive(false);
+          if (!editable || !canvasAssemblyId) return;
+          event.preventDefault();
+          const partId =
+            event.dataTransfer.getData("application/x-foundry-cad-part") ||
+            event.dataTransfer.getData("text/plain");
+          if (partId) onInsertPart(canvasAssemblyId, partId);
+        }}
         onPointerMove={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           if (rect.width <= 0 || rect.height <= 0) return;
@@ -1006,6 +1085,14 @@ export function ModelEditor({
           self={cursorSelf}
           reportRef={reportCursorRef}
         />
+        {partDragActive ? (
+          <div className="border-primary/70 bg-primary/10 pointer-events-none absolute inset-3 z-[65] flex items-center justify-center rounded-xl border-2 border-dashed backdrop-blur-[1px]">
+            <div className="bg-card/95 flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium shadow-lg">
+              <Boxes className="text-primary size-4" />
+              Drop to place in the product assembly
+            </div>
+          </div>
+        ) : null}
         {aiLock.data ? (
           <div
             className="bg-card/95 pointer-events-none absolute top-32 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg backdrop-blur-md"

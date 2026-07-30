@@ -5,6 +5,7 @@ import {
   DEFAULT_KCL,
   addCadComponent,
   addCadComponents,
+  assemblyDropTargetId,
   buildKclProject,
   cadAssetFormatFromName,
   cadDoc,
@@ -241,6 +242,23 @@ describe("foreign mesh import", () => {
     const again = normalizeCadDoc(doc);
     expect(again.assets).toHaveLength(1);
     expect(again.assets![0]!.storageKey).toContain("housing.stl");
+  });
+
+  it("places an imported part on the product assembly from a canvas drop", () => {
+    const imported = importMeshAsPart(cadDoc(DEFAULT_KCL), {
+      name: "sensor housing",
+      path: "imports/sensor-housing.step",
+      format: "step",
+      storageKey: "projects/p1/cad/imports/sensor-housing.step",
+      sizeBytes: 2400,
+    });
+    const part = imported.components.find((component) => component.name === "sensor-housing")!;
+    const assemblyId = assemblyDropTargetId(imported, part.id);
+
+    expect(assemblyId).toBeTruthy();
+    const placed = insertPartIntoAssembly(imported, assemblyId!, part.id);
+    const assembly = placed.components.find((component) => component.id === assemblyId)!;
+    expect(assembly.content).toContain('import "parts/sensor-housing/main.kcl"');
   });
 
   it("detects non-import scripts", () => {

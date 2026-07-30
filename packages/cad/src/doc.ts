@@ -628,6 +628,16 @@ export function setActiveComponent(doc: CadDoc, activeId: string): CadDoc {
   return withMirror({ ...doc, activeId });
 }
 
+/**
+ * Canvas drops target the open assembly, or fall back to the product assembly
+ * when the user is currently viewing an individual part.
+ */
+export function assemblyDropTargetId(doc: CadDoc, activeId = doc.activeId): string | null {
+  const active = doc.components.find((component) => component.id === activeId);
+  if (active?.kind === "assembly") return active.id;
+  return doc.components.find((component) => component.kind === "assembly")?.id ?? null;
+}
+
 export function updateComponentContent(doc: CadDoc, id: string, content: string): CadDoc {
   const components = doc.components.map((c) => (c.id === id ? { ...c, content } : c));
   return withMirror({ ...doc, components });
