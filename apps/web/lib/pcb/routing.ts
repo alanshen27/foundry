@@ -232,7 +232,9 @@ export function buildCopperGraph(doc: PcbDoc, padNets?: Map<string, string>): Co
 
 /** The zone whose outline contains (x, y) on `layer`, for select/delete. */
 export function zoneAt(zones: PcbZone[], x: number, y: number, layer: string): PcbZone | null {
-  for (const zone of zones) {
+  // SVG paints later zones on top, so hit-test in reverse paint order.
+  for (let index = zones.length - 1; index >= 0; index--) {
+    const zone = zones[index]!;
     if (zone.layer !== layer) continue;
     if (pointInPolygon(zone.points, x, y)) return zone;
   }
@@ -255,7 +257,7 @@ export function padAt(
   for (const pad of pads) {
     if (!pad.layers.includes(layer as PadInstance["layers"][number])) continue;
     const d = pointPadDistance(pad, x, y);
-    if (d <= toleranceMm && d < bestDist) {
+    if (d <= toleranceMm && d <= bestDist) {
       bestDist = d;
       best = pad;
     }
@@ -269,7 +271,7 @@ export function viaAt(vias: PcbVia[], x: number, y: number, toleranceMm = 0): Pc
   let bestDist = Infinity;
   for (const via of vias) {
     const d = Math.max(0, Math.hypot(via.xMm - x, via.yMm - y) - via.diameterMm / 2);
-    if (d <= toleranceMm && d < bestDist) {
+    if (d <= toleranceMm && d <= bestDist) {
       bestDist = d;
       best = via;
     }
@@ -291,7 +293,7 @@ export function trackAt(
     if (track.layer !== layer) continue;
     for (const [ax, ay, bx, by] of polylineSegments(track.points)) {
       const d = Math.max(0, pointSegmentDistance(x, y, ax, ay, bx, by) - track.widthMm / 2);
-      if (d <= toleranceMm && d < bestDist) {
+      if (d <= toleranceMm && d <= bestDist) {
         bestDist = d;
         best = track;
       }

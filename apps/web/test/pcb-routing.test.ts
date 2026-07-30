@@ -9,6 +9,7 @@ import {
   trackAt,
   trackLength,
   viaAt,
+  zoneAt,
 } from "@/lib/pcb/routing";
 import { boardPads, pointPadDistance, segmentSegmentDistance } from "@/lib/pcb/geometry";
 
@@ -443,6 +444,49 @@ describe("hit testing", () => {
     expect(trackAt(doc.tracks, 15, 10, "B.Cu", 0.2)).toBeNull();
     expect(viaAt(doc.vias, 30, 30, 0.2)?.id).toBe("v1");
     expect(viaAt(doc.vias, 35, 35, 0.2)).toBeNull();
+  });
+
+  it("prefers the last-painted item when copper overlaps exactly", () => {
+    const doc = seriesBoard();
+    const bottomPad = boardPads(doc.footprints).find(
+      (pad) => pad.refDes === "R1" && pad.pin === "2",
+    )!;
+    const topPad = { ...bottomPad, footprintId: "f-top", refDes: "R9" };
+    const tracks: PcbDoc["tracks"] = [
+      { ...JOINING_TRACK, id: "track-bottom", layer: "F.Cu" },
+      { ...JOINING_TRACK, id: "track-top", layer: "F.Cu" },
+    ];
+    const vias: PcbDoc["vias"] = [
+      { id: "via-bottom", xMm: 30, yMm: 30, diameterMm: 0.6, drillMm: 0.3 },
+      { id: "via-top", xMm: 30, yMm: 30, diameterMm: 0.6, drillMm: 0.3 },
+    ];
+    const zones: PcbDoc["zones"] = [
+      {
+        id: "zone-bottom",
+        layer: "F.Cu",
+        points: [
+          { xMm: 0, yMm: 0 },
+          { xMm: 10, yMm: 0 },
+          { xMm: 10, yMm: 10 },
+          { xMm: 0, yMm: 10 },
+        ],
+      },
+      {
+        id: "zone-top",
+        layer: "F.Cu",
+        points: [
+          { xMm: 2, yMm: 2 },
+          { xMm: 8, yMm: 2 },
+          { xMm: 8, yMm: 8 },
+          { xMm: 2, yMm: 8 },
+        ],
+      },
+    ];
+
+    expect(padAt([bottomPad, topPad], bottomPad.xMm, bottomPad.yMm, "F.Cu", 0)?.refDes).toBe("R9");
+    expect(trackAt(tracks, 15, 10, "F.Cu", 0)?.id).toBe("track-top");
+    expect(viaAt(vias, 30, 30, 0)?.id).toBe("via-top");
+    expect(zoneAt(zones, 5, 5, "F.Cu")?.id).toBe("zone-top");
   });
 });
 
