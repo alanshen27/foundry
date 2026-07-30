@@ -63,6 +63,38 @@ describe("runCircuitErc", () => {
     );
   });
 
+  it("rejects duplicate reference designators", () => {
+    const schematic = doc([]);
+    schematic.parts[2]!.label = "r1";
+    const issues = runCircuitErc(schematic);
+
+    expect(issues).toContainEqual(
+      expect.objectContaining({
+        code: "duplicate_reference",
+        severity: "error",
+        partId: "led1",
+      }),
+    );
+  });
+
+  it("does not count a wire with a missing pin as a connected part", () => {
+    const issues = runCircuitErc(
+      doc([
+        {
+          id: "w1",
+          from: { part: "u1", pin: "" },
+          to: { part: "r1", pin: "1" },
+        },
+      ]),
+    );
+    const unconnected = issues
+      .filter((issue) => issue.code === "unconnected_part")
+      .map((issue) => issue.partId);
+
+    expect(issues).toContainEqual(expect.objectContaining({ code: "missing_pin", wireId: "w1" }));
+    expect(unconnected).toEqual(expect.arrayContaining(["u1", "r1"]));
+  });
+
   it("accepts one named net without errors", () => {
     const issues = runCircuitErc(
       doc([

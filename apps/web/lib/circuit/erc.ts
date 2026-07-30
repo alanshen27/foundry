@@ -7,6 +7,7 @@ export type CircuitErcIssue = {
     | "missing_pin"
     | "self_connection"
     | "duplicate_wire"
+    | "duplicate_reference"
     | "conflicting_net_label"
     | "unconnected_part";
   message: string;
@@ -29,6 +30,24 @@ export function runCircuitErc(doc: CircuitDoc): CircuitErcIssue[] {
   const connectedParts = new Set<string>();
   const seenWires = new Set<string>();
   const parent = new Map<string, string>();
+
+  const referenceOwners = new Map<string, string>();
+  for (const part of doc.parts) {
+    const reference = part.label?.trim();
+    if (!reference || !/^[a-z]+\d+[a-z0-9-]*$/i.test(reference)) continue;
+    const key = reference.toUpperCase();
+    const owner = referenceOwners.get(key);
+    if (owner) {
+      issues.push({
+        severity: "error",
+        code: "duplicate_reference",
+        partId: part.id,
+        message: `${reference} is assigned to more than one schematic part.`,
+      });
+    } else {
+      referenceOwners.set(key, part.id);
+    }
+  }
 
   const find = (key: string): string => {
     const current = parent.get(key);
@@ -60,9 +79,6 @@ export function runCircuitErc(doc: CircuitDoc): CircuitErcIssue[] {
       });
       continue;
     }
-    connectedParts.add(from.part);
-    connectedParts.add(to.part);
-
     if (!from.pin.trim() || !to.pin.trim()) {
       issues.push({
         severity: "error",
@@ -72,6 +88,9 @@ export function runCircuitErc(doc: CircuitDoc): CircuitErcIssue[] {
       });
       continue;
     }
+
+    connectedParts.add(from.part);
+    connectedParts.add(to.part);
 
     const a = endpointKey(from.part, from.pin);
     const b = endpointKey(to.part, to.pin);
