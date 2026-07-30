@@ -123,6 +123,34 @@ The local web application runs at http://localhost:3000. The seed creates:
 See `.env.example` for the full configuration and
 `docs/runbooks/local-setup.md` for additional setup guidance.
 
+### VS Code workflow
+
+Open the repository root—not only `apps/web`—so VS Code can resolve every
+workspace package:
+
+```bash
+code .
+```
+
+In the integrated terminal, select Node.js 22 and pnpm 9, then run the same
+repository-level setup:
+
+```bash
+corepack enable
+corepack prepare pnpm@9.15.4 --activate
+pnpm install
+cp .env.example .env
+pnpm db:generate
+pnpm db:push
+pnpm db:seed
+pnpm dev
+```
+
+Keep credentials in the ignored `.env` file rather than VS Code settings or
+source files. If Explorer appears empty or workspace imports cannot resolve,
+use **File → Open Folder…** and select the directory containing this
+`README.md`, `package.json`, and `pnpm-workspace.yaml`.
+
 ## External service configuration
 
 | Capability                     | Configuration                                                 |

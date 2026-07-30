@@ -1,6 +1,6 @@
 # Runbook: local setup
 
-1. Install Node 20+ and pnpm 9+ (`corepack enable`).
+1. Install Node 22 and pnpm 9 (`corepack enable`).
 2. `pnpm install`
 3. Database — choose one:
    - Local: `docker compose -f infra/local/docker-compose.yml up -d`
@@ -12,7 +12,7 @@
    bucket). Set `AUTH_MODE=supabase` for Supabase Auth, or keep
    `AUTH_MODE=local` for the LOCAL credentials adapter. For presence set
    `NEXT_PUBLIC_REALTIME_MODE=supabase`.
-5. `pnpm db:generate && pnpm db:push && pnpm db:seed`
+5. Run `pnpm db:generate`, `pnpm db:push`, and `pnpm db:seed`.
 6. `pnpm dev` and open http://localhost:3000.
 7. Sign in with `builder@foundry.local` / `demo-password` (LOCAL mode).
 
