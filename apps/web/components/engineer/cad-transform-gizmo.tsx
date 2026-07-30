@@ -73,6 +73,7 @@ export function CadTransformGizmo({
   return (
     <div
       className="pointer-events-none absolute top-1/2 left-1/2 z-20 size-0"
+      role="group"
       aria-label={`Transform ${target}`}
     >
       <div className="relative -translate-x-1/2 -translate-y-1/2">
@@ -109,7 +110,11 @@ export function CadTransformGizmo({
         />
 
         {dragAxis ? (
-          <span className="bg-card text-foreground absolute top-5 left-5 rounded-md border px-2 py-1 font-mono text-[10px] shadow">
+          <span
+            className="bg-card text-foreground absolute top-5 left-5 rounded-md border px-2 py-1 font-mono text-[10px] shadow"
+            role="status"
+            aria-live="polite"
+          >
             {dragAxis} {previewMm > 0 ? "+" : ""}
             {previewMm.toFixed(1)} mm
           </span>
@@ -125,6 +130,7 @@ export function CadTransformGizmo({
               type="button"
               disabled={!canEdit}
               title={`Rotate 15° around ${axis}`}
+              aria-label={`Rotate 15 degrees around ${axis} axis`}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();

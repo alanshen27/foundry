@@ -38,10 +38,15 @@ export function CadFeatureTimeline({
 
   return (
     <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex justify-center">
-      <div className="bg-card/95 pointer-events-auto flex max-w-full items-center overflow-hidden rounded-xl border shadow-lg backdrop-blur-md">
+      <div
+        className="bg-card/95 pointer-events-auto flex max-w-full items-center overflow-hidden rounded-xl border shadow-lg backdrop-blur-md"
+        role="region"
+        aria-label="CAD feature timeline"
+      >
         <button
           type="button"
           title="Clear feature selection"
+          aria-pressed={!selectedId}
           onClick={() => onSelect(null)}
           className={cn(
             "border-border/70 flex h-10 shrink-0 items-center gap-1.5 border-r px-2.5 text-[10px] font-medium",
@@ -62,6 +67,7 @@ export function CadFeatureTimeline({
                 key={feature.id}
                 type="button"
                 aria-pressed={selected}
+                aria-label={`Feature ${index + 1}: ${feature.operation}, lines ${feature.lineStart} through ${feature.lineEnd}`}
                 title={`${feature.label}\nLines ${feature.lineStart}–${feature.lineEnd}`}
                 onClick={() => onSelect(selected ? null : feature)}
                 className={cn(

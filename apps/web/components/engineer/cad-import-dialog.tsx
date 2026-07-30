@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import { Box, CircuitBoard, CloudUpload, FileArchive, FileCode2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -24,8 +24,25 @@ export function CadImportDialog({
   onFile: (file: File, unit: CadImportUnit) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const [unit, setUnit] = useState<CadImportUnit>("mm");
   const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    if (open) closeRef.current?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || pending) return;
+      event.preventDefault();
+      onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, open, pending]);
+
   if (!open) return null;
 
   const choose = (file: File | undefined) => {
@@ -44,6 +61,7 @@ export function CadImportDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="cad-import-title"
+      aria-describedby="cad-import-description"
     >
       <div className="bg-card w-full max-w-2xl overflow-hidden rounded-xl border shadow-2xl">
         <div className="flex items-start gap-3 border-b px-5 py-4">
@@ -54,13 +72,14 @@ export function CadImportDialog({
             <h2 id="cad-import-title" className="text-base font-semibold">
               Import into project
             </h2>
-            <p className="text-muted-foreground mt-0.5 text-xs">
+            <p id="cad-import-description" className="text-muted-foreground mt-0.5 text-xs">
               Open KCL, translate supported geometry, or preserve native design sources.
             </p>
           </div>
           <Button
             variant="ghost"
             size="icon-sm"
+            ref={closeRef}
             aria-label="Close import"
             onClick={onClose}
             disabled={pending}
@@ -121,7 +140,11 @@ export function CadImportDialog({
                 <option value="yd">yd</option>
               </select>
             </label>
-            {error ? <p className="text-destructive mt-3 text-[11px]">{error}</p> : null}
+            {error ? (
+              <p className="text-destructive mt-3 text-[11px]" role="alert">
+                {error}
+              </p>
+            ) : null}
           </div>
 
           <div className="space-y-2">
