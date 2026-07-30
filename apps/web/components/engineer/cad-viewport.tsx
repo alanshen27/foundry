@@ -36,9 +36,13 @@ import {
 } from "@/lib/cad/entity-labels";
 import { listCadSolids } from "@/lib/cad/tools";
 import {
+  cameraOrientationAfterDrag,
+  orientationForView,
+  projectCadAxis,
   ZOOM_BUTTON_STEP,
   attachViewportInput,
   toStreamPoint,
+  type CameraOrientation,
   type NavTool,
   type ViewportInput,
 } from "@/lib/cad/viewport-input";
@@ -337,10 +341,12 @@ function Divider() {
 /** Clickable orthographic face map + iso — classic CAD view picker. */
 function ViewCube({
   active,
+  orientation,
   onSelect,
   disabled,
 }: {
   active: StandardView | null;
+  orientation: CameraOrientation;
   onSelect: (view: StandardView) => void;
   disabled?: boolean;
 }) {
@@ -390,23 +396,31 @@ function ViewCube({
         {cell("iso", "Iso", "h-7")}
       </div>
       <div className="text-muted-foreground mt-2 flex items-center justify-center gap-2 text-[9px]">
-        <span className="text-red-500">X</span>
-        <span className="text-emerald-500">Y</span>
-        <span className="text-sky-500">Z</span>
+        {(["X", "Y", "Z"] as const).map((axis) => {
+          const projected = projectCadAxis(axis, orientation);
+          return (
+            <span
+              key={axis}
+              className={cn(
+                "inline-block font-semibold transition-transform duration-100",
+                axis === "X" ? "text-red-500" : axis === "Y" ? "text-emerald-500" : "text-sky-500",
+              )}
+              style={{
+                transform: `rotate(${projected.angleDeg}deg) scale(${0.75 + projected.scale * 0.25})`,
+              }}
+            >
+              {axis}
+            </span>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function CoordinatePlaneOverlay({ view }: { view: StandardView | null }) {
-  const transform =
-    view === "top" || view === "bottom"
-      ? "perspective(900px) rotateX(0deg)"
-      : view === "front" || view === "back"
-        ? "perspective(900px) rotateX(68deg)"
-        : view === "left" || view === "right"
-          ? "perspective(900px) rotateX(68deg) rotateZ(90deg)"
-          : "perspective(900px) rotateX(66deg) rotateZ(-35deg)";
+function CoordinatePlaneOverlay({ orientation }: { orientation: CameraOrientation }) {
+  const gridTilt = Math.max(0, Math.min(72, 72 - Math.abs(orientation.pitchDeg) * 0.8));
+  const transform = `perspective(900px) rotateX(${gridTilt}deg) rotateZ(${orientation.yawDeg}deg)`;
   return (
     <div className="pointer-events-none absolute inset-0 z-[1] overflow-hidden" aria-hidden="true">
       <div
@@ -439,6 +453,7 @@ export function CadViewport({
   scenery = true,
   onReady,
   onError,
+  onCameraOrientationChange,
 }: {
   script: string;
   engine: EngineSession;
@@ -465,6 +480,7 @@ export function CadViewport({
   entryPath?: string;
   onReady?: () => void;
   onError?: (message: string | null) => void;
+  onCameraOrientationChange?: (orientation: CameraOrientation) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const rtcRef = useRef<zoo.WebRTC | null>(null);
@@ -480,12 +496,14 @@ export function CadViewport({
   const initialViewRef = useRef(view);
   const onReadyRef = useRef(onReady);
   const onErrorRef = useRef(onError);
+  const onCameraOrientationChangeRef = useRef(onCameraOrientationChange);
   const execGenRef = useRef(0);
   const framedOnceRef = useRef(false);
   const navToolRef = useRef<NavTool>("select");
   scriptRef.current = script;
   onReadyRef.current = onReady;
   onErrorRef.current = onError;
+  onCameraOrientationChangeRef.current = onCameraOrientationChange;
 
   const [status, setStatus] = useState<ViewportStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
@@ -498,6 +516,9 @@ export function CadViewport({
   const [activeView, setActiveView] = useState<StandardView | null>(
     view === "orbit" ? "iso" : (view as StandardView),
   );
+  const [cameraOrientation, setCameraOrientation] = useState<CameraOrientation>(() =>
+    orientationForView(view === "orbit" ? "iso" : view),
+  );
   // Select by default: dragging orbits regardless of tool, so starting in
   // orbit-only mode just meant clicks never picked anything.
   const [navTool, setNavTool] = useState<NavTool>("select");
@@ -509,19 +530,26 @@ export function CadViewport({
 
   const runCmd = useCallback(async (cmd: zoo.ModelingCmd) => {
     const rtc = rtcRef.current;
-    if (!rtc) return;
+    if (!rtc) return false;
     try {
       await sendCmd(rtc, cmd);
+      return true;
     } catch {
       console.warn("A CAD viewport command could not be completed.");
+      return false;
     }
   }, []);
 
   const applyView = useCallback(
     async (next: CadView) => {
-      if (next !== "orbit") setActiveView(next);
-      await runCmd(cameraCmd(next, fitPadding));
+      const standard = next === "orbit" ? "iso" : next;
+      const applied = await runCmd(cameraCmd(next, fitPadding));
+      if (!applied) return;
       await runCmd({ type: "zoom_to_fit", padding: fitPadding, animated: false });
+      const orientation = orientationForView(standard);
+      setActiveView(standard);
+      setCameraOrientation(orientation);
+      onCameraOrientationChangeRef.current?.(orientation);
     },
     [runCmd, fitPadding],
   );
@@ -531,10 +559,8 @@ export function CadViewport({
   }, [runCmd, fitPadding]);
 
   const home = useCallback(async () => {
-    setActiveView("iso");
-    await runCmd({ type: "view_isometric", padding: fitPadding });
-    await runCmd({ type: "zoom_to_fit", padding: fitPadding, animated: false });
-  }, [runCmd, fitPadding]);
+    await applyView("iso");
+  }, [applyView]);
 
   const setNav = useCallback(
     async (tool: NavTool) => {
@@ -716,6 +742,15 @@ export function CadViewport({
       getTool: () => navToolRef.current,
       getStreamSize: () => streamed,
       objectFit: "contain",
+      onCameraDrag: (interaction, deltaX, deltaY) => {
+        if (interaction !== "rotate" && interaction !== "rotatetrackball") return;
+        setActiveView(null);
+        setCameraOrientation((current) => {
+          const next = cameraOrientationAfterDrag(current, interaction, deltaX, deltaY);
+          onCameraOrientationChangeRef.current?.(next);
+          return next;
+        });
+      },
     });
 
     // Without this the stream keeps its connect-time resolution: the picture
@@ -1023,7 +1058,7 @@ export function CadViewport({
         ref={hostRef}
         className="absolute inset-0 [&_video]:h-full [&_video]:w-full [&_video]:object-contain"
       />
-      {chrome && scenery ? <CoordinatePlaneOverlay view={activeView} /> : null}
+      {chrome && scenery ? <CoordinatePlaneOverlay orientation={cameraOrientation} /> : null}
       {hoverLabel && !headless ? (
         <div
           className="pointer-events-none absolute z-40 -translate-x-1/2 -translate-y-[calc(100%+10px)] rounded-none border bg-card/95 px-2 py-1 font-mono text-[11px] font-medium shadow-lg backdrop-blur-md"
@@ -1145,7 +1180,12 @@ export function CadViewport({
             </div>
           </div>
 
-          <ViewCube active={activeView} disabled={!ready} onSelect={(v) => void applyView(v)} />
+          <ViewCube
+            active={activeView}
+            orientation={cameraOrientation}
+            disabled={!ready}
+            onSelect={(v) => void applyView(v)}
+          />
 
           <div className="bg-card/90 text-muted-foreground pointer-events-none absolute top-3 left-40 z-20 hidden flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-2.5 py-1.5 text-[11px] shadow backdrop-blur-md lg:flex">
             <span className="text-foreground/85 font-medium">Zoo · mm · Z-up</span>

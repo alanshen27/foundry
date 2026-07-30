@@ -41,6 +41,7 @@ describe("CAD controls accessibility", () => {
       createElement(CadTransformGizmo, {
         target: "body",
         canEdit: true,
+        orientation: { yawDeg: -35, pitchDeg: 28 },
         onTranslate: vi.fn(),
         onRotate: vi.fn(),
       }),

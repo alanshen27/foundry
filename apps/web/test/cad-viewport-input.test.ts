@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { dragInteractionFor, toStreamPoint, wheelZoomMagnitude } from "@/lib/cad/viewport-input";
+import {
+  cameraOrientationAfterDrag,
+  dragInteractionFor,
+  orientationForView,
+  projectCadAxis,
+  toStreamPoint,
+  wheelZoomMagnitude,
+} from "@/lib/cad/viewport-input";
 
 const NO_MODS = { shift: false, alt: false, ctrl: false, meta: false };
 
@@ -50,6 +57,31 @@ describe("wheelZoomMagnitude", () => {
   it("clamps a flung wheel", () => {
     expect(wheelZoomMagnitude({ deltaY: -100000, deltaMode: 0, ctrlKey: false })).toBe(120);
     expect(wheelZoomMagnitude({ deltaY: 100000, deltaMode: 0, ctrlKey: false })).toBe(-120);
+  });
+});
+
+describe("camera-linked overlays", () => {
+  it("maps standard views to stable orientations", () => {
+    expect(orientationForView("front")).toEqual({ yawDeg: 0, pitchDeg: 0 });
+    expect(orientationForView("right")).toEqual({ yawDeg: 90, pitchDeg: 0 });
+    expect(orientationForView("top")).toEqual({ yawDeg: 0, pitchDeg: 90 });
+  });
+
+  it("updates orientation for orbit drags but not pans", () => {
+    const initial = orientationForView("iso");
+    expect(cameraOrientationAfterDrag(initial, "pan", 40, 20)).toBe(initial);
+    expect(cameraOrientationAfterDrag(initial, "rotate", 40, 20)).toEqual({
+      yawDeg: -21,
+      pitchDeg: 35,
+    });
+  });
+
+  it("projects axes differently as the camera turns", () => {
+    const frontX = projectCadAxis("X", orientationForView("front"));
+    const rightX = projectCadAxis("X", orientationForView("right"));
+    expect(frontX.angleDeg).toBeCloseTo(0);
+    expect(frontX.scale).toBe(1);
+    expect(rightX.scale).toBeLessThan(frontX.scale);
   });
 });
 

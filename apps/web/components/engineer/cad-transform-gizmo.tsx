@@ -2,6 +2,7 @@
 
 import { useRef, useState, type ButtonHTMLAttributes, type PointerEvent } from "react";
 import { RotateCw } from "lucide-react";
+import { projectCadAxis, type CameraOrientation } from "@/lib/cad/viewport-input";
 import { cn } from "@/lib/utils";
 
 type Axis = "X" | "Y" | "Z";
@@ -21,11 +22,13 @@ function projectedPixels(axis: Axis, dx: number, dy: number): number {
 export function CadTransformGizmo({
   target,
   canEdit,
+  orientation,
   onTranslate,
   onRotate,
 }: {
   target: string;
   canEdit: boolean;
+  orientation: CameraOrientation;
   onTranslate: (axis: Axis, distanceMm: number) => void;
   onRotate: (axis: Axis, degrees: number) => void;
 }) {
@@ -33,6 +36,11 @@ export function CadTransformGizmo({
   const previewRef = useRef(0);
   const [dragAxis, setDragAxis] = useState<Axis | null>(null);
   const [previewMm, setPreviewMm] = useState(0);
+  const projected = {
+    X: projectCadAxis("X", orientation),
+    Y: projectCadAxis("Y", orientation),
+    Z: projectCadAxis("Z", orientation),
+  };
 
   const start = (axis: Axis, event: PointerEvent<HTMLButtonElement>) => {
     if (!canEdit) return;
@@ -80,7 +88,11 @@ export function CadTransformGizmo({
         <div className="bg-card/75 border-foreground/30 absolute -top-3 -left-3 size-6 rounded-full border shadow-md backdrop-blur-sm" />
         <AxisHandle
           axis="X"
-          className="left-2 top-[-4px] w-24 origin-left"
+          className="top-[-4px] left-1 origin-left"
+          style={{
+            width: `${96 * projected.X.scale}px`,
+            transform: `rotate(${projected.X.angleDeg}deg)`,
+          }}
           disabled={!canEdit}
           active={dragAxis === "X"}
           onPointerDown={(event) => start("X", event)}
@@ -90,7 +102,11 @@ export function CadTransformGizmo({
         />
         <AxisHandle
           axis="Z"
-          className="-top-24 left-[-4px] w-24 origin-left -rotate-90"
+          className="top-[-4px] left-1 origin-left"
+          style={{
+            width: `${96 * projected.Z.scale}px`,
+            transform: `rotate(${projected.Z.angleDeg}deg)`,
+          }}
           disabled={!canEdit}
           active={dragAxis === "Z"}
           onPointerDown={(event) => start("Z", event)}
@@ -100,7 +116,11 @@ export function CadTransformGizmo({
         />
         <AxisHandle
           axis="Y"
-          className="top-1 left-1 w-20 origin-left rotate-[135deg]"
+          className="top-[-4px] left-1 origin-left"
+          style={{
+            width: `${88 * projected.Y.scale}px`,
+            transform: `rotate(${projected.Y.angleDeg}deg)`,
+          }}
           disabled={!canEdit}
           active={dragAxis === "Y"}
           onPointerDown={(event) => start("Y", event)}

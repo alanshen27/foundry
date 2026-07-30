@@ -12,6 +12,9 @@ import type { ModelingCmd } from "@kittycad/lib";
 export type NavTool = "orbit" | "select";
 export type DragInteraction = "pan" | "rotate" | "rotatetrackball" | "zoom";
 export type ObjectFit = "cover" | "contain";
+export type CameraOrientation = { yawDeg: number; pitchDeg: number };
+export type CameraViewId = "iso" | "front" | "back" | "left" | "right" | "top" | "bottom";
+export type ProjectedCadAxis = { angleDeg: number; scale: number };
 
 export type Modifiers = { shift: boolean; alt: boolean; ctrl: boolean; meta: boolean };
 type Box = { width: number; height: number };
@@ -27,9 +30,65 @@ const WHEEL_GAIN = 0.5;
 const PINCH_GAIN = 2.5;
 /** Ceiling per frame so a flung wheel can't launch the camera into the void. */
 const MAX_ZOOM_STEP = 120;
+const ORBIT_DEGREES_PER_PIXEL = 0.35;
 
 /** Zoom applied by the toolbar +/- buttons, matched to one wheel notch. */
 export const ZOOM_BUTTON_STEP = 50;
+
+export function orientationForView(view: CameraViewId): CameraOrientation {
+  switch (view) {
+    case "front":
+      return { yawDeg: 0, pitchDeg: 0 };
+    case "back":
+      return { yawDeg: 180, pitchDeg: 0 };
+    case "right":
+      return { yawDeg: 90, pitchDeg: 0 };
+    case "left":
+      return { yawDeg: -90, pitchDeg: 0 };
+    case "top":
+      return { yawDeg: 0, pitchDeg: 90 };
+    case "bottom":
+      return { yawDeg: 0, pitchDeg: -90 };
+    case "iso":
+      return { yawDeg: -35, pitchDeg: 28 };
+  }
+}
+
+/** Keep CSS camera-linked guides synchronized with an engine orbit drag. */
+export function cameraOrientationAfterDrag(
+  current: CameraOrientation,
+  interaction: DragInteraction,
+  deltaX: number,
+  deltaY: number,
+): CameraOrientation {
+  if (interaction !== "rotate" && interaction !== "rotatetrackball") return current;
+  const yawDeg = ((current.yawDeg + deltaX * ORBIT_DEGREES_PER_PIXEL + 180) % 360) - 180;
+  const pitchDeg = Math.max(-89, Math.min(89, current.pitchDeg + deltaY * ORBIT_DEGREES_PER_PIXEL));
+  return { yawDeg, pitchDeg };
+}
+
+/**
+ * Project a world X/Y/Z axis into viewport space. This keeps the move gizmo
+ * visually aligned with the camera while the engine view orbits.
+ */
+export function projectCadAxis(
+  axis: "X" | "Y" | "Z",
+  orientation: CameraOrientation,
+): ProjectedCadAxis {
+  const yaw = (orientation.yawDeg * Math.PI) / 180;
+  const pitch = (orientation.pitchDeg * Math.PI) / 180;
+  const vector =
+    axis === "X"
+      ? { x: Math.cos(yaw), y: Math.sin(yaw) * Math.sin(pitch) }
+      : axis === "Y"
+        ? { x: -Math.sin(yaw), y: Math.cos(yaw) * Math.sin(pitch) }
+        : { x: 0, y: -Math.cos(pitch) };
+  const magnitude = Math.hypot(vector.x, vector.y);
+  return {
+    angleDeg: (Math.atan2(vector.y, vector.x) * 180) / Math.PI,
+    scale: Math.max(0.32, Math.min(1, magnitude)),
+  };
+}
 
 /**
  * Button + modifier to camera interaction. Keep in sync with the on-screen
@@ -94,6 +153,7 @@ export function attachViewportInput({
   getTool,
   getStreamSize,
   objectFit = "cover",
+  onCameraDrag,
 }: {
   video: HTMLVideoElement;
   /** Delivers a modeling command; should prefer the RTC data channel. */
@@ -107,6 +167,7 @@ export function attachViewportInput({
    */
   getStreamSize?: () => Box;
   objectFit?: ObjectFit;
+  onCameraDrag?: (interaction: DragInteraction, deltaX: number, deltaY: number) => void;
 }): ViewportInput {
   type Drag = {
     pointerId: number;
@@ -254,6 +315,11 @@ export function attachViewportInput({
           window: mapPoint(drag.offsetX, drag.offsetY),
         });
       }
+      const deltaX = e.clientX - drag.clientX;
+      const deltaY = e.clientY - drag.clientY;
+      drag.clientX = e.clientX;
+      drag.clientY = e.clientY;
+      onCameraDrag?.(drag.interaction, deltaX, deltaY);
       pendingMove = { ...eventPoint(e), dragging: true };
       schedule();
       return;

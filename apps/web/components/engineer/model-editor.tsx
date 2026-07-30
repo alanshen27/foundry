@@ -54,6 +54,7 @@ import {
 } from "@/lib/cad/features";
 import { parseCadParams, setCadParam, type CadParam } from "@/lib/cad/params";
 import { cadViewportInput } from "@/lib/cad/viewport-project";
+import { orientationForView, type CameraOrientation } from "@/lib/cad/viewport-input";
 import { CadViewport } from "@/components/engineer/cad-viewport";
 import { CadFeatureTimeline } from "@/components/engineer/cad-feature-timeline";
 import { CadImportDialog, type CadImportUnit } from "@/components/engineer/cad-import-dialog";
@@ -504,6 +505,9 @@ export function ModelEditor({
   const [showTree, setShowTree] = useState(true);
   const [showCode, setShowCode] = useState(false);
   const [showGizmo, setShowGizmo] = useState(true);
+  const [cameraOrientation, setCameraOrientation] = useState<CameraOrientation>(() =>
+    orientationForView("iso"),
+  );
   const [execError, setExecError] = useState<string | null>(null);
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -962,12 +966,14 @@ export function ModelEditor({
                 meshAssets={viewport.meshAssets}
                 foreignImportOnly={viewport.foreignImportOnly}
                 onError={setExecError}
+                onCameraOrientationChange={setCameraOrientation}
               />
             ) : null}
             {showGizmo && manipulatorTarget ? (
               <CadTransformGizmo
                 target={manipulatorTarget}
                 canEdit={editable}
+                orientation={cameraOrientation}
                 onTranslate={applyManipulatorTranslate}
                 onRotate={applyManipulatorRotate}
               />
