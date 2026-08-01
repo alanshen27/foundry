@@ -3,13 +3,13 @@
  * open as closable tabs (Chrome / Fusion style). `code` maps `?view=code` for
  * the process-footer Repository surface (not a document tab).
  */
-export type EngineerDocKind = "assembly" | "model" | "schematic" | "pcb" | "code";
+export type EngineerDocKind = "assembly" | "model" | "schematic" | "pcb" | "code" | "checks";
 
 export type EngineerDocTab =
   | { key: "assembly"; kind: "assembly"; label: string; pinned: true }
   | {
       key: string;
-      kind: "model" | "schematic" | "pcb" | "code";
+      kind: "model" | "schematic" | "pcb" | "code" | "checks";
       label: string;
       pinned?: false;
       /** CadDoc component id when kind === "model". */
@@ -43,6 +43,8 @@ export function labelForKind(kind: EngineerDocKind): string {
       return "PCB";
     case "code":
       return "Repository";
+    case "checks":
+      return "Checks";
   }
 }
 
@@ -64,6 +66,9 @@ export function tabFromViewParam(view: string | undefined, partId?: string | nul
   }
   if (view === "code") {
     return { key: "code", kind: "code", label: "Repository" };
+  }
+  if (view === "checks") {
+    return { key: "checks", kind: "checks", label: "Checks" };
   }
   // sourcing / design / missing → home
   return ASSEMBLY_TAB;

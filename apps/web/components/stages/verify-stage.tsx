@@ -48,6 +48,7 @@ export function VerifyStage({ projectId, branchId, canRun, canApprove, verifySta
   const approve = trpc.verify.approve.useMutation({ onSuccess: invalidate });
 
   const [title, setTitle] = useState("");
+  const [target, setTarget] = useState("");
   const [category, setCategory] = useState<(typeof CATEGORIES)[number]>("CROSS_DOMAIN");
   const [severity, setSeverity] = useState<(typeof SEVERITIES)[number]>("INFO");
   const [waivingId, setWaivingId] = useState<string | null>(null);
@@ -63,8 +64,20 @@ export function VerifyStage({ projectId, branchId, canRun, canApprove, verifySta
     e.preventDefault();
     if (!title.trim()) return;
     create.mutate(
-      { projectId, branchId, title: title.trim(), category, severity },
-      { onSuccess: () => setTitle("") },
+      {
+        projectId,
+        branchId,
+        title: title.trim(),
+        category,
+        severity,
+        targetPath: target.trim() || null,
+      },
+      {
+        onSuccess: () => {
+          setTitle("");
+          setTarget("");
+        },
+      },
     );
   }
 
@@ -173,6 +186,13 @@ export function VerifyStage({ projectId, branchId, canRun, canApprove, verifySta
                 className="min-w-60 flex-1"
                 aria-label="Check title"
               />
+              <Input
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+                placeholder="Target part/file (optional), e.g. parts/bracket.kcl"
+                className="min-w-52 flex-1 font-mono text-xs"
+                aria-label="Check target path"
+              />
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value as typeof category)}
@@ -224,6 +244,11 @@ export function VerifyStage({ projectId, branchId, canRun, canApprove, verifySta
                         <p className="text-muted-foreground text-sm">{c.detail}</p>
                       ) : null}
                       <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {c.targetPath ? (
+                          <span className="text-muted-foreground font-mono text-[11px]">
+                            {c.targetPath}
+                          </span>
+                        ) : null}
                         <StatusBadge status={c.category.replace("_", " ")} />
                         <StatusBadge status={c.severity} />
                         <StatusBadge status={c.status} />

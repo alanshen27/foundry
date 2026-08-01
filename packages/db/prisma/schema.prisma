@@ -636,6 +636,9 @@ model ValidationCheck {
   detail       String?
   status       ValidationStatus   @default(PENDING)
   severity     ValidationSeverity @default(INFO)
+  /// What the check is about: a repo-relative file or part path (e.g.
+  /// "parts/bracket.kcl"). Null means the check is project-wide.
+  targetPath   String?
   evidence     String?
   waived       Boolean            @default(false)
   waiverReason String?

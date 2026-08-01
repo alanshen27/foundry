@@ -64,6 +64,7 @@ export default async function StagePage({
     "code",
     "design",
     "assembly",
+    "checks",
   ] as const;
   const engineerView = engineerViews.includes(view as (typeof engineerViews)[number])
     ? (view as (typeof engineerViews)[number])

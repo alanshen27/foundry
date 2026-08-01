@@ -8,7 +8,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Boxes, CircuitBoard, Combine, Plus, Waypoints, X } from "lucide-react";
+import { Boxes, CircuitBoard, Combine, Plus, ShieldCheck, Waypoints, X } from "lucide-react";
 import {
   ASSEMBLY_TAB,
   labelForKind,
@@ -53,6 +53,14 @@ const PcbCanvas = dynamic(
   },
 );
 
+const ChecksPanel = dynamic(
+  () => import("@/components/engineer/checks-panel").then((m) => m.ChecksPanel),
+  {
+    ssr: false,
+    loading: () => <DotMatrixLoader className="absolute inset-0" label="Loading checks" />,
+  },
+);
+
 const CodeWorkspace = dynamic(
   () => import("@/components/engineer/code-workspace").then((m) => m.CodeWorkspace),
   {
@@ -63,7 +71,7 @@ const CodeWorkspace = dynamic(
 
 /** Views the stage page may still pass (legacy deep links). */
 export type EngineerView =
-  "sourcing" | "schematic" | "pcb" | "model" | "code" | "design" | "assembly";
+  "sourcing" | "schematic" | "pcb" | "model" | "code" | "design" | "assembly" | "checks";
 
 type Props = {
   projectId: string;
@@ -73,18 +81,20 @@ type Props = {
 };
 
 /** Windows the + menu can open inside Engineer (not Repository — that is a footer tab). */
-type OpenableKind = "model" | "schematic" | "pcb";
+type OpenableKind = "model" | "schematic" | "pcb" | "checks";
 
 const OPENABLE: { kind: OpenableKind; label: string; icon: typeof Boxes }[] = [
   { kind: "model", label: "CAD", icon: Boxes },
   { kind: "schematic", label: "Schematic", icon: Waypoints },
   { kind: "pcb", label: "PCB", icon: CircuitBoard },
+  { kind: "checks", label: "Checks", icon: ShieldCheck },
 ];
 
 function TabIcon({ kind }: { kind: Exclude<EngineerDocKind, "code"> }) {
   if (kind === "assembly") return <Combine className="size-3" strokeWidth={2} />;
   if (kind === "model") return <Boxes className="size-3" strokeWidth={2} />;
   if (kind === "pcb") return <CircuitBoard className="size-3" strokeWidth={2} />;
+  if (kind === "checks") return <ShieldCheck className="size-3" strokeWidth={2} />;
   return <Waypoints className="size-3" strokeWidth={2} />;
 }
 
@@ -335,7 +345,7 @@ function EngineerDocWorkspace({
         ) : null}
 
         {tabs
-          .filter((t) => t.kind === "pcb" || t.kind === "schematic")
+          .filter((t) => t.kind === "pcb" || t.kind === "schematic" || t.kind === "checks")
           .map((tab) => (
             <div
               key={tab.key}
@@ -350,6 +360,9 @@ function EngineerDocWorkspace({
               ) : null}
               {tab.kind === "schematic" ? (
                 <CircuitCanvas projectId={projectId} branchId={branchId} canEdit={canEdit} />
+              ) : null}
+              {tab.kind === "checks" ? (
+                <ChecksPanel projectId={projectId} branchId={branchId} />
               ) : null}
             </div>
           ))}

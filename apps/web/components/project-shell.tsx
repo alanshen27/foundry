@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { FoundryMark } from "@/components/foundry-mark";
 import { InteractiveDotField } from "@/components/interactive-dot-field";
 import { PresenceBar } from "@/components/presence-bar";
+import { ReleaseChip } from "@/components/release-drawer";
 import { ShareButton } from "@/components/share-button";
 import { SignalIconTile } from "@/components/signal-icons";
 import {
@@ -267,6 +268,7 @@ function ShellInner({
   workspaces,
   workspace,
   project,
+  branchId,
   branchName,
   stageStatuses,
   user,
@@ -308,6 +310,7 @@ function ShellInner({
           </span>
         </nav>
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          <ReleaseChip projectId={project.id} branchId={branchId} launchHref={`${base}/launch`} />
           <PresenceBar
             channel={`presence:project:${project.id}`}
             self={{ userId: user.id, name: user.name, avatarUrl: user.avatarUrl }}
