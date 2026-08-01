@@ -18,6 +18,10 @@ const mcpServerSchema = z.object({
 
 export const cadLabRequestSchema = z.discriminatedUnion("action", [
   z.object({
+    action: z.literal("zoo_prompt_render"),
+    prompt: z.string().trim().min(1),
+  }),
+  z.object({
     action: z.literal("zoo_text_to_cad"),
     prompt: z.string().trim().min(1),
   }),
@@ -53,7 +57,20 @@ export const cadLabRequestSchema = z.discriminatedUnion("action", [
 
 export type CadLabRequest = z.infer<typeof cadLabRequestSchema>;
 
+export type CadLabRender = {
+  ok: true;
+  kind: "render";
+  kcl: string;
+  id: string;
+  /** Data URIs: multiview collage + isometric collage (when available). */
+  images: string[];
+  executeOk: boolean;
+  executeMessage: string;
+  timings: { generateMs: number; executeMs: number; snapshotMs: number };
+};
+
 export type CadLabResponse =
+  | CadLabRender
   | { ok: true; kind: "kcl"; kcl: string; id: string }
   | { ok: true; kind: "text"; text: string }
   | { ok: true; kind: "json"; data: unknown }

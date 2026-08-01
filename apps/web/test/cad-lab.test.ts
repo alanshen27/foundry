@@ -16,6 +16,15 @@ describe("cadLabEnabled", () => {
 });
 
 describe("cadLabRequestSchema", () => {
+  it("accepts prompt-render requests", () => {
+    const parsed = cadLabRequestSchema.parse({
+      action: "zoo_prompt_render",
+      prompt: "a 10mm cube",
+    });
+    expect(parsed.action).toBe("zoo_prompt_render");
+    expect(cadLabRequestSchema.safeParse({ action: "zoo_prompt_render" }).success).toBe(false);
+  });
+
   it("accepts zoo text-to-CAD prompts", () => {
     const parsed = cadLabRequestSchema.parse({
       action: "zoo_text_to_cad",
