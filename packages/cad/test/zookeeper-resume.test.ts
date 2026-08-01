@@ -110,6 +110,57 @@ describe("zookeeperPrompt resume", () => {
     expect(resumed.sent).toEqual([{ type: "system", command: "continue" }]);
   });
 
+  it("narrates the turn so a caller can show progress instead of a spinner", async () => {
+    const notes: string[] = [];
+
+    const baseWsUrl = await serve((socket, _url, index) => {
+      if (index === 0) {
+        socket.send(JSON.stringify({ conversation_id: "conv-1" }));
+        socket.send(JSON.stringify({ reasoning: { content: "Sketching the profile." } }));
+        setTimeout(() => socket.terminate(), 10);
+        return;
+      }
+      socket.on("message", () =>
+        socket.send(
+          replayFrame([
+            { tool_output: { result: { outputs: { "main.kcl": "cube = 1\n" } } } },
+            { end_of_stream: { conversation_id: "conv-1", id: "prompt-1" } },
+          ]),
+        ),
+      );
+    });
+
+    const result = await zookeeperPrompt({
+      token: "t",
+      prompt: "a bracket",
+      currentFiles: { "main.kcl": "" },
+      baseWsUrl,
+      onProgress: (note) => notes.push(note),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(notes).toEqual([
+      "Sketching the profile.",
+      "Zoo dropped the connection — resuming the same turn (attempt 2/3)",
+      "Received 1 KCL file(s): main.kcl",
+    ]);
+  });
+
+  it("stops at the caller's deadline rather than holding the request open", async () => {
+    // A socket that connects and then says nothing at all.
+    const baseWsUrl = await serve(() => undefined);
+
+    const result = await zookeeperPrompt({
+      token: "t",
+      prompt: "a bracket",
+      currentFiles: { "main.kcl": "" },
+      baseWsUrl,
+      timeoutMs: 1_000,
+    });
+
+    expect(result).toEqual({ ok: false, error: "Zoo Zookeeper timed out after ~1s" });
+  });
+
   it("gives up without a conversation to rejoin, reporting the model's last words", async () => {
     const connections = vi.fn();
 

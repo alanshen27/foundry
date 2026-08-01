@@ -225,6 +225,8 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
           projectName: options?.projectName,
           forcedTools: ["text_to_cad"],
           signal: options?.signal,
+          timeoutMs: options?.timeoutMs,
+          onProgress: options?.onProgress,
         });
         if (!zk.ok) return zk;
         const kcl = pickMainKcl(zk.data.files);
@@ -253,6 +255,8 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
           projectName: options?.projectName,
           forcedTools: ["text_to_cad"],
           signal: options?.signal,
+          timeoutMs: options?.timeoutMs,
+          onProgress: options?.onProgress,
         });
         if (!zk.ok) return zk;
         const files = Object.fromEntries(
@@ -285,6 +289,8 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
           projectName: options?.projectName,
           forcedTools: ["edit_kcl_code"],
           signal: options?.signal,
+          timeoutMs: options?.timeoutMs,
+          onProgress: options?.onProgress,
         });
         if (!zk.ok) return zk;
         const next = pickMainKcl(zk.data.files);
@@ -327,6 +333,8 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
           projectName: options?.projectName,
           forcedTools: [...forcedTools],
           signal: options?.signal,
+          timeoutMs: options?.timeoutMs,
+          onProgress: options?.onProgress,
         });
         if (!zk.ok) return zk;
         if (Object.keys(zk.data.files).length === 0) {

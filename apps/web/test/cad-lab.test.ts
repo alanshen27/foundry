@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { cadLabEnabled, cadLabRequestSchema } from "@/lib/cad-lab";
+import {
+  CAD_LAB_DEFAULT_TIMEOUT_MS,
+  cadLabEnabled,
+  cadLabRequestSchema,
+  cadLabTimeoutMs,
+  parseEventLines,
+} from "@/lib/cad-lab";
 
 describe("cadLabEnabled", () => {
   it("is enabled outside production", () => {
@@ -12,6 +18,36 @@ describe("cadLabEnabled", () => {
     expect(cadLabEnabled({ NODE_ENV: "production", CAD_LAB_ENABLED: "1" })).toBe(true);
     expect(cadLabEnabled({ NODE_ENV: "production", CAD_LAB_ENABLED: "true" })).toBe(true);
     expect(cadLabEnabled({ NODE_ENV: "production", CAD_LAB_ENABLED: "0" })).toBe(false);
+  });
+});
+
+describe("cadLabTimeoutMs", () => {
+  it("falls back to the default when unset or unusable", () => {
+    expect(cadLabTimeoutMs(undefined)).toBe(CAD_LAB_DEFAULT_TIMEOUT_MS);
+    expect(cadLabTimeoutMs("soon")).toBe(CAD_LAB_DEFAULT_TIMEOUT_MS);
+    expect(cadLabTimeoutMs("0")).toBe(CAD_LAB_DEFAULT_TIMEOUT_MS);
+  });
+
+  it("clamps to a range that always answers", () => {
+    expect(cadLabTimeoutMs("120000")).toBe(120_000);
+    expect(cadLabTimeoutMs("1000")).toBe(30_000);
+    expect(cadLabTimeoutMs("9999999999")).toBe(30 * 60_000);
+  });
+});
+
+describe("parseEventLines", () => {
+  it("keeps a partial trailing line for the next chunk", () => {
+    const first = parseEventLines('{"type":"phase","phase":"generate"}\n{"type":"no');
+    expect(first.events).toEqual([{ type: "phase", phase: "generate" }]);
+
+    const second = parseEventLines(`${first.rest}te","text":"thinking"}\n`);
+    expect(second.events).toEqual([{ type: "note", text: "thinking" }]);
+    expect(second.rest).toBe("");
+  });
+
+  it("skips malformed lines so a run can still deliver its result", () => {
+    const { events } = parseEventLines('not json\n\n{"type":"tick","elapsedMs":5000}\n');
+    expect(events).toEqual([{ type: "tick", elapsedMs: 5000 }]);
   });
 });
 

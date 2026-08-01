@@ -2,6 +2,12 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CadBoundingBox, CadResult } from "./port";
 
+/**
+ * Engine calls are seconds; the first `uvx zoo-mcp` of a machine also pays a
+ * Python cold start. Anything past this is hung, not slow.
+ */
+const DEFAULT_MCP_TIMEOUT_MS = 180_000;
+
 export type ZooMcpOptions = {
   token: string;
   /** Override spawn command (default: uvx zoo-mcp). */
@@ -9,6 +15,10 @@ export type ZooMcpOptions = {
   args?: string[];
   /** Extra environment for the spawned MCP server. */
   env?: Record<string, string>;
+  /** Per-request ceiling, spawn/handshake included (default 180s). */
+  timeoutMs?: number;
+  /** Abandon in-flight tool calls (caller deadline / client disconnect). */
+  signal?: AbortSignal;
 };
 
 export type McpToolInfo = {
@@ -45,12 +55,21 @@ export class ZooMcpClient {
   private readonly command: string;
   private readonly args: string[];
   private readonly extraEnv: Record<string, string>;
+  private readonly timeoutMs: number;
+  private readonly signal?: AbortSignal;
 
   constructor(opts: ZooMcpOptions) {
     this.token = opts.token.trim();
     this.command = opts.command ?? "uvx";
     this.args = opts.args ?? ["zoo-mcp"];
     this.extraEnv = opts.env ?? {};
+    this.timeoutMs = opts.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS;
+    this.signal = opts.signal;
+  }
+
+  /** Bound every MCP request so a wedged server can't hold a caller open. */
+  private requestOptions(): { timeout: number; signal?: AbortSignal } {
+    return { timeout: this.timeoutMs, ...(this.signal ? { signal: this.signal } : {}) };
   }
 
   async close(): Promise<void> {
@@ -74,7 +93,7 @@ export class ZooMcpClient {
         },
       });
       const client = new Client({ name: "foundry-zoo-mcp", version: "0.1.0" });
-      await client.connect(transport);
+      await client.connect(transport, this.requestOptions());
       this.client = client;
       return client;
     })();
@@ -88,7 +107,11 @@ export class ZooMcpClient {
 
   private async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
     const client = await this.ensure();
-    const result = (await client.callTool({ name, arguments: args })) as McpToolResult;
+    const result = (await client.callTool(
+      { name, arguments: args },
+      undefined,
+      this.requestOptions(),
+    )) as McpToolResult;
     return result;
   }
 
@@ -120,7 +143,7 @@ export class ZooMcpClient {
   async listTools(): Promise<CadResult<McpToolInfo[]>> {
     try {
       const client = await this.ensure();
-      const result = await client.listTools();
+      const result = await client.listTools(undefined, this.requestOptions());
       const tools = (result.tools ?? []).map((tool) => ({
         name: tool.name,
         description: tool.description,

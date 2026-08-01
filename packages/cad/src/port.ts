@@ -101,6 +101,17 @@ export type CadGenOptions = {
   /** Cancel Zoo polling early (chat stop / run cancel). */
   signal?: AbortSignal;
   /**
+   * Hard ceiling for the whole turn. Zoo generations run for minutes, so a
+   * caller holding a request open needs its own bound rather than the
+   * adapter's default.
+   */
+  timeoutMs?: number;
+  /**
+   * Narration of a long generation (model reasoning, reconnects). Lets a
+   * caller show what Zoo is doing instead of an unbounded spinner.
+   */
+  onProgress?: (note: string) => void;
+  /**
    * Resume or fetch an existing Zoo text-to-CAD operation instead of creating
    * a new one (e.g. after timeout, worker restart, or cancel once Zoo finished).
    */
