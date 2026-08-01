@@ -13,6 +13,8 @@
  */
 
 import { decode as msgpackDecode } from "@msgpack/msgpack";
+// Must precede the `ws` import: it picks its frame masker at load time.
+import "./ws-masking";
 import WebSocket from "ws";
 import type { CadResult } from "./port";
 
@@ -103,14 +105,78 @@ function stringMap(raw: Record<string, unknown>): Record<string, string> {
 /** Longest prefix of the copilot's own narration worth surfacing to a user. */
 const NARRATION_LIMIT = 240;
 
-/** Text of a `reasoning` frame, if this message is one. */
+function flatten(value: unknown, limit = NARRATION_LIMIT): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim().replace(/\s+/g, " ");
+  if (!text) return null;
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+/**
+ * One-line summary of a `reasoning` frame, if this message is one.
+ *
+ * `ReasoningMessage` is a union discriminated on `type` (Zoo OpenAPI; typed in
+ * `@kittycad/lib`). Only the prose variants carry `content` — a design plan
+ * carries `steps`, a KCL error carries `error`, file events carry `file_name` —
+ * so reading `content` alone drops the frames that actually say what the turn
+ * is doing. Reference-dump variants (docs, examples, feature tree) are reported
+ * as a label instead of their payload, which runs to pages.
+ */
 export function reasoningText(msg: ServerMessage): string | null {
   const reasoning = msg.reasoning;
   if (!reasoning || typeof reasoning !== "object") return null;
-  const content = (reasoning as { content?: unknown }).content;
-  if (typeof content !== "string") return null;
-  const trimmed = content.trim().replace(/\s+/g, " ");
-  return trimmed.length > 0 ? trimmed : null;
+  const frame = reasoning as Record<string, unknown>;
+
+  switch (frame.type) {
+    case "design_plan": {
+      const steps = Array.isArray(frame.steps) ? (frame.steps as Record<string, unknown>[]) : [];
+      if (steps.length === 0) return "Planning the model";
+      const first = flatten(steps[0]?.edit_instructions, 120);
+      const file = flatten(steps[0]?.filepath_to_edit, 60);
+      return `Plan (${steps.length} step${steps.length === 1 ? "" : "s"})${
+        file ? ` · ${file}` : ""
+      }${first ? `: ${first}` : ""}`;
+    }
+    case "generated_kcl_code": {
+      const code = typeof frame.code === "string" ? frame.code : "";
+      return `Generated ${code.split("\n").length} lines of KCL`;
+    }
+    case "kcl_code_error":
+      return `KCL error — ${flatten(frame.error) ?? "unspecified"}`;
+    case "created_kcl_file":
+    case "created_project_file":
+      return `Created ${flatten(frame.file_name, 80) ?? "a file"}`;
+    case "updated_kcl_file":
+    case "updated_project_file":
+      return `Updated ${flatten(frame.file_name, 80) ?? "a file"}`;
+    case "deleted_kcl_file":
+    case "deleted_project_file":
+      return `Deleted ${flatten(frame.file_name, 80) ?? "a file"}`;
+    case "kcl_docs":
+      return "Consulting KCL documentation";
+    case "kcl_code_examples":
+      return "Reviewing KCL examples";
+    case "feature_tree_outline":
+      return "Reading the feature tree";
+    default:
+      // `text`, `markdown`, and any variant Zoo adds later.
+      return flatten(frame.content);
+  }
+}
+
+/** Summary of a `tool_output` frame — the per-tool verdict, error included. */
+export function toolResultText(msg: ServerMessage): string | null {
+  const output = msg.tool_output;
+  if (!output || typeof output !== "object") return null;
+  const result = (output as { result?: unknown }).result;
+  if (!result || typeof result !== "object") return null;
+  const { type, error, status_code: status } = result as Record<string, unknown>;
+  const tool = flatten(type, 60);
+  const detail = flatten(error);
+  if (detail) return `${tool ?? "Tool"} failed: ${detail}`;
+  // An untyped result says nothing the file list doesn't already say.
+  if (!tool) return null;
+  return `${tool} finished${typeof status === "number" && status >= 400 ? ` (status ${status})` : ""}`;
 }
 
 /**
@@ -274,7 +340,21 @@ export function applyMessage(
     return null;
   }
 
+  if ("info" in msg) {
+    const text = flatten((msg.info as { text?: unknown } | undefined)?.text);
+    if (text) {
+      state.narration = text;
+      onProgress?.(text);
+    }
+    return null;
+  }
+
   if ("project_updated" in msg || "tool_output" in msg) {
+    const verdict = toolResultText(msg);
+    if (verdict) {
+      state.narration = verdict;
+      onProgress?.(verdict);
+    }
     const files = extractKclOutputs(msg);
     if (files) {
       state.files = files;

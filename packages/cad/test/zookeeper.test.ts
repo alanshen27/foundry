@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { closeFailureMessage, extractKclOutputs, reasoningText } from "../src/zookeeper";
+import {
+  closeFailureMessage,
+  extractKclOutputs,
+  reasoningText,
+  toolResultText,
+} from "../src/zookeeper";
 
 describe("extractKclOutputs", () => {
   it("reads MlToolResult.outputs", () => {
@@ -41,6 +46,54 @@ describe("reasoningText", () => {
   it("ignores non-reasoning and blank frames", () => {
     expect(reasoningText({ delta: { delta: "x" } })).toBeNull();
     expect(reasoningText({ reasoning: { content: "  " } })).toBeNull();
+  });
+
+  it("summarizes the typed variants that carry no content", () => {
+    expect(
+      reasoningText({
+        reasoning: {
+          type: "design_plan",
+          steps: [
+            { filepath_to_edit: "main.kcl", edit_instructions: "Extrude the base plate" },
+            { filepath_to_edit: "lid.kcl", edit_instructions: "Add the lid" },
+          ],
+        },
+      }),
+    ).toBe("Plan (2 steps) · main.kcl: Extrude the base plate");
+    expect(reasoningText({ reasoning: { type: "generated_kcl_code", code: "a\nb\nc" } })).toBe(
+      "Generated 3 lines of KCL",
+    );
+    expect(
+      reasoningText({ reasoning: { type: "kcl_code_error", error: "unknown fn `sweep`" } }),
+    ).toBe("KCL error — unknown fn `sweep`");
+    expect(
+      reasoningText({
+        reasoning: { type: "updated_kcl_file", file_name: "main.kcl", content: "…" },
+      }),
+    ).toBe("Updated main.kcl");
+  });
+
+  it("labels reference dumps instead of echoing pages of docs", () => {
+    expect(reasoningText({ reasoning: { type: "kcl_docs", content: "x".repeat(20_000) } })).toBe(
+      "Consulting KCL documentation",
+    );
+  });
+});
+
+describe("toolResultText", () => {
+  it("reports the tool verdict and surfaces its error", () => {
+    expect(
+      toolResultText({ tool_output: { result: { type: "text_to_cad", status_code: 200 } } }),
+    ).toBe("text_to_cad finished");
+    expect(
+      toolResultText({
+        tool_output: { result: { type: "edit_kcl_code", status_code: 400, error: "bad range" } },
+      }),
+    ).toBe("edit_kcl_code failed: bad range");
+  });
+
+  it("ignores frames that aren't tool output", () => {
+    expect(toolResultText({ reasoning: { type: "text", content: "hi" } })).toBeNull();
   });
 });
 
