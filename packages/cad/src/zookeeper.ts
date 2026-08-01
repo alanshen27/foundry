@@ -12,12 +12,18 @@
  * @see https://zoo.dev/docs/developer-tools/api/ml/open-a-websocket-to-prompt-the-ml-copilot
  */
 
+import { decode as msgpackDecode } from "@msgpack/msgpack";
 import WebSocket from "ws";
 import type { CadResult } from "./port";
 
 /** SDK path (`/ws/ml/copilot`). Docs also mention `/ws/ml/zookeeper` — that 404s today. */
 const DEFAULT_WS_URL = "wss://api.zoo.dev/ws/ml/copilot";
 const DEFAULT_TIMEOUT_MS = 15 * 60_000;
+/** Keepalive cadence and silence budget, matching Zoo's own copilot client. */
+const HEARTBEAT_INTERVAL_MS = 4_000;
+const HEARTBEAT_TIMEOUT_MS = 30_000;
+/** Sockets per turn: the first attempt plus two resumes. */
+const MAX_ATTEMPTS = 3;
 
 export type ZookeeperPromptOptions = {
   token: string;
@@ -142,8 +148,251 @@ function errorDetail(msg: ServerMessage): string {
     : "The CAD generation service could not complete the request.";
 }
 
+/** Everything one turn accumulates; survives reconnects within that turn. */
+type TurnState = {
+  conversationId: string;
+  promptId?: string;
+  files: Record<string, string> | null;
+  narration: string | null;
+};
+
+/**
+ * A single socket either settles the turn or loses the connection under it.
+ * Only `dropped` is retryable — a service `error` frame is a real answer.
+ */
+type AttemptOutcome =
+  | { kind: "settled"; result: CadResult<ZookeeperPromptResult> }
+  | { kind: "dropped"; detail: string };
+
+function turnResult(state: TurnState): CadResult<ZookeeperPromptResult> {
+  if (!state.files || Object.keys(state.files).length === 0) {
+    return {
+      ok: false,
+      error: withNarration("Zoo Zookeeper finished without KCL file outputs", state.narration),
+    };
+  }
+  return {
+    ok: true,
+    data: {
+      files: state.files,
+      conversationId: state.conversationId || state.promptId || "zookeeper",
+      promptId: state.promptId,
+    },
+  };
+}
+
+/** Coerce a MsgPack `bin` element to bytes (decoders differ on the shape). */
+function toBytes(value: unknown): Uint8Array | null {
+  if (value instanceof Uint8Array) return value;
+  if (Array.isArray(value)) return Uint8Array.from(value as number[]);
+  if (value && typeof value === "object") {
+    return Uint8Array.from(Object.values(value) as number[]);
+  }
+  return null;
+}
+
+/**
+ * Server frames carried by one WebSocket message.
+ *
+ * Live traffic is one JSON frame. A resumed socket (`?replay=true`) first gets
+ * a single MsgPack binary frame holding every persisted message of the
+ * conversation, which we flatten so the turn can be rebuilt from it.
+ */
+export function decodeFrames(data: unknown, isBinary: boolean): ServerMessage[] {
+  if (!isBinary) {
+    const raw = typeof data === "string" ? data : Buffer.from(data as Buffer).toString("utf8");
+    return [JSON.parse(raw) as ServerMessage];
+  }
+
+  const decoded = msgpackDecode(Buffer.from(data as Buffer)) as unknown;
+  if (!decoded || typeof decoded !== "object") return [];
+  const replay = (decoded as { replay?: { messages?: unknown[] } }).replay;
+  if (!replay?.messages) return [decoded as ServerMessage];
+
+  const frames: ServerMessage[] = [];
+  for (const element of replay.messages) {
+    const bytes = toBytes(element);
+    if (!bytes) continue;
+    try {
+      frames.push(JSON.parse(new TextDecoder().decode(bytes)) as ServerMessage);
+    } catch {
+      // A replay entry we can't read shouldn't sink the whole recovery.
+    }
+  }
+  console.log(`[zookeeper] replayed ${frames.length} messages`);
+  return frames;
+}
+
+/** Fold one server frame into the turn; non-null means the turn is over. */
+export function applyMessage(msg: ServerMessage, state: TurnState): AttemptOutcome | null {
+  if ("conversation_id" in msg) {
+    const block = msg.conversation_id;
+    if (typeof block === "string") state.conversationId = block;
+    else if (block && typeof block === "object" && "conversation_id" in block) {
+      state.conversationId = String((block as { conversation_id?: unknown }).conversation_id ?? "");
+    }
+    if (state.conversationId) console.log(`[zookeeper] conversation=${state.conversationId}`);
+    return null;
+  }
+
+  if ("backend_shutdown" in msg) {
+    const shutdown = msg.backend_shutdown;
+    const reason =
+      shutdown && typeof shutdown === "object"
+        ? ((shutdown as { reason?: unknown }).reason ?? "")
+        : "";
+    return {
+      kind: "dropped",
+      detail: `Zoo Zookeeper backend is restarting${reason ? `: ${String(reason)}` : ""}`,
+    };
+  }
+
+  if ("error" in msg) {
+    return { kind: "settled", result: { ok: false, error: errorDetail(msg) } };
+  }
+
+  const reasoning = reasoningText(msg);
+  if (reasoning) {
+    state.narration = reasoning;
+    return null;
+  }
+
+  if ("project_updated" in msg || "tool_output" in msg) {
+    const files = extractKclOutputs(msg);
+    if (files) {
+      state.files = files;
+      console.log(`[zookeeper] got files=${Object.keys(files).join(",")}`);
+    }
+    return null;
+  }
+
+  if ("end_of_stream" in msg) {
+    const eos = msg.end_of_stream;
+    if (eos && typeof eos === "object") {
+      const e = eos as { conversation_id?: string; id?: string };
+      if (e.conversation_id) state.conversationId = e.conversation_id;
+      if (e.id) state.promptId = String(e.id);
+    }
+    return { kind: "settled", result: turnResult(state) };
+  }
+
+  return null;
+}
+
+/** One WebSocket connection's worth of the turn. */
+function runAttempt(args: {
+  wsUrl: string;
+  token: string;
+  /** Sent once the socket opens: the user turn, or `continue` when resuming. */
+  open: Record<string, unknown>;
+  resume: boolean;
+  state: TurnState;
+  signal?: AbortSignal;
+  budgetMs: number;
+  totalMs: number;
+}): Promise<AttemptOutcome> {
+  const { state } = args;
+  const url = args.resume
+    ? `${args.wsUrl}?conversation_id=${encodeURIComponent(state.conversationId)}&replay=true`
+    : args.wsUrl;
+
+  return new Promise<AttemptOutcome>((resolve) => {
+    let settled = false;
+    let lastFrameAt = Date.now();
+
+    const ws = new WebSocket(url, {
+      headers: {
+        Authorization: `Bearer ${args.token}`,
+        "User-Agent": "foundry-zookeeper/0.1",
+      },
+    });
+
+    const finish = (outcome: AttemptOutcome) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(budgetTimer);
+      clearInterval(heartbeat);
+      args.signal?.removeEventListener("abort", onAbort);
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
+      resolve(outcome);
+    };
+
+    const onAbort = () =>
+      finish({ kind: "settled", result: { ok: false, error: "CAD generation cancelled" } });
+
+    const budgetTimer = setTimeout(() => {
+      finish({
+        kind: "settled",
+        result: {
+          ok: false,
+          error: `Zoo Zookeeper timed out after ~${Math.round(args.totalMs / 1000)}s`,
+        },
+      });
+    }, args.budgetMs);
+
+    // Zoo hangs up on a socket it thinks is idle, and a half-open one otherwise
+    // stays "connected" for the whole turn budget.
+    const heartbeat = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      if (Date.now() - lastFrameAt >= HEARTBEAT_TIMEOUT_MS) {
+        finish({ kind: "dropped", detail: "Zoo Zookeeper stopped responding" });
+        return;
+      }
+      ws.send(JSON.stringify({ type: "ping" }));
+    }, HEARTBEAT_INTERVAL_MS);
+
+    args.signal?.addEventListener("abort", onAbort, { once: true });
+
+    ws.on("open", () => {
+      ws.send(JSON.stringify(args.open));
+    });
+
+    ws.on("message", (data, isBinary) => {
+      lastFrameAt = Date.now();
+      let frames: ServerMessage[];
+      try {
+        frames = decodeFrames(data, isBinary);
+      } catch {
+        console.warn("[zookeeper] ignored an invalid service message");
+        return;
+      }
+      for (const frame of frames) {
+        const outcome = applyMessage(frame, state);
+        if (outcome) {
+          finish(outcome);
+          return;
+        }
+      }
+    });
+
+    ws.on("error", () => {
+      finish({ kind: "dropped", detail: "The CAD generation service connection failed." });
+    });
+
+    ws.on("close", (code: number, reasonBuf: Buffer) => {
+      finish({
+        kind: "dropped",
+        detail: closeFailureMessage({
+          code,
+          reason: reasonBuf?.toString("utf8") ?? "",
+          hadFiles: state.files !== null,
+          narration: state.narration,
+        }),
+      });
+    });
+  });
+}
+
 /**
  * Run one Zookeeper prompt turn and collect the latest project file map.
+ *
+ * Zoo drops long-running sockets often enough that a single connection loses
+ * whole multi-minute generations, so a dropped turn is resumed rather than
+ * regenerated: reconnect with `?conversation_id=…&replay=true` (the server
+ * replays what it already produced) and send `system: continue` to pick the
+ * turn back up.
  */
 export async function zookeeperPrompt(
   opts: ZookeeperPromptOptions,
@@ -154,6 +403,7 @@ export async function zookeeperPrompt(
 
   const wsUrl = (opts.baseWsUrl ?? DEFAULT_WS_URL).replace(/^http/, "ws");
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
 
   const request = {
     type: "user" as const,
@@ -169,150 +419,55 @@ export async function zookeeperPrompt(
     }`,
   );
 
-  let conversationId = "";
-  let promptId: string | undefined;
-  let latestFiles: Record<string, string> | null = null;
-  let sawEnd = false;
-  let narration: string | null = null;
+  const state: TurnState = { conversationId: "", files: null, narration: null };
+  let drop = "Zoo Zookeeper closed without outputs";
 
-  return new Promise<CadResult<ZookeeperPromptResult>>((resolve) => {
-    let settled = false;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    if (opts.signal?.aborted) return { ok: false, error: "CAD generation cancelled" };
+    const budgetMs = deadline - Date.now();
+    if (budgetMs <= 0) {
+      return {
+        ok: false,
+        error: `Zoo Zookeeper timed out after ~${Math.round(timeoutMs / 1000)}s`,
+      };
+    }
 
-    const ws = new WebSocket(wsUrl, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "User-Agent": "foundry-zookeeper/0.1",
-      },
+    const resume = attempt > 0;
+    if (resume) {
+      console.warn(
+        `[zookeeper] ${drop} — resuming conversation=${state.conversationId} (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
+      );
+    }
+
+    const outcome = await runAttempt({
+      wsUrl,
+      token,
+      resume,
+      state,
+      signal: opts.signal,
+      budgetMs,
+      totalMs: timeoutMs,
+      open: resume ? { type: "system", command: "continue" } : request,
     });
 
-    const finish = (result: CadResult<ZookeeperPromptResult>) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      opts.signal?.removeEventListener("abort", onAbort);
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-        ws.close();
-      }
-      if (result.ok) {
+    if (outcome.kind === "settled") {
+      if (outcome.result.ok) {
         console.log(
-          `[zookeeper] ok conversation=${result.data.conversationId} files=${Object.keys(result.data.files).length}`,
+          `[zookeeper] ok conversation=${outcome.result.data.conversationId} files=${
+            Object.keys(outcome.result.data.files).length
+          }`,
         );
       } else {
         console.warn("[zookeeper] request failed");
       }
-      resolve(result);
-    };
+      return outcome.result;
+    }
 
-    const onAbort = () => {
-      finish({ ok: false, error: "CAD generation cancelled" });
-    };
+    drop = outcome.detail;
+    // Resuming replays a conversation; without an id there is nothing to rejoin.
+    if (!state.conversationId) break;
+  }
 
-    const timer = setTimeout(() => {
-      finish({
-        ok: false,
-        error: `Zoo Zookeeper timed out after ~${Math.round(timeoutMs / 1000)}s`,
-      });
-    }, timeoutMs);
-
-    opts.signal?.addEventListener("abort", onAbort, { once: true });
-
-    ws.on("open", () => {
-      ws.send(JSON.stringify(request));
-    });
-
-    ws.on("message", (data) => {
-      try {
-        const raw = typeof data === "string" ? data : Buffer.from(data as Buffer).toString("utf8");
-        const msg = JSON.parse(raw) as ServerMessage;
-
-        if ("conversation_id" in msg) {
-          const block = msg.conversation_id;
-          if (typeof block === "string") conversationId = block;
-          else if (block && typeof block === "object" && "conversation_id" in block) {
-            conversationId = String((block as { conversation_id?: unknown }).conversation_id ?? "");
-          }
-          if (conversationId) console.log(`[zookeeper] conversation=${conversationId}`);
-          return;
-        }
-
-        if ("error" in msg) {
-          finish({ ok: false, error: errorDetail(msg) });
-          return;
-        }
-
-        const reasoning = reasoningText(msg);
-        if (reasoning) {
-          narration = reasoning;
-          return;
-        }
-
-        if ("project_updated" in msg || "tool_output" in msg) {
-          const files = extractKclOutputs(msg);
-          if (files) {
-            latestFiles = files;
-            console.log(`[zookeeper] got files=${Object.keys(files).join(",")}`);
-          }
-          return;
-        }
-
-        if ("end_of_stream" in msg) {
-          sawEnd = true;
-          const eos = msg.end_of_stream;
-          if (eos && typeof eos === "object") {
-            const e = eos as { conversation_id?: string; id?: string };
-            if (e.conversation_id) conversationId = e.conversation_id;
-            if (e.id) promptId = String(e.id);
-          }
-          if (!latestFiles || Object.keys(latestFiles).length === 0) {
-            finish({
-              ok: false,
-              error: withNarration("Zoo Zookeeper finished without KCL file outputs", narration),
-            });
-            return;
-          }
-          finish({
-            ok: true,
-            data: {
-              files: latestFiles,
-              conversationId: conversationId || promptId || "zookeeper",
-              promptId,
-            },
-          });
-        }
-      } catch {
-        console.warn("[zookeeper] ignored an invalid service message");
-      }
-    });
-
-    ws.on("error", () => {
-      finish({
-        ok: false,
-        error: "The CAD generation service connection failed.",
-      });
-    });
-
-    ws.on("close", (code: number, reasonBuf: Buffer) => {
-      if (settled) return;
-      if (sawEnd && latestFiles && Object.keys(latestFiles).length > 0) {
-        finish({
-          ok: true,
-          data: {
-            files: latestFiles,
-            conversationId: conversationId || promptId || "zookeeper",
-            promptId,
-          },
-        });
-        return;
-      }
-      finish({
-        ok: false,
-        error: closeFailureMessage({
-          code,
-          reason: reasonBuf?.toString("utf8") ?? "",
-          hadFiles: latestFiles !== null,
-          narration,
-        }),
-      });
-    });
-  });
+  console.warn("[zookeeper] request failed");
+  return { ok: false, error: drop };
 }
