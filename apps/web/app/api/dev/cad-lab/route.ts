@@ -30,6 +30,54 @@ export async function POST(request: Request) {
 
   try {
     switch (body.action) {
+      case "zoo_prompt_render": {
+        const cad = getCad();
+        const t0 = Date.now();
+        const gen = await cad.textToCad(body.prompt);
+        const generateMs = Date.now() - t0;
+        if (!gen.ok) return json(gen, 502);
+        const kcl = gen.data.kcl;
+
+        const t1 = Date.now();
+        const exec = await cad.executeKcl({ code: kcl });
+        const executeMs = Date.now() - t1;
+
+        const t2 = Date.now();
+        const env = getServerEnv();
+        const snapClient = new ZooMcpClient({ token: env.ZOO_API_TOKEN?.trim() ?? "" });
+        const images: string[] = [];
+        try {
+          const [multiview, isometric] = [
+            await snapClient.callGenericTool("multiview_snapshot_of_kcl", {
+              kcl_code: kcl,
+              zoom: true,
+            }),
+            await snapClient.callGenericTool("multi_isometric_snapshot_of_kcl", {
+              kcl_code: kcl,
+            }),
+          ];
+          for (const snap of [multiview, isometric]) {
+            if (!snap.ok) continue;
+            for (const img of snap.data.images) {
+              images.push(`data:${img.mimeType};base64,${img.base64}`);
+            }
+          }
+        } finally {
+          await snapClient.close();
+        }
+        const snapshotMs = Date.now() - t2;
+
+        return json({
+          ok: true,
+          kind: "render",
+          kcl,
+          id: gen.data.id,
+          images,
+          executeOk: exec.ok,
+          executeMessage: exec.ok ? exec.data.message : exec.error,
+          timings: { generateMs, executeMs, snapshotMs },
+        });
+      }
       case "zoo_text_to_cad": {
         const result = await getCad().textToCad(body.prompt);
         if (!result.ok) return json(result, 502);
