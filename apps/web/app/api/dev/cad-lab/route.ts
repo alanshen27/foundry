@@ -1,3 +1,6 @@
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { NextResponse } from "next/server";
 import { getServerEnv } from "@foundry/config";
 import { ZooMcpClient } from "@foundry/cad/server";
@@ -17,6 +20,18 @@ function json(body: CadLabResponse, status = 200) {
   return NextResponse.json(body, { status });
 }
 
+/** Zoo returns assemblies as several files; the engine needs them on disk together. */
+async function writeProject(files: Record<string, string>): Promise<string> {
+  const dir = await mkdtemp(path.join(tmpdir(), "cad-lab-"));
+  for (const [name, content] of Object.entries(files)) {
+    const target = path.join(dir, name);
+    if (!target.startsWith(dir + path.sep)) continue;
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, content, "utf8");
+  }
+  return dir;
+}
+
 export async function POST(request: Request) {
   if (!cadLabEnabled(process.env)) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -33,50 +48,54 @@ export async function POST(request: Request) {
       case "zoo_prompt_render": {
         const cad = getCad();
         const t0 = Date.now();
-        const gen = await cad.textToCad(body.prompt);
+        const gen = await cad.textToCadProject(body.prompt);
         const generateMs = Date.now() - t0;
         if (!gen.ok) return json(gen, 502);
-        const kcl = gen.data.kcl;
+        const files = gen.data.files;
 
-        const t1 = Date.now();
-        const exec = await cad.executeKcl({ code: kcl });
-        const executeMs = Date.now() - t1;
-
-        const t2 = Date.now();
-        const env = getServerEnv();
-        const snapClient = new ZooMcpClient({ token: env.ZOO_API_TOKEN?.trim() ?? "" });
-        const images: string[] = [];
+        const projectDir = await writeProject(files);
         try {
-          const [multiview, isometric] = [
-            await snapClient.callGenericTool("multiview_snapshot_of_kcl", {
-              kcl_code: kcl,
-              zoom: true,
-            }),
-            await snapClient.callGenericTool("multi_isometric_snapshot_of_kcl", {
-              kcl_code: kcl,
-            }),
-          ];
-          for (const snap of [multiview, isometric]) {
-            if (!snap.ok) continue;
-            for (const img of snap.data.images) {
-              images.push(`data:${img.mimeType};base64,${img.base64}`);
-            }
-          }
-        } finally {
-          await snapClient.close();
-        }
-        const snapshotMs = Date.now() - t2;
+          const t1 = Date.now();
+          const exec = await cad.executeKcl({ projectDir });
+          const executeMs = Date.now() - t1;
 
-        return json({
-          ok: true,
-          kind: "render",
-          kcl,
-          id: gen.data.id,
-          images,
-          executeOk: exec.ok,
-          executeMessage: exec.ok ? exec.data.message : exec.error,
-          timings: { generateMs, executeMs, snapshotMs },
-        });
+          const t2 = Date.now();
+          const env = getServerEnv();
+          const snapClient = new ZooMcpClient({ token: env.ZOO_API_TOKEN?.trim() ?? "" });
+          const images: string[] = [];
+          try {
+            const multiview = await snapClient.callGenericTool("multiview_snapshot_of_kcl", {
+              kcl_path: projectDir,
+              zoom: true,
+            });
+            const isometric = await snapClient.callGenericTool("multi_isometric_snapshot_of_kcl", {
+              kcl_path: projectDir,
+            });
+            for (const snap of [multiview, isometric]) {
+              if (!snap.ok) continue;
+              for (const img of snap.data.images) {
+                images.push(`data:${img.mimeType};base64,${img.base64}`);
+              }
+            }
+          } finally {
+            await snapClient.close();
+          }
+          const snapshotMs = Date.now() - t2;
+
+          return json({
+            ok: true,
+            kind: "render",
+            kcl: files["main.kcl"] ?? Object.values(files)[0] ?? "",
+            files,
+            id: gen.data.id,
+            images,
+            executeOk: exec.ok,
+            executeMessage: exec.ok ? exec.data.message : exec.error,
+            timings: { generateMs, executeMs, snapshotMs },
+          });
+        } finally {
+          await rm(projectDir, { recursive: true, force: true });
+        }
       }
       case "zoo_text_to_cad": {
         const result = await getCad().textToCad(body.prompt);

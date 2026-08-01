@@ -134,6 +134,17 @@ export type CadKclInput = {
 export interface CadPort {
   /** Generate parametric KCL from a natural-language prompt (Zoo ML). */
   textToCad(prompt: string, opts?: CadGenOptions): Promise<CadResult<{ kcl: string; id: string }>>;
+  /**
+   * Generate KCL from a prompt, keeping every file Zoo returns.
+   *
+   * Assembly prompts come back as a multi-file project (`main.kcl` importing
+   * per-component files), so `textToCad`'s single-file result is unusable for
+   * them: `main.kcl` alone fails to execute on its missing imports.
+   */
+  textToCadProject(
+    prompt: string,
+    opts?: CadGenOptions,
+  ): Promise<CadResult<{ files: Record<string, string>; id: string }>>;
   /** Edit existing KCL with a natural-language prompt (Zoo ML). */
   iterateCad(
     kcl: string,

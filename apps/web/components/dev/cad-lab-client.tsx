@@ -50,12 +50,14 @@ function RenderCard({ run }: { run: Run }) {
 
 function RenderResult({ r }: { r: CadLabRender }) {
   const [showKcl, setShowKcl] = useState(false);
+  const paths = Object.keys(r.files);
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2 text-xs">
         <Badge variant={r.executeOk ? "secondary" : "destructive"}>
           {r.executeOk ? "KCL executes" : "KCL failed"}
         </Badge>
+        {paths.length > 1 ? <Badge variant="outline">{paths.length}-file project</Badge> : null}
         <Badge variant="outline">generate {fmtMs(r.timings.generateMs)}</Badge>
         <Badge variant="outline">execute {fmtMs(r.timings.executeMs)}</Badge>
         <Badge variant="outline">snapshots {fmtMs(r.timings.snapshotMs)}</Badge>
@@ -82,11 +84,16 @@ function RenderResult({ r }: { r: CadLabRender }) {
       <Button variant="ghost" size="xs" onClick={() => setShowKcl((v) => !v)}>
         {showKcl ? "Hide KCL" : "Show KCL"}
       </Button>
-      {showKcl ? (
-        <pre className="max-h-96 overflow-auto border border-border bg-muted/40 p-3 text-xs whitespace-pre-wrap">
-          {r.kcl}
-        </pre>
-      ) : null}
+      {showKcl
+        ? paths.map((filePath) => (
+            <div key={filePath} className="space-y-1">
+              <p className="font-mono text-xs text-muted-foreground">{filePath}</p>
+              <pre className="max-h-96 overflow-auto border border-border bg-muted/40 p-3 text-xs whitespace-pre-wrap">
+                {r.files[filePath]}
+              </pre>
+            </div>
+          ))
+        : null}
     </div>
   );
 }
