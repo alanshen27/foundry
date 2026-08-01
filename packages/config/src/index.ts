@@ -82,6 +82,13 @@ const serverEnvSchema = z
       },
       z.enum(["1", "0", "true", "false"]).optional(),
     ),
+    // Whole-run ceiling for a CAD Lab prompt, in ms (default 600000, clamped
+    // to 30s–30min). Zoo can stall indefinitely; the run answers regardless.
+    CAD_LAB_TIMEOUT_MS: z.preprocess((value) => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    }, z.coerce.number().int().positive().optional()),
     // Optional: land signed-in users on this workspace slug when they are a member.
     FOUNDRY_DEFAULT_WORKSPACE_SLUG: z.preprocess((value) => {
       if (typeof value !== "string") return undefined;

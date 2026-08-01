@@ -35,7 +35,12 @@ export type ZookeeperPromptOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
   baseWsUrl?: string;
+  /** Narration of the turn (model reasoning, files, reconnects). */
+  onProgress?: ZookeeperProgress;
 };
+
+/** Human-readable note about what the turn is doing right now. */
+export type ZookeeperProgress = (note: string) => void;
 
 export type ZookeeperPromptResult = {
   files: Record<string, string>;
@@ -141,6 +146,13 @@ export function withNarration(base: string, narration: string | null): string {
   return `${base} — last from the model: "${text}"`;
 }
 
+/** Timeouts are minutes long; report them in the unit the user waited in. */
+function timeoutError(totalMs: number): string {
+  const seconds = Math.round(totalMs / 1000);
+  const label = seconds >= 60 ? `${Math.round(seconds / 60)}m` : `${seconds}s`;
+  return `Zoo Zookeeper timed out after ~${label}`;
+}
+
 function errorDetail(msg: ServerMessage): string {
   const err = msg.error;
   return typeof err === "string" || (err && typeof err === "object")
@@ -224,7 +236,11 @@ export function decodeFrames(data: unknown, isBinary: boolean): ServerMessage[] 
 }
 
 /** Fold one server frame into the turn; non-null means the turn is over. */
-export function applyMessage(msg: ServerMessage, state: TurnState): AttemptOutcome | null {
+export function applyMessage(
+  msg: ServerMessage,
+  state: TurnState,
+  onProgress?: ZookeeperProgress,
+): AttemptOutcome | null {
   if ("conversation_id" in msg) {
     const block = msg.conversation_id;
     if (typeof block === "string") state.conversationId = block;
@@ -254,6 +270,7 @@ export function applyMessage(msg: ServerMessage, state: TurnState): AttemptOutco
   const reasoning = reasoningText(msg);
   if (reasoning) {
     state.narration = reasoning;
+    onProgress?.(reasoning);
     return null;
   }
 
@@ -261,7 +278,9 @@ export function applyMessage(msg: ServerMessage, state: TurnState): AttemptOutco
     const files = extractKclOutputs(msg);
     if (files) {
       state.files = files;
-      console.log(`[zookeeper] got files=${Object.keys(files).join(",")}`);
+      const names = Object.keys(files);
+      console.log(`[zookeeper] got files=${names.join(",")}`);
+      onProgress?.(`Received ${names.length} KCL file(s): ${names.join(", ")}`);
     }
     return null;
   }
@@ -290,6 +309,7 @@ function runAttempt(args: {
   signal?: AbortSignal;
   budgetMs: number;
   totalMs: number;
+  onProgress?: ZookeeperProgress;
 }): Promise<AttemptOutcome> {
   const { state } = args;
   const url = args.resume
@@ -322,13 +342,34 @@ function runAttempt(args: {
     const onAbort = () =>
       finish({ kind: "settled", result: { ok: false, error: "CAD generation cancelled" } });
 
+    /**
+     * A throwing `send` has to end the attempt.
+     *
+     * It fires inside a socket callback, so an escaping error becomes an
+     * uncaught exception and the turn hangs until its deadline with the prompt
+     * never delivered — exactly what a bundled `ws` does when its optional
+     * `bufferutil` binding is mangled and masking is unavailable.
+     */
+    const send = (payload: Record<string, unknown>) => {
+      try {
+        ws.send(JSON.stringify(payload));
+      } catch (err) {
+        finish({
+          kind: "settled",
+          result: {
+            ok: false,
+            error: `Zoo Zookeeper could not send on the socket: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          },
+        });
+      }
+    };
+
     const budgetTimer = setTimeout(() => {
       finish({
         kind: "settled",
-        result: {
-          ok: false,
-          error: `Zoo Zookeeper timed out after ~${Math.round(args.totalMs / 1000)}s`,
-        },
+        result: { ok: false, error: timeoutError(args.totalMs) },
       });
     }, args.budgetMs);
 
@@ -340,14 +381,12 @@ function runAttempt(args: {
         finish({ kind: "dropped", detail: "Zoo Zookeeper stopped responding" });
         return;
       }
-      ws.send(JSON.stringify({ type: "ping" }));
+      send({ type: "ping" });
     }, HEARTBEAT_INTERVAL_MS);
 
     args.signal?.addEventListener("abort", onAbort, { once: true });
 
-    ws.on("open", () => {
-      ws.send(JSON.stringify(args.open));
-    });
+    ws.on("open", () => send(args.open));
 
     ws.on("message", (data, isBinary) => {
       lastFrameAt = Date.now();
@@ -359,7 +398,7 @@ function runAttempt(args: {
         return;
       }
       for (const frame of frames) {
-        const outcome = applyMessage(frame, state);
+        const outcome = applyMessage(frame, state, args.onProgress);
         if (outcome) {
           finish(outcome);
           return;
@@ -425,17 +464,15 @@ export async function zookeeperPrompt(
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     if (opts.signal?.aborted) return { ok: false, error: "CAD generation cancelled" };
     const budgetMs = deadline - Date.now();
-    if (budgetMs <= 0) {
-      return {
-        ok: false,
-        error: `Zoo Zookeeper timed out after ~${Math.round(timeoutMs / 1000)}s`,
-      };
-    }
+    if (budgetMs <= 0) return { ok: false, error: timeoutError(timeoutMs) };
 
     const resume = attempt > 0;
     if (resume) {
       console.warn(
         `[zookeeper] ${drop} — resuming conversation=${state.conversationId} (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
+      );
+      opts.onProgress?.(
+        `Zoo dropped the connection — resuming the same turn (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
       );
     }
 
@@ -447,6 +484,7 @@ export async function zookeeperPrompt(
       signal: opts.signal,
       budgetMs,
       totalMs: timeoutMs,
+      onProgress: opts.onProgress,
       open: resume ? { type: "system", command: "continue" } : request,
     });
 

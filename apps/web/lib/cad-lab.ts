@@ -80,6 +80,58 @@ export type CadLabResponse =
   | { ok: true; kind: "image"; dataUri: string; text?: string }
   | { ok: false; error: string };
 
+/** Stages of a prompt→render run, in order. */
+export const CAD_LAB_PHASES = ["generate", "execute", "snapshot"] as const;
+
+export type CadLabPhase = (typeof CAD_LAB_PHASES)[number];
+
+/**
+ * NDJSON events streamed by `zoo_prompt_render`.
+ *
+ * A run takes minutes, so it reports as it goes instead of resolving one
+ * silent response: the client can show the current stage and Zoo's own
+ * narration, and the ticks keep the connection from looking dead.
+ */
+export type CadLabEvent =
+  | { type: "phase"; phase: CadLabPhase }
+  | { type: "note"; text: string }
+  | { type: "tick"; elapsedMs: number }
+  | { type: "result"; response: CadLabResponse };
+
+/** Split streamed NDJSON into events, keeping any trailing partial line. */
+export function parseEventLines(buffer: string): { events: CadLabEvent[]; rest: string } {
+  const lines = buffer.split("\n");
+  const rest = lines.pop() ?? "";
+  const events: CadLabEvent[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      events.push(JSON.parse(trimmed) as CadLabEvent);
+    } catch {
+      // A malformed line shouldn't abort a run that may still produce a result.
+    }
+  }
+  return { events, rest };
+}
+
+/** Whole-run ceiling: generation plus execute plus snapshots. */
+export const CAD_LAB_DEFAULT_TIMEOUT_MS = 10 * 60_000;
+const CAD_LAB_MIN_TIMEOUT_MS = 30_000;
+const CAD_LAB_MAX_TIMEOUT_MS = 30 * 60_000;
+
+/**
+ * Deadline for one run, from `CAD_LAB_TIMEOUT_MS` (ms).
+ *
+ * Zoo can stall for as long as it likes; a run that answers with a timeout and
+ * the model's last words beats one that holds the request open indefinitely.
+ */
+export function cadLabTimeoutMs(configured: string | undefined): number {
+  const raw = Number(configured);
+  if (!Number.isFinite(raw) || raw <= 0) return CAD_LAB_DEFAULT_TIMEOUT_MS;
+  return Math.min(Math.max(Math.round(raw), CAD_LAB_MIN_TIMEOUT_MS), CAD_LAB_MAX_TIMEOUT_MS);
+}
+
 /** CAD Lab is dev-only unless explicitly enabled. */
 export function cadLabEnabled(env: { NODE_ENV?: string; CAD_LAB_ENABLED?: string }): boolean {
   if (env.CAD_LAB_ENABLED === "1" || env.CAD_LAB_ENABLED === "true") return true;

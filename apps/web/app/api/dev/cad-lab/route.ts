@@ -5,7 +5,13 @@ import { NextResponse } from "next/server";
 import { getServerEnv } from "@foundry/config";
 import { ZooMcpClient } from "@foundry/cad/server";
 import { getCad } from "@/server/cad";
-import { cadLabEnabled, cadLabRequestSchema, type CadLabResponse } from "@/lib/cad-lab";
+import {
+  cadLabEnabled,
+  cadLabRequestSchema,
+  cadLabTimeoutMs,
+  type CadLabEvent,
+  type CadLabResponse,
+} from "@/lib/cad-lab";
 
 /**
  * Dev-only CAD Lab runner. Exercises Zoo ML text-to-CAD / iteration, Zoo MCP
@@ -14,10 +20,71 @@ import { cadLabEnabled, cadLabRequestSchema, type CadLabResponse } from "@/lib/c
  */
 
 // Zoo text-to-CAD can take several minutes.
-export const maxDuration = 600;
+// Above the run's own ceiling (CAD_LAB_TIMEOUT_MS, max 30min) so a run reports
+// its own timeout instead of being cut off by the platform.
+export const maxDuration = 1_800;
 
 function json(body: CadLabResponse, status = 200) {
   return NextResponse.json(body, { status });
+}
+
+/** Cadence of keepalive ticks while a phase is silent. */
+const TICK_MS = 5_000;
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error && err.name === "TimeoutError") return "CAD Lab run timed out";
+  if (err instanceof Error && err.name === "AbortError") return "CAD Lab run cancelled";
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Stream a run as NDJSON.
+ *
+ * A prompt→render run takes minutes, and a single deferred JSON response makes
+ * a slow Zoo indistinguishable from a hung one — for the user and for any
+ * proxy that drops idle connections. Events land as they happen and the run
+ * always terminates in a `result`.
+ */
+function ndjson(run: (emit: (event: CadLabEvent) => void) => Promise<CadLabResponse>): Response {
+  const encoder = new TextEncoder();
+  const startedAt = Date.now();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let open = true;
+      const emit = (event: CadLabEvent) => {
+        if (!open) return;
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        } catch {
+          // The client hung up; the run still unwinds through its own signal.
+          open = false;
+        }
+      };
+      const ticker = setInterval(
+        () => emit({ type: "tick", elapsedMs: Date.now() - startedAt }),
+        TICK_MS,
+      );
+      try {
+        emit({ type: "result", response: await run(emit) });
+      } catch (err) {
+        emit({ type: "result", response: { ok: false, error: errorMessage(err) } });
+      } finally {
+        clearInterval(ticker);
+        open = false;
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store",
+      // Proxies that buffer would defeat the point of streaming progress.
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
 
 /** Zoo returns assemblies as several files; the engine needs them on disk together. */
@@ -30,6 +97,63 @@ async function writeProject(files: Record<string, string>): Promise<string> {
     await writeFile(target, content, "utf8");
   }
   return dir;
+}
+
+/**
+ * Engine pass over a written project: execute, then collect snapshots.
+ *
+ * Snapshots are best-effort — a failed render still returns the KCL and the
+ * execute verdict rather than losing a multi-minute generation.
+ */
+async function renderProject(args: {
+  projectDir: string;
+  signal: AbortSignal;
+  timeoutMs: number;
+  emit: (event: CadLabEvent) => void;
+}): Promise<{
+  images: string[];
+  executeOk: boolean;
+  executeMessage: string;
+  timings: { executeMs: number; snapshotMs: number };
+}> {
+  const { projectDir, emit } = args;
+  const token = getServerEnv().ZOO_API_TOKEN?.trim() ?? "";
+  const mcp = new ZooMcpClient({ token, signal: args.signal, timeoutMs: args.timeoutMs });
+  const images: string[] = [];
+  try {
+    emit({ type: "phase", phase: "execute" });
+    const t1 = Date.now();
+    const exec = await mcp.executeKcl({ projectDir });
+    const executeMs = Date.now() - t1;
+
+    emit({ type: "phase", phase: "snapshot" });
+    const t2 = Date.now();
+    const multiview = await mcp.callGenericTool("multiview_snapshot_of_kcl", {
+      kcl_path: projectDir,
+      zoom: true,
+    });
+    const isometric = await mcp.callGenericTool("multi_isometric_snapshot_of_kcl", {
+      kcl_path: projectDir,
+    });
+    for (const snap of [multiview, isometric]) {
+      if (!snap.ok) {
+        emit({ type: "note", text: `Snapshot unavailable: ${snap.error}` });
+        continue;
+      }
+      for (const img of snap.data.images) {
+        images.push(`data:${img.mimeType};base64,${img.base64}`);
+      }
+    }
+
+    return {
+      images,
+      executeOk: exec.ok,
+      executeMessage: exec.ok ? exec.data.message : exec.error,
+      timings: { executeMs, snapshotMs: Date.now() - t2 },
+    };
+  } finally {
+    await mcp.close();
+  }
 }
 
 export async function POST(request: Request) {
@@ -46,56 +170,50 @@ export async function POST(request: Request) {
   try {
     switch (body.action) {
       case "zoo_prompt_render": {
-        const cad = getCad();
-        const t0 = Date.now();
-        const gen = await cad.textToCadProject(body.prompt);
-        const generateMs = Date.now() - t0;
-        if (!gen.ok) return json(gen, 502);
-        const files = gen.data.files;
+        const prompt = body.prompt;
+        const timeoutMs = cadLabTimeoutMs(process.env.CAD_LAB_TIMEOUT_MS);
+        // The run dies on the deadline or when the browser gives up, whichever
+        // comes first; nothing downstream may outlive it.
+        const signal = AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs)]);
+        const deadline = Date.now() + timeoutMs;
+        const remainingMs = () => Math.max(1_000, deadline - Date.now());
 
-        const projectDir = await writeProject(files);
-        try {
-          const t1 = Date.now();
-          const exec = await cad.executeKcl({ projectDir });
-          const executeMs = Date.now() - t1;
-
-          const t2 = Date.now();
-          const env = getServerEnv();
-          const snapClient = new ZooMcpClient({ token: env.ZOO_API_TOKEN?.trim() ?? "" });
-          const images: string[] = [];
-          try {
-            const multiview = await snapClient.callGenericTool("multiview_snapshot_of_kcl", {
-              kcl_path: projectDir,
-              zoom: true,
-            });
-            const isometric = await snapClient.callGenericTool("multi_isometric_snapshot_of_kcl", {
-              kcl_path: projectDir,
-            });
-            for (const snap of [multiview, isometric]) {
-              if (!snap.ok) continue;
-              for (const img of snap.data.images) {
-                images.push(`data:${img.mimeType};base64,${img.base64}`);
-              }
-            }
-          } finally {
-            await snapClient.close();
-          }
-          const snapshotMs = Date.now() - t2;
-
-          return json({
-            ok: true,
-            kind: "render",
-            kcl: files["main.kcl"] ?? Object.values(files)[0] ?? "",
-            files,
-            id: gen.data.id,
-            images,
-            executeOk: exec.ok,
-            executeMessage: exec.ok ? exec.data.message : exec.error,
-            timings: { generateMs, executeMs, snapshotMs },
+        return ndjson(async (emit) => {
+          const cad = getCad();
+          emit({ type: "phase", phase: "generate" });
+          const t0 = Date.now();
+          const gen = await cad.textToCadProject(prompt, {
+            signal,
+            timeoutMs: remainingMs(),
+            onProgress: (text) => emit({ type: "note", text }),
           });
-        } finally {
-          await rm(projectDir, { recursive: true, force: true });
-        }
+          const generateMs = Date.now() - t0;
+          if (!gen.ok) return gen;
+          const files = gen.data.files;
+
+          const projectDir = await writeProject(files);
+          try {
+            const engine = await renderProject({
+              projectDir,
+              signal,
+              timeoutMs: remainingMs(),
+              emit,
+            });
+            return {
+              ok: true,
+              kind: "render",
+              kcl: files["main.kcl"] ?? Object.values(files)[0] ?? "",
+              files,
+              id: gen.data.id,
+              images: engine.images,
+              executeOk: engine.executeOk,
+              executeMessage: engine.executeMessage,
+              timings: { generateMs, ...engine.timings },
+            };
+          } finally {
+            await rm(projectDir, { recursive: true, force: true });
+          }
+        });
       }
       case "zoo_text_to_cad": {
         const result = await getCad().textToCad(body.prompt);

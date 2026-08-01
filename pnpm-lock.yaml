@@ -197,6 +197,9 @@ importers:
       three:
         specifier: ^0.185.1
         version: 0.185.1
+      ws:
+        specifier: ^8.21.1
+        version: 8.21.1
       y-monaco:
         specifier: ^0.1.6
         version: 0.1.6(patch_hash=jyxy3zoahec25ypc6t2vp6eyom)(monaco-editor@0.56.0)(yjs@13.6.31)

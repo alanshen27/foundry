@@ -36,12 +36,22 @@ const nextConfig: NextConfig = {
   ],
   // bullmq optionally imports @valkey/valkey-glide; bundling it spams
   // "Module not found" in dev. Keep these as Node requires instead.
-  serverExternalPackages: ["@kittycad/lib", "bullmq", "ioredis"],
-  webpack: (config) => {
+  //
+  // `ws` must stay external too: bundling breaks its optional `bufferutil`
+  // require, so `bufferUtil.mask` is undefined and every client frame throws
+  // — Zoo's ML socket connects and then never receives the prompt.
+  serverExternalPackages: ["@kittycad/lib", "bullmq", "ioredis", "ws"],
+  webpack: (config, { isServer }) => {
     config.resolve.alias = {
       ...config.resolve.alias,
       "monaco-editor/esm/vs/editor/editor.api.js": monacoEditorApi,
     };
+    if (isServer) {
+      // `serverExternalPackages` misses `ws` because it is imported from a
+      // transpiled workspace package (@foundry/cad), so externalize it here.
+      // `ws` is a direct dependency of this app so the require resolves.
+      config.externals = [...(config.externals ?? []), { ws: "commonjs ws" }];
+    }
     return config;
   },
   turbopack: {
