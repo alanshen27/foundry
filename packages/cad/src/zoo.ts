@@ -238,6 +238,38 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
       }
     },
 
+    async textToCadProject(prompt, options) {
+      try {
+        if (options?.signal?.aborted) {
+          return { ok: false, error: "CAD generation cancelled" };
+        }
+        if (!prompt.trim()) {
+          return { ok: false, error: "textToCadProject needs a prompt" };
+        }
+        const zk = await zookeeperPrompt({
+          token,
+          prompt,
+          currentFiles: { "main.kcl": "" },
+          projectName: options?.projectName,
+          forcedTools: ["text_to_cad"],
+          signal: options?.signal,
+        });
+        if (!zk.ok) return zk;
+        const files = Object.fromEntries(
+          Object.entries(zk.data.files).filter(([, content]) => content.trim().length > 0),
+        );
+        if (Object.keys(files).length === 0) {
+          return { ok: false, error: "Zookeeper text-to-CAD returned no KCL files" };
+        }
+        return {
+          ok: true,
+          data: { files, id: zk.data.promptId ?? zk.data.conversationId },
+        };
+      } catch (err) {
+        return { ok: false, error: asError(err) };
+      }
+    },
+
     async iterateCad(kcl, prompt, options) {
       try {
         if (options?.signal?.aborted) {

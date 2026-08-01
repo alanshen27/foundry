@@ -60,7 +60,10 @@ export type CadLabRequest = z.infer<typeof cadLabRequestSchema>;
 export type CadLabRender = {
   ok: true;
   kind: "render";
+  /** Entry file (`main.kcl`), kept for single-part convenience. */
   kcl: string;
+  /** Every file Zoo returned — assemblies span several. */
+  files: Record<string, string>;
   id: string;
   /** Data URIs: multiview collage + isometric collage (when available). */
   images: string[];
