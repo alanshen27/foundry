@@ -39,6 +39,8 @@ import {
   type MentionTarget,
 } from "@/lib/copilot/mentions";
 import { groupAssistantPartBlocks } from "@/lib/copilot/part-blocks";
+import { CAD_PHASE_LABEL, formatElapsed } from "@/lib/copilot/cad-progress";
+import { useCadProgress } from "./cad-progress-context";
 import { isAssistantFailureText } from "@/lib/copilot/messages";
 import {
   isMessageDeleted,
@@ -357,6 +359,39 @@ export function CopilotThinkingRow({ className }: { className?: string }) {
   );
 }
 
+/**
+ * Phase + ticking elapsed + Zoo's latest narration for a running CAD tool.
+ * Zoo generations take minutes; a bare spinner is indistinguishable from a
+ * hung request.
+ */
+function CadProgressLine({ toolCallId }: { toolCallId: string | undefined }) {
+  const progress = useCadProgress(toolCallId);
+  const startedAt = progress?.startedAt;
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!startedAt) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [startedAt]);
+
+  if (!progress) return null;
+
+  return (
+    <span className="text-muted-foreground/80 block text-[11px]">
+      <span className="font-mono tabular-nums">
+        {CAD_PHASE_LABEL[progress.phase]} · {formatElapsed(now - progress.startedAt)}
+      </span>
+      {progress.note ? (
+        <span className="block truncate italic" title={progress.note}>
+          {progress.note}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 /** Tool rows stay unboxed; failures are red text only (no card / tint fill). */
 function toolRowClass(failed: boolean): string {
   return cn(
@@ -409,6 +444,7 @@ export function ToolCard({ part }: { part: ToolPart }) {
               {detail}
             </span>
           ) : null}
+          {running ? <CadProgressLine toolCallId={part.toolCallId} /> : null}
         </div>
         {running ? (
           <Loader2 className="size-3.5 shrink-0 animate-spin opacity-60" />
@@ -474,6 +510,16 @@ export function ToolCallGroup({ parts }: { parts: ToolPart[] }) {
           <CheckCircle2 className="size-3.5 shrink-0 opacity-50" />
         )}
       </button>
+      {!expanded && running
+        ? parts
+            .filter(toolPartRunning)
+            .map((part, i) => (
+              <CadProgressLine
+                key={typeof part.toolCallId === "string" ? part.toolCallId : `progress-${i}`}
+                toolCallId={part.toolCallId}
+              />
+            ))
+        : null}
       {expanded ? (
         <div className="border-border/60 ml-1.5 flex flex-col border-l pl-0.5">
           {parts.map((part, i) => (

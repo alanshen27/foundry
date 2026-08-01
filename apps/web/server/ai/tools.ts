@@ -42,6 +42,8 @@ import { mintRenderToken } from "../render-token";
 import { assembleProductWithZooMcp, syncPcbCadPart } from "../assemble-product";
 import { withKclProjectDir } from "../kcl-project-dir";
 import { extractProductImages, screenshotRenderPage } from "./render";
+import type { CadProgressUpdate } from "../chat-run/cad-progress";
+import type { CadProgressPhase } from "@/lib/copilot/cad-progress";
 
 /**
  * Tool set exposed to the AI copilot. Every tool runs the same capability
@@ -56,6 +58,10 @@ type ToolContext = {
   branchId: string;
   /** Origin of the running app (e.g. http://localhost:3000) for render tools. */
   origin: string;
+  /** Live phase/narration for CAD tools that run for minutes. */
+  onCadProgress?: (update: CadProgressUpdate) => void;
+  /** Called once a CAD tool call is over, so the emitter can forget it. */
+  onCadProgressEnd?: (toolCallId: string) => void;
 };
 
 const requirementType = z.enum([
@@ -415,6 +421,11 @@ function findAnyCadComponent(doc: CadDoc, key: string) {
 
 export function buildProjectTools(ctx: ToolContext) {
   const { projectId, branchId } = ctx;
+
+  /** Report what a multi-minute CAD tool is doing right now. */
+  const progress = (toolCallId: string, phase: CadProgressPhase, note?: string) => {
+    ctx.onCadProgress?.({ toolCallId, phase, ...(note ? { note } : {}) });
+  };
 
   return {
     get_project_state: {
@@ -1337,7 +1348,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           parts?: { partName: string; prompt: string }[];
           zooOpId?: string;
         },
-        { abortSignal }: { abortSignal?: AbortSignal },
+        { abortSignal, toolCallId }: { abortSignal?: AbortSignal; toolCallId: string },
       ) =>
         guard(ctx, "mechanical.edit", async (workspaceId) => {
           let cad;
@@ -1357,13 +1368,17 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             ? input.parts
             : [{ partName: input.partName, prompt: input.prompt ?? "" }];
 
+          progress(toolCallId, "generate");
+
           // Zoo jobs are independent HTTP operations, so fan them out and wait
           // once instead of paying the queue+poll latency per part.
           const outcomes = await Promise.all(
             jobs.map(async (job) => {
+              const label = jobs.length > 1 ? `${job.partName ?? "main"}: ` : "";
               const result = await cad.textToCad(job.prompt, {
                 projectName: projectId,
                 signal: abortSignal,
+                onProgress: (note) => progress(toolCallId, "generate", `${label}${note}`),
                 // Resume only applies to the single-part form.
                 existingOpId: jobs.length === 1 ? resumeId : undefined,
               });
@@ -1450,7 +1465,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
                 ? "Some parts failed — retry those with a shorter prompt or save_cad_script, then render_model_views."
                 : "Call render_model_views to inspect, or save_cad_script / create_cad_component for more parts.",
           };
-        }),
+        }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
     },
 
     save_cad_script: {
@@ -1507,15 +1522,18 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             "Optional product-preview intent for Zoo (how the finished product should look). Omit for the default preview prompt.",
           ),
       }),
-      execute: async ({
-        parts,
-        includePcb,
-        prompt,
-      }: {
-        parts: string[];
-        includePcb?: boolean;
-        prompt?: string;
-      }) =>
+      execute: async (
+        {
+          parts,
+          includePcb,
+          prompt,
+        }: {
+          parts: string[];
+          includePcb?: boolean;
+          prompt?: string;
+        },
+        { abortSignal, toolCallId }: { abortSignal?: AbortSignal; toolCallId: string },
+      ) =>
         guard(ctx, "mechanical.edit", async (workspaceId) => {
           let cad;
           try {
@@ -1562,6 +1580,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
           let assembled;
           try {
+            progress(toolCallId, "assemble");
             assembled = await assembleProductWithZooMcp({
               cad,
               doc: base,
@@ -1569,6 +1588,8 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
               parts: resolvedParts,
               pcb,
               prompt,
+              signal: abortSignal,
+              onProgress: (note) => progress(toolCallId, "assemble", note),
             });
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
@@ -1596,7 +1617,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             staleStages: staled,
             hint: "Call render_model_views to inspect the product preview. Manufacturing parts under parts/ are unchanged.",
           };
-        }),
+        }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
     },
 
     generate_concept_image: {
@@ -1683,9 +1704,13 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           .max(4)
           .default(["iso", "front", "top", "right"]),
       }),
-      execute: async ({ views }: { views: ("iso" | "front" | "top" | "right")[] }) =>
+      execute: async (
+        { views }: { views: ("iso" | "front" | "top" | "right")[] },
+        { toolCallId }: { toolCallId: string },
+      ) =>
         guard(ctx, "project.read", async () => {
           const storage = getObjectStorage();
+          progress(toolCallId, "snapshot");
 
           // Prefer Zoo MCP multiview — executes KCL on Zoo and returns a real collage.
           try {
@@ -1727,6 +1752,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             console.warn("[render_model_views] Zoo snapshot was unavailable; using viewport.");
           }
 
+          progress(toolCallId, "snapshot", "Zoo snapshot unavailable — rendering in the viewport");
           const token = mintRenderToken({ projectId, branchId, kind: "model3d" });
           try {
             // Serial views — parallel Zoo WebRTC cold-starts routinely time out
@@ -1753,7 +1779,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
               error: "Rendering failed. Try again or contact a workspace administrator.",
             };
           }
-        }),
+        }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
       toModelOutput: async ({ output }: { output: unknown }) => {
         const out = output as { images?: { view: string; key: string }[]; error?: string };
         if (!out?.images) {
