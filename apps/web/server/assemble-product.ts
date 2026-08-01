@@ -52,6 +52,8 @@ export async function assembleProductWithZooMcp(params: {
   /** Optional product-preview intent for Zoo. */
   prompt?: string;
   signal?: AbortSignal;
+  /** Narration of the Zoo turn, for a live progress row in the UI. */
+  onProgress?: (note: string) => void;
 }): Promise<AssembleProductResult> {
   const warnings: string[] = [];
   let doc = params.pcb ? syncPcbCadPart(params.doc, params.pcb) : params.doc;
@@ -97,6 +99,7 @@ export async function assembleProductWithZooMcp(params: {
     focusPath: "main.kcl",
     forcedTools: ["text_to_cad"],
     signal: params.signal,
+    onProgress: params.onProgress,
   });
   if (!iterated.ok) {
     throw new Error("CAD assembly generation failed.");
@@ -115,6 +118,7 @@ export async function assembleProductWithZooMcp(params: {
     params.assembly.id,
   );
 
+  params.onProgress?.("Validating the assembly in the engine");
   const executed = await withKclProjectDir(doc, params.assembly.path, (projectDir) =>
     params.cad.executeKcl({ projectDir }),
   );

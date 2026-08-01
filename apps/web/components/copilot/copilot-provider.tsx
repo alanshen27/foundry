@@ -19,6 +19,9 @@ import {
   type BroadcastPort,
 } from "@foundry/realtime";
 import { BackgroundChatTransport } from "@/lib/copilot/background-chat-transport";
+import { readCadProgress } from "@/lib/copilot/cad-progress";
+import { CadProgressStore } from "@/lib/copilot/cad-progress-store";
+import { CadProgressProvider } from "./cad-progress-context";
 import {
   historyRowToUIMessage,
   messageDisplayName,
@@ -250,14 +253,21 @@ function ChatEngine({
   const persistFailureStampRef = useRef<(reason?: string) => void>(() => undefined);
   const syncTranscriptFromServerRef = useRef<() => void>(() => undefined);
 
+  const cadProgressRef = useRef(new CadProgressStore());
+
   const { messages, sendMessage, status, error, stop, resumeStream, setMessages } = useChat({
     id: channelId,
     transport,
     messages: seedRef.current,
+    onData: (chunk) => {
+      const progress = readCadProgress(chunk);
+      if (progress) cadProgressRef.current.set(progress);
+    },
     // Manual resume only (see effect below). SDK auto-resume + our send SSE
     // both attach to the same run and the UI flashes as chunks replay twice.
     resume: false,
     onFinish: ({ isError }) => {
+      cadProgressRef.current.clearAll();
       if (connectionDropRef.current) {
         // Stream socket died mid-run. Keep busy state — the activeRun poll
         // reattaches or reloads once we're back online.
@@ -806,7 +816,11 @@ function ChatEngine({
     ],
   );
 
-  return <CopilotContext.Provider value={value}>{children}</CopilotContext.Provider>;
+  return (
+    <CopilotContext.Provider value={value}>
+      <CadProgressProvider value={cadProgressRef.current}>{children}</CadProgressProvider>
+    </CopilotContext.Provider>
+  );
 }
 
 export function CopilotProvider({

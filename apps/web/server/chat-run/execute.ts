@@ -18,6 +18,7 @@ import {
   persistRunMessages,
   type ChannelScope,
 } from "./persist";
+import { createCadProgressEmitter } from "./cad-progress";
 import { maxRunEventSeq, publishRunChunk, publishRunFinished, publishRunStarted } from "./publish";
 import {
   markFailedAssistantMessages,
@@ -183,6 +184,20 @@ export async function executeChatRun(runId: string): Promise<void> {
 
   const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
 
+  // Continue past any chunks a previous crashed attempt already wrote.
+  let seq = await maxRunEventSeq(runId);
+
+  // CAD progress rides the same event log as the model stream. Writes are
+  // serialized on their own chain (the reader awaits its own publishes), so a
+  // late-landing note can at worst be skipped by an already-caught-up client.
+  let progressWrites: Promise<void> = Promise.resolve();
+  const cadProgress = createCadProgressEmitter((chunk) => {
+    const at = ++seq;
+    progressWrites = progressWrites
+      .then(() => publishRunChunk(runId, channelId, at, chunk))
+      .catch((err) => console.warn(`[chat-run ${runId}] cad progress publish failed`, err));
+  });
+
   const tools: any = withToolLogging(
     {
       ...buildProjectTools({
@@ -190,14 +205,14 @@ export async function executeChatRun(runId: string): Promise<void> {
         projectId: run.projectId,
         branchId: run.branchId,
         origin: appOrigin(),
+        onCadProgress: cadProgress.emit,
+        onCadProgressEnd: cadProgress.end,
       }),
       web_search: openai.tools.webSearch({}),
     },
     { runId },
   );
 
-  // Continue past any chunks a previous crashed attempt already wrote.
-  let seq = await maxRunEventSeq(runId);
   let finalized = false;
   /** Latest UI transcript observed from the stream (updated in onEnd). */
   let latestMessages: UIMessage[] = rawMessages;
