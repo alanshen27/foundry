@@ -7,6 +7,10 @@ export const metadata: Metadata = {
   title: "FOUNDRY — CAD Lab (dev)",
 };
 
+// The gate reads CAD_LAB_ENABLED at request time; prerendering would bake a
+// permanent 404 into the build output on production deploys.
+export const dynamic = "force-dynamic";
+
 /**
  * DEV-ONLY lab for exercising CAD skills/MCPs with a prompt: Zoo ML
  * text-to-CAD / iteration, Zoo MCP KCL tools, and arbitrary stdio CAD MCP

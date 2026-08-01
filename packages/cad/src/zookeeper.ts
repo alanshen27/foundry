@@ -89,6 +89,52 @@ function stringMap(raw: Record<string, unknown>): Record<string, string> {
   return out;
 }
 
+/** Longest prefix of the copilot's own narration worth surfacing to a user. */
+const NARRATION_LIMIT = 240;
+
+/** Text of a `reasoning` frame, if this message is one. */
+export function reasoningText(msg: ServerMessage): string | null {
+  const reasoning = msg.reasoning;
+  if (!reasoning || typeof reasoning !== "object") return null;
+  const content = (reasoning as { content?: unknown }).content;
+  if (typeof content !== "string") return null;
+  const trimmed = content.trim().replace(/\s+/g, " ");
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Explain a socket that closed without a usable result.
+ *
+ * Zoo hangs up mid-turn often enough that a bare "closed without outputs" is
+ * unactionable: the close code separates a server-side drop (1006 — no close
+ * frame) from a deliberate close, and the copilot's last `reasoning` frame is
+ * usually the real answer, since it narrates why it gave up (ambiguous prompt,
+ * unsupported geometry) before the socket goes away.
+ */
+export function closeFailureMessage(info: {
+  code: number;
+  reason: string;
+  hadFiles: boolean;
+  narration: string | null;
+}): string {
+  const reason = info.reason.trim();
+  const base = info.hadFiles
+    ? "Zoo Zookeeper closed before end_of_stream"
+    : "Zoo Zookeeper closed without outputs";
+  return withNarration(
+    `${base} (close ${info.code}${reason ? `: ${reason}` : ""})`,
+    info.narration,
+  );
+}
+
+/** Append the copilot's last narration to a failure message. */
+export function withNarration(base: string, narration: string | null): string {
+  if (!narration) return base;
+  const text =
+    narration.length > NARRATION_LIMIT ? `${narration.slice(0, NARRATION_LIMIT)}…` : narration;
+  return `${base} — last from the model: "${text}"`;
+}
+
 function errorDetail(msg: ServerMessage): string {
   const err = msg.error;
   return typeof err === "string" || (err && typeof err === "object")
@@ -127,6 +173,7 @@ export async function zookeeperPrompt(
   let promptId: string | undefined;
   let latestFiles: Record<string, string> | null = null;
   let sawEnd = false;
+  let narration: string | null = null;
 
   return new Promise<CadResult<ZookeeperPromptResult>>((resolve) => {
     let settled = false;
@@ -193,6 +240,12 @@ export async function zookeeperPrompt(
           return;
         }
 
+        const reasoning = reasoningText(msg);
+        if (reasoning) {
+          narration = reasoning;
+          return;
+        }
+
         if ("project_updated" in msg || "tool_output" in msg) {
           const files = extractKclOutputs(msg);
           if (files) {
@@ -213,7 +266,7 @@ export async function zookeeperPrompt(
           if (!latestFiles || Object.keys(latestFiles).length === 0) {
             finish({
               ok: false,
-              error: "Zoo Zookeeper finished without KCL file outputs",
+              error: withNarration("Zoo Zookeeper finished without KCL file outputs", narration),
             });
             return;
           }
@@ -238,7 +291,7 @@ export async function zookeeperPrompt(
       });
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code: number, reasonBuf: Buffer) => {
       if (settled) return;
       if (sawEnd && latestFiles && Object.keys(latestFiles).length > 0) {
         finish({
@@ -253,9 +306,12 @@ export async function zookeeperPrompt(
       }
       finish({
         ok: false,
-        error: latestFiles
-          ? "Zoo Zookeeper closed before end_of_stream"
-          : "Zoo Zookeeper closed without outputs",
+        error: closeFailureMessage({
+          code,
+          reason: reasonBuf?.toString("utf8") ?? "",
+          hadFiles: latestFiles !== null,
+          narration,
+        }),
       });
     });
   });

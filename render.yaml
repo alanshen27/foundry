@@ -75,6 +75,10 @@ envVarGroups:
         sync: false
       - key: FOUNDRY_DEFAULT_WORKSPACE_SLUG
         sync: false
+      # Exposes the dev CAD Lab (/dev/cad-lab) on production deploys. Set to
+      # "1" to enable; leave unset and the route 404s as it does today.
+      - key: CAD_LAB_ENABLED
+        sync: false
 
 services:
   - type: web
