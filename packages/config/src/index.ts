@@ -72,6 +72,16 @@ const serverEnvSchema = z
       const trimmed = value.trim();
       return trimmed.length > 0 ? trimmed : undefined;
     }, z.string().min(1).optional()),
+    // Dev CAD Lab (/dev/cad-lab). Non-production builds always have it; set
+    // "1"/"true" to expose it in production too.
+    CAD_LAB_ENABLED: z.preprocess(
+      (value) => {
+        if (typeof value !== "string") return undefined;
+        const trimmed = value.trim();
+        return trimmed.length > 0 ? trimmed : undefined;
+      },
+      z.enum(["1", "0", "true", "false"]).optional(),
+    ),
     // Optional: land signed-in users on this workspace slug when they are a member.
     FOUNDRY_DEFAULT_WORKSPACE_SLUG: z.preprocess((value) => {
       if (typeof value !== "string") return undefined;

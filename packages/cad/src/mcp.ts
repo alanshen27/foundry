@@ -7,6 +7,20 @@ export type ZooMcpOptions = {
   /** Override spawn command (default: uvx zoo-mcp). */
   command?: string;
   args?: string[];
+  /** Extra environment for the spawned MCP server. */
+  env?: Record<string, string>;
+};
+
+export type McpToolInfo = {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+};
+
+export type McpToolCallOutput = {
+  text: string;
+  images: Array<{ mimeType: string; base64: string }>;
+  structured?: unknown;
 };
 
 type McpContent =
@@ -30,11 +44,13 @@ export class ZooMcpClient {
   private readonly token: string;
   private readonly command: string;
   private readonly args: string[];
+  private readonly extraEnv: Record<string, string>;
 
   constructor(opts: ZooMcpOptions) {
     this.token = opts.token.trim();
     this.command = opts.command ?? "uvx";
     this.args = opts.args ?? ["zoo-mcp"];
+    this.extraEnv = opts.env ?? {};
   }
 
   async close(): Promise<void> {
@@ -54,6 +70,7 @@ export class ZooMcpClient {
         env: {
           ...process.env,
           ZOO_API_TOKEN: this.token,
+          ...this.extraEnv,
         },
       });
       const client = new Client({ name: "foundry-zoo-mcp", version: "0.1.0" });
@@ -97,6 +114,51 @@ export class ZooMcpClient {
       return Buffer.from(data, "base64");
     }
     return null;
+  }
+
+  /** List the tools exposed by the connected MCP server. */
+  async listTools(): Promise<CadResult<McpToolInfo[]>> {
+    try {
+      const client = await this.ensure();
+      const result = await client.listTools();
+      const tools = (result.tools ?? []).map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      }));
+      return { ok: true, data: tools };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Call any MCP tool and return its raw text/image/structured output. */
+  async callGenericTool(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<CadResult<McpToolCallOutput>> {
+    try {
+      const result = await this.callTool(name, args);
+      const text = this.textFrom(result);
+      if (result.isError) {
+        return { ok: false, error: text || `MCP tool ${name} failed` };
+      }
+      const images: McpToolCallOutput["images"] = [];
+      for (const block of result.content ?? []) {
+        if (!block || typeof block !== "object") continue;
+        if ((block as { type?: string }).type !== "image") continue;
+        const data = (block as { data?: unknown }).data;
+        if (typeof data !== "string" || !data) continue;
+        const mimeType = String((block as { mimeType?: unknown }).mimeType ?? "image/png");
+        images.push({ mimeType, base64: data });
+      }
+      return {
+        ok: true,
+        data: { text, images, structured: result.structuredContent },
+      };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   async executeKcl(input: {
