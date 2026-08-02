@@ -49,8 +49,27 @@ import { assembleProductWithZooMcp, syncPcbCadPart } from "../assemble-product";
 import { withKclProjectDir } from "../kcl-project-dir";
 import { extractProductImages, screenshotRenderPage } from "./render";
 import type { CadProgressUpdate } from "../chat-run/cad-progress";
-import type { CadProgressPhase } from "@/lib/copilot/cad-progress";
+import {
+  CAD_PROGRESS_LOG_MAX,
+  trimNote,
+  type CadProgressLogEntry,
+  type CadProgressPhase,
+} from "@/lib/copilot/cad-progress";
 import { applyKclEdits } from "@/lib/cad/patch-kcl";
+
+/**
+ * Long CAD tools attach their narration timeline (`progressLog`) to the output
+ * so the transcript can expand it later — but replaying that timeline to the
+ * model every turn is pure token waste, so it's stripped from what the model
+ * sees.
+ */
+function stripProgressLogForModel({ output }: { output: unknown }) {
+  const value =
+    output && typeof output === "object" && "progressLog" in output
+      ? Object.fromEntries(Object.entries(output).filter(([k]) => k !== "progressLog"))
+      : output;
+  return { type: "json" as const, value: value as never };
+}
 
 /**
  * Tool set exposed to the AI copilot. Every tool runs the same capability
@@ -429,9 +448,27 @@ function findAnyCadComponent(doc: CadDoc, key: string) {
 export function buildProjectTools(ctx: ToolContext) {
   const { projectId, branchId } = ctx;
 
-  /** Report what a multi-minute CAD tool is doing right now. */
+  /**
+   * Report what a multi-minute CAD tool is doing right now, and record it in
+   * a per-call timeline that long CAD tools persist on their output
+   * (`progressLog`) so the transcript can replay it after the run.
+   */
+  const progressLogs = new Map<string, CadProgressLogEntry[]>();
   const progress = (toolCallId: string, phase: CadProgressPhase, note?: string) => {
     ctx.onCadProgress?.({ toolCallId, phase, ...(note ? { note } : {}) });
+    const trimmed = note?.trim() ? trimNote(note) : undefined;
+    const log = progressLogs.get(toolCallId) ?? [];
+    const last = log[log.length - 1];
+    if (last && last.phase === phase && last.note === trimmed) return;
+    log.push({ at: Date.now(), phase, ...(trimmed ? { note: trimmed } : {}) });
+    if (log.length > CAD_PROGRESS_LOG_MAX) log.splice(0, log.length - CAD_PROGRESS_LOG_MAX);
+    progressLogs.set(toolCallId, log);
+  };
+  /** Detach the recorded timeline for inclusion in a tool's final output. */
+  const takeProgressLog = (toolCallId: string): CadProgressLogEntry[] | undefined => {
+    const log = progressLogs.get(toolCallId);
+    progressLogs.delete(toolCallId);
+    return log?.length ? log : undefined;
   };
 
   /**
@@ -1456,10 +1493,12 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
           if (generated.length === 0) {
             const first = failed[0];
+            const log = takeProgressLog(toolCallId);
             return {
               error: failed.map((f) => `${f.partName ?? "main"}: ${f.error}`).join("; "),
               ...(first?.zooOpId ? { zooOpId: first.zooOpId } : {}),
               ...(first?.hint ? { hint: first.hint } : {}),
+              ...(log ? { progressLog: log } : {}),
             };
           }
 
@@ -1528,8 +1567,13 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
                 : verifications?.some((v) => v.verdict.verified === false)
                   ? "Some parts saved but fail engine execute (see executeError) — fix just those with patch_cad_script or a text_to_cad retry, then render_model_views."
                   : "Call render_model_views to inspect, or save_cad_script / create_cad_component for more parts.",
+            ...(() => {
+              const log = takeProgressLog(toolCallId);
+              return log ? { progressLog: log } : {};
+            })(),
           };
         }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
+      toModelOutput: stripProgressLogForModel,
     },
 
     save_cad_script: {
@@ -1668,7 +1712,13 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           try {
             progress(toolCallId, "execute", `${input.partName}: running build123d (OCCT)`);
             const run = await runBuild123d(input.script, { signal: abortSignal });
-            if (!run.ok) return { error: `build123d failed: ${run.error}` };
+            if (!run.ok) {
+              const log = takeProgressLog(toolCallId);
+              return {
+                error: `build123d failed: ${run.error}`,
+                ...(log ? { progressLog: log } : {}),
+              };
+            }
 
             const name = slugifyCadName(input.partName) || "python-part";
             const filename = `${name}.stl`;
@@ -1713,11 +1763,16 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
               verificationState: "UNVERIFIED",
               staleStages: staled,
               hint: "Mesh import — solid geometry built by OCCT (bbox above), but not parametric KCL. Call render_model_views to inspect it.",
+              ...(() => {
+                const log = takeProgressLog(toolCallId);
+                return log ? { progressLog: log } : {};
+              })(),
             };
           } finally {
             ctx.onCadProgressEnd?.(toolCallId);
           }
         }),
+      toModelOutput: stripProgressLogForModel,
     },
 
     add_part_to_assembly: {
@@ -1823,6 +1878,10 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
                 ? "Zoo client bug — retry add_part_to_assembly once."
                 : "Retry add_part_to_assembly once with a shorter preview prompt, or report the error. Do not invent poses with save_cad_script.",
               retryable: true,
+              ...(() => {
+                const log = takeProgressLog(toolCallId);
+                return log ? { progressLog: log } : {};
+              })(),
             };
           }
 
@@ -1839,8 +1898,13 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             ...(missing.length ? { missing } : {}),
             staleStages: staled,
             hint: "Call render_model_views to inspect the product preview. Manufacturing parts under parts/ are unchanged.",
+            ...(() => {
+              const log = takeProgressLog(toolCallId);
+              return log ? { progressLog: log } : {};
+            })(),
           };
         }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
+      toModelOutput: stripProgressLogForModel,
     },
 
     generate_concept_image: {
