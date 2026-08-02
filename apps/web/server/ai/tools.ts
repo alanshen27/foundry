@@ -29,6 +29,11 @@ import {
   upsertPartScripts,
   toZooKclPath,
   fromZooKclPath,
+  parseKclModuleImports,
+  parseForeignImports,
+  importAssetPath,
+  importMeshAsPart,
+  slugifyCadName,
   type CadComponentKind,
   type CadDoc,
 } from "@/lib/cad/engine";
@@ -38,12 +43,14 @@ import { mutateModel3dDoc } from "../cad-doc";
 import { ensureStageStarted, markDownstreamStale, setStageStatus } from "../stage-state";
 import { getObjectStorage } from "../storage";
 import { getCad } from "../cad";
+import { runBuild123d } from "@foundry/cad/server";
 import { mintRenderToken } from "../render-token";
 import { assembleProductWithZooMcp, syncPcbCadPart } from "../assemble-product";
 import { withKclProjectDir } from "../kcl-project-dir";
 import { extractProductImages, screenshotRenderPage } from "./render";
 import type { CadProgressUpdate } from "../chat-run/cad-progress";
 import type { CadProgressPhase } from "@/lib/copilot/cad-progress";
+import { applyKclEdits } from "@/lib/cad/patch-kcl";
 
 /**
  * Tool set exposed to the AI copilot. Every tool runs the same capability
@@ -425,6 +432,31 @@ export function buildProjectTools(ctx: ToolContext) {
   /** Report what a multi-minute CAD tool is doing right now. */
   const progress = (toolCallId: string, phase: CadProgressPhase, note?: string) => {
     ctx.onCadProgress?.({ toolCallId, phase, ...(note ? { note } : {}) });
+  };
+
+  /**
+   * Best-effort real-engine check of one part script (Zoo MCP execute_kcl).
+   * Scripts that import other files need the whole project, so they stay
+   * UNVERIFIED here — assembly execution covers them.
+   */
+  const verifyPartScript = async (
+    script: string,
+  ): Promise<
+    | { verified: true }
+    | { verified: false; executeError: string }
+    | { verified: "UNVERIFIED"; reason: string }
+  > => {
+    if (parseKclModuleImports(script).length > 0 || parseForeignImports(script).length > 0) {
+      return { verified: "UNVERIFIED", reason: "imports need the full project" };
+    }
+    let cad;
+    try {
+      cad = getCad();
+    } catch (err) {
+      return { verified: "UNVERIFIED", reason: err instanceof Error ? err.message : String(err) };
+    }
+    const verdict = await cad.executeKcl({ code: script });
+    return verdict.ok ? { verified: true } : { verified: false, executeError: verdict.error };
   };
 
   return {
@@ -1292,7 +1324,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
     text_to_cad: {
       description:
-        "Generate parametric KCL parts via Zoo Zookeeper (Agent API) and save them into the CAD workspace (parts/*). Prefer this for new geometry. To model several independent parts (enclosure + lid + bracket), pass parts:[{partName,prompt}…] — they generate concurrently and each lands in its own file, which is much faster than one call per part. Single-part form: prompt + optional partName (defaults to parts/main.kcl). Each generation can take several minutes. After success, call render_model_views. NEVER invent zooOpId — omit it for new jobs; only pass a zooOpId copied exactly from a prior tool error (legacy REST resume). Fall back to save_cad_script only if Zoo failed.",
+        "Generate parametric KCL parts via Zoo Zookeeper (Agent API) and save them into the CAD workspace (parts/*). Prefer this for new geometry. To model several independent parts (enclosure + lid + bracket), pass parts:[{partName,prompt}…] — they generate concurrently and each lands in its own file, which is much faster than one call per part. Each part is then engine-verified independently (verified/executeError per part) — fix only failing parts. Single-part form: prompt + optional partName (defaults to parts/main.kcl). Each generation can take several minutes. After success, call render_model_views. NEVER invent zooOpId — omit it for new jobs; only pass a zooOpId copied exactly from a prior tool error (legacy REST resume). Fall back to save_cad_script only if Zoo failed.",
       inputSchema: z
         .object({
           prompt: z
@@ -1431,6 +1463,32 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             };
           }
 
+          // Verify each part independently (real engine execute via Zoo MCP)
+          // so broken parts surface now, per part, instead of at assembly time.
+          // Best-effort: without MCP the parts stay saved but UNVERIFIED.
+          progress(toolCallId, "execute");
+          const verifications = await Promise.all(
+            generated.map(async (part) => {
+              const label = part.partName ?? "main";
+              const verdict = await verifyPartScript(part.script);
+              progress(
+                toolCallId,
+                "execute",
+                verdict.verified === true
+                  ? `${label}: KCL executes clean`
+                  : verdict.verified === false
+                    ? `${label}: ${verdict.executeError}`
+                    : `${label}: saved unverified (${verdict.reason})`,
+              );
+              return { partName: part.partName, verdict };
+            }),
+          ).catch(() => null);
+          const verifyOf = (partName?: string) =>
+            verifications?.find((v) => v.partName === partName)?.verdict ?? {
+              verified: "UNVERIFIED" as const,
+              reason: "verification errored",
+            };
+
           // One locked read-modify-write for every generated part, so parallel
           // results can't overwrite each other.
           const data = await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
@@ -1454,7 +1512,11 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             ok: true,
             engine: "zoo",
             generated: succeeded.length,
-            parts: succeeded.map((part) => ({ ...part, path: pathOf(part.partName) })),
+            parts: succeeded.map((part) => ({
+              ...part,
+              path: pathOf(part.partName),
+              ...verifyOf(part.partName),
+            })),
             ...(failed.length > 0 ? { failed } : {}),
             operationId: succeeded[0]?.operationId,
             path: active?.path,
@@ -1463,7 +1525,9 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             hint:
               failed.length > 0
                 ? "Some parts failed — retry those with a shorter prompt or save_cad_script, then render_model_views."
-                : "Call render_model_views to inspect, or save_cad_script / create_cad_component for more parts.",
+                : verifications?.some((v) => v.verdict.verified === false)
+                  ? "Some parts saved but fail engine execute (see executeError) — fix just those with patch_cad_script or a text_to_cad retry, then render_model_views."
+                  : "Call render_model_views to inspect, or save_cad_script / create_cad_component for more parts.",
           };
         }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
     },
@@ -1486,14 +1550,173 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             upsertCadContent(base, partName, script),
           );
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
+          const saved = data.components.find((c) => c.id === data.activeId);
+          const verdict =
+            saved?.kind === "part"
+              ? await verifyPartScript(script)
+              : ({ verified: "UNVERIFIED", reason: "not a standalone part" } as const);
+          return {
+            ok: true,
+            engine: "zoo",
+            path: saved?.path,
+            kclChars: script.length,
+            ...verdict,
+            staleStages: staled,
+            hint:
+              verdict.verified === false
+                ? "Saved, but the KCL fails engine execute (see executeError) — fix it before rendering."
+                : "Call render_model_views to inspect the result from multiple angles.",
+          };
+        }),
+    },
+
+    patch_cad_script: {
+      description:
+        "Apply small, high-confidence text edits to an existing CAD file without a Zoo round-trip (seconds, not minutes) — e.g. change a dimension binding, rename a variable, tweak a fillet. Each edit's `find` must match the current content exactly once. Part edits are verified by real engine execute BEFORE saving; a failing patch is rejected and nothing changes. For new geometry or big rewrites use text_to_cad / save_cad_script instead.",
+      inputSchema: z.object({
+        partName: z
+          .string()
+          .min(1)
+          .max(64)
+          .describe("Component name or path (e.g. enclosure or parts/lid.kcl)."),
+        edits: z
+          .array(
+            z.object({
+              find: z
+                .string()
+                .min(1)
+                .max(2000)
+                .describe("Exact substring of the current content — must occur exactly once."),
+              replace: z.string().max(2000),
+            }),
+          )
+          .min(1)
+          .max(10),
+      }),
+      execute: async (
+        input: { partName: string; edits: { find: string; replace: string }[] },
+        { toolCallId }: { toolCallId: string },
+      ) =>
+        guard(ctx, "mechanical.edit", async (workspaceId) => {
+          const row = await prisma.designDoc.findUnique({
+            where: { projectId_branchId_kind: { projectId, branchId, kind: "MODEL3D" } },
+          });
+          const doc = row?.data ? normalizeCadDoc(row.data) : null;
+          const key = input.partName.trim();
+          const component = doc?.components.find(
+            (c) => c.path === key || c.name === key || c.path.endsWith(`/${key}.kcl`),
+          );
+          if (!component) {
+            return {
+              error: `No CAD component matches "${input.partName}" — check get_project_state.cad.components.`,
+            };
+          }
+
+          const patched = applyKclEdits(component.content, input.edits);
+          if (!patched.ok) return { error: patched.error };
+
+          // Verify the patched script before it can land: this tool exists for
+          // edits the model is confident in, so a failing execute means reject.
+          let verdict: Awaited<ReturnType<typeof verifyPartScript>> = {
+            verified: "UNVERIFIED",
+            reason: "not a standalone part",
+          };
+          if (component.kind === "part") {
+            progress(toolCallId, "execute", `${component.path}: verifying patched KCL`);
+            verdict = await verifyPartScript(patched.content);
+            if (verdict.verified === false) {
+              return {
+                error: `Patched KCL fails engine execute — nothing saved: ${verdict.executeError}`,
+                hint: "Adjust the edit, or fall back to save_cad_script / text_to_cad.",
+              };
+            }
+          }
+
+          const data = await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
+            upsertCadContent(base, component.path, patched.content),
+          );
+          const staled = await touchStage(ctx, workspaceId, "ENGINEER");
           return {
             ok: true,
             engine: "zoo",
             path: data.components.find((c) => c.id === data.activeId)?.path,
-            kclChars: script.length,
+            editsApplied: input.edits.length,
+            kclChars: patched.content.length,
+            ...verdict,
             staleStages: staled,
-            hint: "Call render_model_views to inspect the result from multiple angles.",
+            hint: "Call render_model_views if the change should be visually confirmed.",
           };
+        }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
+    },
+
+    python_cad: {
+      description:
+        "Model a part in build123d (Python code-CAD, OCCT kernel) and import the exported STL mesh into the CAD workspace. Fast (seconds, local execution) and reliable for prismatic/geometric parts — a strong alternative when Zoo text_to_cad fails or loops. Millimetres. The script MUST assign the finished model to a variable named `result` (a build123d Part/Shape or builder, e.g. `with BuildPart() as bp: ...` then `result = bp.part`). Trade-off: the part lands as a mesh reference (UNVERIFIED import), not editable parametric KCL — prefer text_to_cad when in-viewport parametric editing matters.",
+      inputSchema: z.object({
+        partName: z.string().min(1).max(64).describe("Part name, e.g. rotary_knob"),
+        script: z
+          .string()
+          .min(20)
+          .max(40_000)
+          .describe("Python build123d source. No filesystem/network access; must set `result`."),
+      }),
+      execute: async (
+        input: { partName: string; script: string },
+        { toolCallId, abortSignal }: { toolCallId: string; abortSignal?: AbortSignal },
+      ) =>
+        guard(ctx, "mechanical.edit", async (workspaceId) => {
+          try {
+            progress(toolCallId, "execute", `${input.partName}: running build123d (OCCT)`);
+            const run = await runBuild123d(input.script, { signal: abortSignal });
+            if (!run.ok) return { error: `build123d failed: ${run.error}` };
+
+            const name = slugifyCadName(input.partName) || "python-part";
+            const filename = `${name}.stl`;
+            const path = importAssetPath(filename, "stl");
+            const key = `projects/${projectId}/cad/imports/${crypto.randomUUID()}-${filename}`;
+            progress(toolCallId, "execute", `${input.partName}: storing mesh + importing`);
+            const stored = await getObjectStorage().put(key, run.data.stl, "model/stl");
+
+            await prisma.artifact.create({
+              data: {
+                projectId,
+                branchId,
+                kind: "cad_import",
+                name: filename,
+                storageKey: stored.key,
+                sha256: stored.sha256,
+                mimeType: "model/stl",
+                sizeBytes: stored.sizeBytes,
+                verificationState: "UNVERIFIED",
+                createdById: ctx.userId,
+              },
+            });
+
+            const data = await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
+              importMeshAsPart(base, {
+                name,
+                path,
+                format: "stl",
+                storageKey: stored.key,
+                sizeBytes: stored.sizeBytes,
+                lengthUnit: "mm",
+              }),
+            );
+            const staled = await touchStage(ctx, workspaceId, "ENGINEER");
+            return {
+              ok: true,
+              engine: "build123d",
+              partPath: data.components.find((c) => c.id === data.activeId)?.path,
+              assetPath: path,
+              boundingBoxMm: run.data.bbox,
+              sizeBytes: stored.sizeBytes,
+              verificationState: "UNVERIFIED",
+              staleStages: staled,
+              hint: "Mesh import — solid geometry built by OCCT (bbox above), but not parametric KCL. Call render_model_views to inspect it.",
+            };
+          } finally {
+            ctx.onCadProgressEnd?.(toolCallId);
+          }
         }),
     },
 
