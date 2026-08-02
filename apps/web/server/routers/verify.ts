@@ -9,6 +9,8 @@ import { ensureStageStarted, markDownstreamStale, setStageStatus } from "../stag
 const category = z.enum(["VISUAL", "ELECTRICAL", "MECHANICAL", "SOFTWARE", "CROSS_DOMAIN"]);
 const status = z.enum(["PENDING", "PASS", "FAIL", "WARNING", "SKIPPED", "SIMULATED", "ERROR"]);
 const severity = z.enum(["INFO", "MINOR", "MAJOR", "CRITICAL"]);
+/** Repo-relative file/part path the check is about; null = project-wide. */
+const targetPath = z.string().trim().min(1).max(300);
 
 /** A check is satisfied for gating if it passed (or was waived/skipped). */
 const BLOCKING_STATUSES = new Set(["PENDING", "FAIL", "ERROR"]);
@@ -33,6 +35,7 @@ export const verifyRouter = router({
         title: z.string().min(1).max(200),
         detail: z.string().max(2000).nullish(),
         severity: severity.default("INFO"),
+        targetPath: targetPath.nullish(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -72,6 +75,7 @@ export const verifyRouter = router({
         detail: z.string().max(2000).nullish(),
         status: status.optional(),
         severity: severity.optional(),
+        targetPath: targetPath.nullish(),
         evidence: z.string().max(2000).nullish(),
       }),
     )
