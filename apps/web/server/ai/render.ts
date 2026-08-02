@@ -163,6 +163,68 @@ export type ProductImageCandidate = {
 };
 
 /**
+ * Image-harvest script, kept as a source string on purpose.
+ *
+ * `page.evaluate(fn)` serializes the function's *compiled* source and evals it
+ * inside the page. Next's compiler wraps nested functions in a `__name(...)`
+ * helper that only exists in the server bundle, so a compiled closure throws
+ * `ReferenceError: __name is not defined` in the browser. A string bypasses
+ * compilation entirely — nothing the bundler emits can leak into the page.
+ */
+export const HARVEST_PRODUCT_IMAGES_SCRIPT = `(() => {
+  const out = [];
+  const push = (url, source, w = 0, h = 0) => {
+    if (!url) return;
+    try {
+      const abs = new URL(url, location.href).href;
+      if (!/^https?:/i.test(abs)) return;
+      out.push({ url: abs, source, width: w, height: h });
+    } catch {
+      /* ignore bad urls */
+    }
+  };
+  push(document.querySelector('meta[property="og:image"]')?.getAttribute("content"), "og");
+  push(document.querySelector('meta[name="twitter:image"]')?.getAttribute("content"), "twitter");
+  for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      const data = JSON.parse(script.textContent || "null");
+      const visit = (node) => {
+        if (!node || typeof node !== "object") return;
+        if (Array.isArray(node)) {
+          node.forEach(visit);
+          return;
+        }
+        const img = node.image;
+        if (typeof img === "string") push(img, "jsonld");
+        else if (Array.isArray(img)) {
+          for (const item of img) {
+            if (typeof item === "string") push(item, "jsonld");
+            else if (item && typeof item === "object" && "url" in item) {
+              push(String(item.url), "jsonld");
+            }
+          }
+        } else if (img && typeof img === "object" && "url" in img) {
+          push(String(img.url), "jsonld");
+        }
+        if (node["@graph"]) visit(node["@graph"]);
+      };
+      visit(data);
+    } catch {
+      /* ignore bad json-ld */
+    }
+  }
+  for (const img of document.querySelectorAll("img")) {
+    const w = img.naturalWidth || img.width || 0;
+    const h = img.naturalHeight || img.height || 0;
+    if (w < 120 || h < 120) continue;
+    push(img.currentSrc || img.src, "img", w, h);
+  }
+  return out;
+})()`;
+
+type RawImageCandidate = { url: string; source: string; width: number; height: number };
+
+/**
  * Open a product page and harvest likely component photos (og/twitter/JSON-LD
  * + large &lt;img&gt; elements). Uses the rendered DOM so lazy-loaded images resolve.
  */
@@ -173,60 +235,7 @@ export async function extractProductImages(
   return withBrowserPage({ width: 1280, height: 900 }, async (page) => {
     await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 25_000 });
     await new Promise((r) => setTimeout(r, 800));
-    const raw = await page.evaluate(() => {
-      const out: { url: string; source: string; width: number; height: number }[] = [];
-      const push = (url: string | null | undefined, source: string, w = 0, h = 0) => {
-        if (!url) return;
-        try {
-          const abs = new URL(url, location.href).href;
-          if (!/^https?:/i.test(abs)) return;
-          out.push({ url: abs, source, width: w, height: h });
-        } catch {
-          /* ignore bad urls */
-        }
-      };
-      push(document.querySelector('meta[property="og:image"]')?.getAttribute("content"), "og");
-      push(
-        document.querySelector('meta[name="twitter:image"]')?.getAttribute("content"),
-        "twitter",
-      );
-      for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
-        try {
-          const data = JSON.parse(script.textContent || "null") as unknown;
-          const visit = (node: unknown) => {
-            if (!node || typeof node !== "object") return;
-            if (Array.isArray(node)) {
-              node.forEach(visit);
-              return;
-            }
-            const obj = node as Record<string, unknown>;
-            const img = obj.image;
-            if (typeof img === "string") push(img, "jsonld");
-            else if (Array.isArray(img)) {
-              for (const item of img) {
-                if (typeof item === "string") push(item, "jsonld");
-                else if (item && typeof item === "object" && "url" in item) {
-                  push(String((item as { url: unknown }).url), "jsonld");
-                }
-              }
-            } else if (img && typeof img === "object" && "url" in img) {
-              push(String((img as { url: unknown }).url), "jsonld");
-            }
-            if (obj["@graph"]) visit(obj["@graph"]);
-          };
-          visit(data);
-        } catch {
-          /* ignore bad json-ld */
-        }
-      }
-      for (const img of document.querySelectorAll("img")) {
-        const w = img.naturalWidth || img.width || 0;
-        const h = img.naturalHeight || img.height || 0;
-        if (w < 120 || h < 120) continue;
-        push(img.currentSrc || img.src, "img", w, h);
-      }
-      return out;
-    });
+    const raw = (await page.evaluate(HARVEST_PRODUCT_IMAGES_SCRIPT)) as RawImageCandidate[];
 
     const seen = new Set<string>();
     return raw
