@@ -325,102 +325,123 @@ function Divider() {
   return <div className="bg-border mx-0.5 h-5 w-px shrink-0" />;
 }
 
-/** Clickable orthographic face map + iso — classic CAD view picker. */
+/** Faces of the 3D navigation cube: CSS transform placing each face. */
+const CUBE_SIZE = 64;
+const CUBE_FACES: { id: StandardView; label: string; place: string }[] = [
+  { id: "front", label: "FRONT", place: "" },
+  { id: "back", label: "BACK", place: "rotateY(180deg)" },
+  { id: "right", label: "RIGHT", place: "rotateY(90deg)" },
+  { id: "left", label: "LEFT", place: "rotateY(-90deg)" },
+  { id: "top", label: "TOP", place: "rotateX(90deg)" },
+  { id: "bottom", label: "BOT", place: "rotateX(-90deg)" },
+];
+
+/**
+ * Real 3D navigation cube: rotates with the camera, faces are clickable
+ * standard views. CAD yaw/pitch map to CSS as rotateX(-pitch) rotateY(-yaw)
+ * (camera orbits the model; the cube counter-rotates to face the camera).
+ */
 function ViewCube({
   active,
   orientation,
   onSelect,
+  onIso,
   disabled,
 }: {
   active: StandardView | null;
   orientation: CameraOrientation;
   onSelect: (view: StandardView) => void;
+  onIso: () => void;
   disabled?: boolean;
 }) {
-  const cell = (id: StandardView, label: string, extra?: string) => (
-    <button
-      type="button"
-      disabled={disabled}
-      title={label}
-      aria-label={`${label} view`}
-      onPointerDown={(event) => event.stopPropagation()}
-      onClick={(event) => {
-        event.stopPropagation();
-        onSelect(id);
-      }}
-      className={cn(
-        "flex items-center justify-center rounded-md border text-[10px] font-semibold transition-colors",
-        "border-border/80 bg-background/90 hover:bg-primary/15 hover:text-primary disabled:opacity-40",
-        active === id && "border-primary bg-primary/20 text-primary",
-        extra,
-      )}
-    >
-      {label}
-    </button>
-  );
-
   return (
     <div
-      className="bg-card/95 pointer-events-auto absolute right-3 bottom-14 z-20 w-[108px] rounded-lg border p-1.5 shadow-lg backdrop-blur-md"
+      className="pointer-events-auto absolute right-3 bottom-14 z-20 flex flex-col items-center gap-1"
       role="group"
       aria-label="Standard camera views"
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <div className="grid grid-cols-3 gap-1">
-        <div />
-        {cell("top", "Top", "h-7")}
-        <div />
-        {cell("left", "L", "h-7")}
-        {cell("front", "F", "h-7")}
-        {cell("right", "R", "h-7")}
-        <div />
-        {cell("bottom", "Bot", "h-7")}
-        <div />
-      </div>
-      <div className="mt-1 grid grid-cols-2 gap-1">
-        {cell("back", "Back", "h-6")}
-        {cell("iso", "Iso", "h-6")}
-      </div>
-      <div className="text-muted-foreground mt-1 flex items-center justify-center gap-2 text-[8px]">
-        {(["X", "Y", "Z"] as const).map((axis) => {
-          const projected = projectCadAxis(axis, orientation);
-          return (
-            <span
-              key={axis}
+      <div
+        className="flex items-center justify-center"
+        style={{ width: CUBE_SIZE + 40, height: CUBE_SIZE + 40, perspective: "420px" }}
+      >
+        <div
+          className="relative transition-transform duration-100"
+          style={{
+            width: CUBE_SIZE,
+            height: CUBE_SIZE,
+            transformStyle: "preserve-3d",
+            transform: `rotateX(${-orientation.pitchDeg}deg) rotateY(${-orientation.yawDeg}deg)`,
+          }}
+        >
+          {CUBE_FACES.map((face) => (
+            <button
+              key={face.id}
+              type="button"
+              disabled={disabled}
+              title={`${face.label} view`}
+              aria-label={`${face.label} view`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelect(face.id);
+              }}
               className={cn(
-                "inline-block font-semibold transition-transform duration-100",
-                axis === "X" ? "text-red-500" : axis === "Y" ? "text-emerald-500" : "text-sky-500",
+                "absolute inset-0 flex items-center justify-center border text-[9px] font-semibold tracking-wider transition-colors",
+                "border-border bg-card/85 text-muted-foreground hover:bg-primary/25 hover:text-primary disabled:opacity-40",
+                active === face.id && "border-primary bg-primary/20 text-primary",
               )}
               style={{
-                transform: `rotate(${projected.angleDeg}deg) scale(${0.75 + projected.scale * 0.25})`,
+                transform: `${face.place} translateZ(${CUBE_SIZE / 2}px)`,
+                backfaceVisibility: "hidden",
               }}
             >
-              {axis}
-            </span>
-          );
-        })}
+              {face.label}
+            </button>
+          ))}
+        </div>
       </div>
-    </div>
-  );
-}
-
-function CoordinatePlaneOverlay({ orientation }: { orientation: CameraOrientation }) {
-  const gridTilt = Math.max(0, Math.min(72, 72 - Math.abs(orientation.pitchDeg) * 0.8));
-  const transform = `perspective(900px) rotateX(${gridTilt}deg) rotateZ(${orientation.yawDeg}deg)`;
-  return (
-    <div className="pointer-events-none absolute inset-0 z-[1] overflow-hidden" aria-hidden="true">
-      <div
-        className="absolute top-[18%] left-[-25%] h-[110%] w-[150%] origin-center opacity-25"
-        style={{
-          transform,
-          backgroundImage:
-            "linear-gradient(rgba(82,168,255,.22) 1px, transparent 1px), linear-gradient(90deg, rgba(82,168,255,.22) 1px, transparent 1px), linear-gradient(rgba(82,168,255,.09) 1px, transparent 1px), linear-gradient(90deg, rgba(82,168,255,.09) 1px, transparent 1px)",
-          backgroundSize: "80px 80px, 80px 80px, 16px 16px, 16px 16px",
-          maskImage: "radial-gradient(ellipse at center, black 5%, transparent 72%)",
-        }}
-      />
-      <div className="absolute top-1/2 left-[12%] h-px w-[76%] bg-red-500/35" />
-      <div className="absolute top-[12%] left-1/2 h-[76%] w-px bg-emerald-500/35" />
+      <div className="bg-card/90 flex items-center gap-2 rounded-md border px-1.5 py-0.5 shadow-sm backdrop-blur-md">
+        <button
+          type="button"
+          disabled={disabled}
+          title="Isometric view"
+          aria-label="Isometric view"
+          onClick={(event) => {
+            event.stopPropagation();
+            onIso();
+          }}
+          className={cn(
+            "text-muted-foreground hover:text-primary rounded px-1 text-[9px] font-semibold disabled:opacity-40",
+            active === "iso" && "text-primary",
+          )}
+        >
+          ISO
+        </button>
+        <span className="bg-border h-3 w-px" />
+        <span className="flex items-center gap-1.5 text-[8px]">
+          {(["X", "Y", "Z"] as const).map((axis) => {
+            const projected = projectCadAxis(axis, orientation);
+            return (
+              <span
+                key={axis}
+                className={cn(
+                  "inline-block font-semibold transition-transform duration-100",
+                  axis === "X"
+                    ? "text-red-500"
+                    : axis === "Y"
+                      ? "text-emerald-500"
+                      : "text-sky-500",
+                )}
+                style={{
+                  transform: `rotate(${projected.angleDeg}deg) scale(${0.75 + projected.scale * 0.25})`,
+                }}
+              >
+                {axis}
+              </span>
+            );
+          })}
+        </span>
+      </div>
     </div>
   );
 }
@@ -512,6 +533,10 @@ export function CadViewport({
   const [edges, setEdges] = useState(true);
   const [axes, setAxes] = useState(true);
   const ready = status === "running";
+  // Camera/view/display commands only need the live RTC session — gating them
+  // on a successful KCL execution left the whole toolbar dead whenever a model
+  // was slow or failed, with no way to even orbit or fit.
+  const controlsReady = rtcReady;
   navToolRef.current = navTool;
 
   const runCmd = useCallback(async (cmd: zoo.ModelingCmd) => {
@@ -1040,7 +1065,6 @@ export function CadViewport({
         ref={hostRef}
         className="absolute inset-0 [&_video]:h-full [&_video]:w-full [&_video]:object-contain"
       />
-      {chrome && scenery ? <CoordinatePlaneOverlay orientation={cameraOrientation} /> : null}
       {hoverLabel && !headless ? (
         <div
           className="pointer-events-none absolute z-40 -translate-x-1/2 -translate-y-[calc(100%+10px)] rounded-none border bg-card/95 px-2 py-1 font-mono text-[11px] font-medium shadow-lg backdrop-blur-md"
@@ -1050,14 +1074,14 @@ export function CadViewport({
         </div>
       ) : null}
 
-      {chrome && status !== "error" ? (
+      {chrome ? (
         <>
           <div className="pointer-events-none absolute inset-x-0 bottom-14 z-20 flex justify-center px-3 pb-3">
             <div className="bg-card/95 pointer-events-auto flex max-w-[min(100%,920px)] items-center gap-0.5 overflow-x-auto rounded-xl border px-1.5 py-1 shadow-lg backdrop-blur-md">
               <ToolbarBtn
                 title="Orbit"
                 active={navTool === "orbit"}
-                disabled={!ready}
+                disabled={!controlsReady}
                 onClick={() => void setNav("orbit")}
               >
                 <Move className="size-3.5" />
@@ -1065,7 +1089,7 @@ export function CadViewport({
               <ToolbarBtn
                 title="Select"
                 active={navTool === "select"}
-                disabled={!ready}
+                disabled={!controlsReady}
                 onClick={() => void setNav("select")}
               >
                 <BoxSelect className="size-3.5" />
@@ -1074,26 +1098,26 @@ export function CadViewport({
               <ToolbarBtn
                 title="Isometric view"
                 active={activeView === "iso"}
-                disabled={!ready}
+                disabled={!controlsReady}
                 onClick={() => void applyView("iso")}
                 className="min-w-8 px-1 text-[9px] font-semibold"
               >
                 ISO
               </ToolbarBtn>
               <Divider />
-              <ToolbarBtn title="Fit all" disabled={!ready} onClick={() => void fit()}>
+              <ToolbarBtn title="Fit all" disabled={!controlsReady} onClick={() => void fit()}>
                 <Maximize2 className="size-3.5" />
               </ToolbarBtn>
               <ToolbarBtn
                 title="Zoom in"
-                disabled={!ready}
+                disabled={!controlsReady}
                 onClick={() => void zoom(ZOOM_BUTTON_STEP)}
               >
                 <Focus className="size-3.5" />
               </ToolbarBtn>
               <ToolbarBtn
                 title="Zoom out"
-                disabled={!ready}
+                disabled={!controlsReady}
                 onClick={() => void zoom(-ZOOM_BUTTON_STEP)}
               >
                 <ZoomOut className="size-3.5" />
@@ -1105,7 +1129,7 @@ export function CadViewport({
                     : "Perspective projection"
                 }
                 active={projection === "orthographic"}
-                disabled={!ready}
+                disabled={!controlsReady}
                 onClick={() => void toggleProjection()}
               >
                 <Aperture className="size-3.5" />
@@ -1113,7 +1137,7 @@ export function CadViewport({
               <ToolbarBtn
                 title="Toggle edge lines"
                 active={edges}
-                disabled={!ready}
+                disabled={!controlsReady}
                 onClick={() => void toggleEdges()}
               >
                 <Square className="size-3.5" />
@@ -1121,7 +1145,7 @@ export function CadViewport({
               <ToolbarBtn
                 title="Toggle axes gizmo"
                 active={axes}
-                disabled={!ready}
+                disabled={!controlsReady}
                 onClick={() => void toggleAxes()}
               >
                 <Axis3d className="size-3.5" />
@@ -1144,8 +1168,9 @@ export function CadViewport({
           <ViewCube
             active={activeView}
             orientation={cameraOrientation}
-            disabled={!ready}
+            disabled={!controlsReady}
             onSelect={(v) => void applyView(v)}
+            onIso={() => void applyView("iso")}
           />
 
           <div className="bg-card/80 text-muted-foreground pointer-events-none absolute top-14 left-3 z-20 hidden items-center gap-2 rounded-md border px-2 py-1 text-[9px] shadow-sm backdrop-blur-md xl:flex">
@@ -1156,26 +1181,30 @@ export function CadViewport({
         </>
       ) : null}
 
-      {status !== "running" ? (
-        error ? (
-          <DotMatrixLoader
-            className="pointer-events-none absolute inset-0"
-            tone="signal"
-            label="Zoo engine error"
-          >
-            {error}
-          </DotMatrixLoader>
-        ) : (
-          <DotMatrixLoader
-            className="pointer-events-none absolute inset-0"
-            tone="signal"
-            label={
-              status === "executing"
-                ? "Building model in Zoo engine"
-                : "Connecting to Zoo CAD engine"
-            }
-          />
-        )
+      {status === "error" && error ? (
+        <DotMatrixLoader
+          className="pointer-events-none absolute inset-0 z-10"
+          tone="signal"
+          label="Zoo engine error"
+        >
+          {error}
+        </DotMatrixLoader>
+      ) : status === "connecting" ? (
+        <DotMatrixLoader
+          className="pointer-events-none absolute inset-0 z-10"
+          tone="signal"
+          label="Connecting to Zoo CAD engine"
+        />
+      ) : status === "executing" ? (
+        // The stream is already live — a full-screen loader here hid the scene
+        // and blocked every control on each re-execute. Small pill instead.
+        <div
+          className="bg-card/95 text-muted-foreground pointer-events-none absolute top-14 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] shadow-lg backdrop-blur-md"
+          role="status"
+        >
+          <span className="bg-primary size-1.5 animate-pulse rounded-full" />
+          Building model in Zoo engine…
+        </div>
       ) : null}
     </div>
   );
