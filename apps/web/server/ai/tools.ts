@@ -31,6 +31,9 @@ import {
   fromZooKclPath,
   parseKclModuleImports,
   parseForeignImports,
+  importAssetPath,
+  importMeshAsPart,
+  slugifyCadName,
   type CadComponentKind,
   type CadDoc,
 } from "@/lib/cad/engine";
@@ -40,6 +43,7 @@ import { mutateModel3dDoc } from "../cad-doc";
 import { ensureStageStarted, markDownstreamStale, setStageStatus } from "../stage-state";
 import { getObjectStorage } from "../storage";
 import { getCad } from "../cad";
+import { runBuild123d } from "@foundry/cad/server";
 import { mintRenderToken } from "../render-token";
 import { assembleProductWithZooMcp, syncPcbCadPart } from "../assemble-product";
 import { withKclProjectDir } from "../kcl-project-dir";
@@ -1643,6 +1647,77 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             hint: "Call render_model_views if the change should be visually confirmed.",
           };
         }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
+    },
+
+    python_cad: {
+      description:
+        "Model a part in build123d (Python code-CAD, OCCT kernel) and import the exported STL mesh into the CAD workspace. Fast (seconds, local execution) and reliable for prismatic/geometric parts — a strong alternative when Zoo text_to_cad fails or loops. Millimetres. The script MUST assign the finished model to a variable named `result` (a build123d Part/Shape or builder, e.g. `with BuildPart() as bp: ...` then `result = bp.part`). Trade-off: the part lands as a mesh reference (UNVERIFIED import), not editable parametric KCL — prefer text_to_cad when in-viewport parametric editing matters.",
+      inputSchema: z.object({
+        partName: z.string().min(1).max(64).describe("Part name, e.g. rotary_knob"),
+        script: z
+          .string()
+          .min(20)
+          .max(40_000)
+          .describe("Python build123d source. No filesystem/network access; must set `result`."),
+      }),
+      execute: async (
+        input: { partName: string; script: string },
+        { toolCallId, abortSignal }: { toolCallId: string; abortSignal?: AbortSignal },
+      ) =>
+        guard(ctx, "mechanical.edit", async (workspaceId) => {
+          try {
+            progress(toolCallId, "execute", `${input.partName}: running build123d (OCCT)`);
+            const run = await runBuild123d(input.script, { signal: abortSignal });
+            if (!run.ok) return { error: `build123d failed: ${run.error}` };
+
+            const name = slugifyCadName(input.partName) || "python-part";
+            const filename = `${name}.stl`;
+            const path = importAssetPath(filename, "stl");
+            const key = `projects/${projectId}/cad/imports/${crypto.randomUUID()}-${filename}`;
+            progress(toolCallId, "execute", `${input.partName}: storing mesh + importing`);
+            const stored = await getObjectStorage().put(key, run.data.stl, "model/stl");
+
+            await prisma.artifact.create({
+              data: {
+                projectId,
+                branchId,
+                kind: "cad_import",
+                name: filename,
+                storageKey: stored.key,
+                sha256: stored.sha256,
+                mimeType: "model/stl",
+                sizeBytes: stored.sizeBytes,
+                verificationState: "UNVERIFIED",
+                createdById: ctx.userId,
+              },
+            });
+
+            const data = await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
+              importMeshAsPart(base, {
+                name,
+                path,
+                format: "stl",
+                storageKey: stored.key,
+                sizeBytes: stored.sizeBytes,
+                lengthUnit: "mm",
+              }),
+            );
+            const staled = await touchStage(ctx, workspaceId, "ENGINEER");
+            return {
+              ok: true,
+              engine: "build123d",
+              partPath: data.components.find((c) => c.id === data.activeId)?.path,
+              assetPath: path,
+              boundingBoxMm: run.data.bbox,
+              sizeBytes: stored.sizeBytes,
+              verificationState: "UNVERIFIED",
+              staleStages: staled,
+              hint: "Mesh import — solid geometry built by OCCT (bbox above), but not parametric KCL. Call render_model_views to inspect it.",
+            };
+          } finally {
+            ctx.onCadProgressEnd?.(toolCallId);
+          }
+        }),
     },
 
     add_part_to_assembly: {

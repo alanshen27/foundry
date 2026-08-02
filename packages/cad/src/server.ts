@@ -5,6 +5,8 @@
 export { createZooCadAdapter, type ZooCadAdapterOptions } from "./zoo";
 export { ZooMcpClient, type ZooMcpOptions, type McpToolInfo, type McpToolCallOutput } from "./mcp";
 export { zookeeperPrompt, extractKclOutputs } from "./zookeeper";
+export { runBuild123d, summarizePythonError } from "./build123d";
+export type { Build123dRunOptions, Build123dRunOutput } from "./build123d";
 export type { ZookeeperPromptOptions, ZookeeperPromptResult } from "./zookeeper";
 export type {
   CadBoundingBox,
