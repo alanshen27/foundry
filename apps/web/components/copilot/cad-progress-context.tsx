@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useSyncExternalStore } from "react";
 import type { CadProgressStore } from "@/lib/copilot/cad-progress-store";
-import type { CadProgress } from "@/lib/copilot/cad-progress";
+import type { CadProgress, CadProgressLogEntry } from "@/lib/copilot/cad-progress";
 
 const CadProgressContext = createContext<CadProgressStore | null>(null);
 
@@ -17,6 +17,21 @@ export function useCadProgress(toolCallId: string | undefined): CadProgress | un
   return useSyncExternalStore(
     (listener) => (store && toolCallId ? store.subscribe(toolCallId, listener) : () => undefined),
     () => (store && toolCallId ? store.get(toolCallId) : undefined),
+    () => undefined,
+  );
+}
+
+/**
+ * Accumulated narration timeline for one tool call. Snapshots are stable
+ * (the store replaces the array on append), so useSyncExternalStore is safe.
+ */
+export function useCadProgressLog(
+  toolCallId: string | undefined,
+): CadProgressLogEntry[] | undefined {
+  const store = useContext(CadProgressContext);
+  return useSyncExternalStore(
+    (listener) => (store && toolCallId ? store.subscribe(toolCallId, listener) : () => undefined),
+    () => (store && toolCallId ? store.getLog(toolCallId) : undefined),
     () => undefined,
   );
 }

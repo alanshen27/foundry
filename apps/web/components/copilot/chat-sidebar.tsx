@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import {
   AtSign,
   Camera,
+  ChevronDown,
+  ChevronRight,
   CheckCircle2,
   CircuitBoard,
   Boxes,
@@ -39,8 +41,13 @@ import {
   type MentionTarget,
 } from "@/lib/copilot/mentions";
 import { groupAssistantPartBlocks } from "@/lib/copilot/part-blocks";
-import { CAD_PHASE_LABEL, formatElapsed } from "@/lib/copilot/cad-progress";
-import { useCadProgress } from "./cad-progress-context";
+import {
+  CAD_PHASE_LABEL,
+  formatElapsed,
+  readToolProgressLog,
+  type CadProgressLogEntry,
+} from "@/lib/copilot/cad-progress";
+import { useCadProgress, useCadProgressLog } from "./cad-progress-context";
 import { isAssistantFailureText } from "@/lib/copilot/messages";
 import {
   isMessageDeleted,
@@ -392,6 +399,49 @@ function CadProgressLine({ toolCallId }: { toolCallId: string | undefined }) {
   );
 }
 
+/**
+ * Expandable narration timeline for a CAD tool: the live accumulated log while
+ * it runs, or the `progressLog` persisted on its output after the run.
+ */
+function CadProgressTimeline({ entries }: { entries: CadProgressLogEntry[] }) {
+  const [open, setOpen] = useState(false);
+  if (entries.length === 0) return null;
+  const t0 = entries[0]!.at;
+  const Chevron = open ? ChevronDown : ChevronRight;
+  return (
+    <div className="mt-0.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="text-muted-foreground/70 hover:text-foreground/80 flex items-center gap-0.5 font-mono text-[10px] tracking-[0.06em] uppercase"
+      >
+        <Chevron className="size-3" />
+        timeline ({entries.length})
+      </button>
+      {open ? (
+        <ol className="border-border/60 mt-1 max-h-48 space-y-0.5 overflow-y-auto border-l pl-2">
+          {entries.map((entry, i) => (
+            <li key={`${entry.at}-${i}`} className="text-muted-foreground/80 text-[10px]">
+              <span className="font-mono tabular-nums">+{formatElapsed(entry.at - t0)}</span>{" "}
+              <span className="text-foreground/60">{CAD_PHASE_LABEL[entry.phase]}</span>
+              {entry.note ? (
+                <span className="block break-words whitespace-pre-wrap italic">{entry.note}</span>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </div>
+  );
+}
+
+/** Live (still-running) variant — subscribes to the progress store. */
+function LiveCadProgressTimeline({ toolCallId }: { toolCallId: string | undefined }) {
+  const entries = useCadProgressLog(toolCallId);
+  if (!entries || entries.length === 0) return null;
+  return <CadProgressTimeline entries={entries} />;
+}
+
 /** Tool rows stay unboxed; failures are red text only (no card / tint fill). */
 function toolRowClass(failed: boolean): string {
   return cn(
@@ -444,7 +494,18 @@ export function ToolCard({ part }: { part: ToolPart }) {
               {detail}
             </span>
           ) : null}
-          {running ? <CadProgressLine toolCallId={part.toolCallId} /> : null}
+          {running ? (
+            <>
+              <CadProgressLine toolCallId={part.toolCallId} />
+              <LiveCadProgressTimeline toolCallId={part.toolCallId} />
+            </>
+          ) : (
+            <CadProgressTimeline
+              entries={readToolProgressLog(
+                part.state === "output-available" ? part.output : undefined,
+              )}
+            />
+          )}
         </div>
         {running ? (
           <Loader2 className="size-3.5 shrink-0 animate-spin opacity-60" />

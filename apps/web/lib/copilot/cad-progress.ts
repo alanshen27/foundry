@@ -34,6 +34,29 @@ export const cadProgressSchema = z.object({
 
 export type CadProgress = z.infer<typeof cadProgressSchema>;
 
+/** Longest narration timeline we keep per tool call (drop-oldest). */
+export const CAD_PROGRESS_LOG_MAX = 120;
+
+export const cadProgressLogEntrySchema = z.object({
+  /** Epoch ms the entry was recorded. */
+  at: z.number().int().positive(),
+  phase: z.enum(CAD_PROGRESS_PHASES),
+  note: z.string().optional(),
+});
+
+export type CadProgressLogEntry = z.infer<typeof cadProgressLogEntrySchema>;
+
+/**
+ * Read the persisted narration timeline off a finished CAD tool's output
+ * (`progressLog`), so the transcript can expand it after the run is over.
+ */
+export function readToolProgressLog(output: unknown): CadProgressLogEntry[] {
+  if (!output || typeof output !== "object") return [];
+  const candidate = (output as { progressLog?: unknown }).progressLog;
+  const parsed = z.array(cadProgressLogEntrySchema).safeParse(candidate);
+  return parsed.success ? parsed.data : [];
+}
+
 export function cadProgressChunk(progress: CadProgress): UIMessageChunk {
   return {
     type: CAD_PROGRESS_CHUNK_TYPE,
