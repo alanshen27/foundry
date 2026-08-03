@@ -34,6 +34,7 @@ import {
   Layers,
   Layers3,
   LayoutGrid,
+  MessageSquare,
   MousePointer2,
   PanelRight,
   Plus,
@@ -90,6 +91,7 @@ import { fabricationFiles } from "@/lib/pcb/export";
 import { trpc } from "@/lib/trpc";
 import { useCursors } from "@/lib/use-cursors";
 import { useLiveEdit } from "@/lib/use-live-edit";
+import { ViewportComments, type CommentPoint } from "@/components/engineer/viewport-comments";
 
 const PcbPreview3d = dynamic(
   () => import("@/components/engineer/pcb-preview-3d").then((m) => m.PcbPreview3d),
@@ -109,7 +111,7 @@ const PICK_MM = 0.4;
 /** Undo depth. Deep enough for a routing session, bounded so state stays small. */
 const HISTORY_LIMIT = 60;
 
-type Tool = "select" | "route" | "via" | "zone" | "measure";
+type Tool = "select" | "route" | "via" | "zone" | "measure" | "comment";
 type InspectorTab = "board" | "rules" | "drc" | "inspect";
 
 type LayerKey = "Edge.Cuts" | "F.Cu" | "B.Cu" | "F.SilkS" | "courtyard" | "ratsnest";
@@ -528,6 +530,8 @@ export function PcbCanvas({
     to: PcbPoint;
     complete: boolean;
   } | null>(null);
+  /** Where a new comment is being composed, in board millimetres. */
+  const [pendingComment, setPendingComment] = useState<CommentPoint | null>(null);
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
     "Edge.Cuts": true,
     "F.Cu": true,
@@ -1048,6 +1052,11 @@ export function PcbCanvas({
       const mm = clientToMm(e.clientX, e.clientY);
       if (!mm) return;
 
+      if (tool === "comment") {
+        setPendingComment({ x: mm.xMm, y: mm.yMm });
+        return;
+      }
+
       if (tool === "measure") {
         const point = quantize(mm);
         setMeasurement((current) =>
@@ -1534,6 +1543,18 @@ export function PcbCanvas({
                 >
                   <Ruler className="size-3" />
                 </Button>
+                <Button
+                  variant={tool === "comment" ? "secondary" : "ghost"}
+                  size="xs"
+                  onClick={() => {
+                    setTool("comment");
+                    setPendingComment(null);
+                  }}
+                  aria-pressed={tool === "comment"}
+                  title="Pin a comment to the board"
+                >
+                  <MessageSquare className="size-3" />
+                </Button>
               </div>
 
               {/* Net picker: sets the pour's net and highlights it on the board. */}
@@ -1900,6 +1921,16 @@ export function PcbCanvas({
               <PcbCursorLayer peers={cursors.peers} scale={scale} pan={pan} />
             </svg>
 
+            <ViewportComments
+              projectId={projectId}
+              branchId={branchId}
+              surface={pcbCursorSurface(activeBoardId)}
+              viewerId={viewer.data?.id ?? ""}
+              toScreen={(point) => ({ x: pan.x + point.x * scale, y: pan.y + point.y * scale })}
+              pending={pendingComment}
+              onClearPending={() => setPendingComment(null)}
+            />
+
             <div className="absolute bottom-3 left-3 flex items-center gap-1">
               <Button
                 variant="outline"
@@ -1942,7 +1973,9 @@ export function PcbCanvas({
                                     measurement.to.yMm - measurement.from.yMm,
                                   ).toFixed(2)} mm · click to finish or start another measurement`
                                 : "Click the first measurement point"
-                              : "Autosaves · drag to place · Alt-drag to pan · scroll to zoom"}
+                              : tool === "comment"
+                                ? "Click anywhere to pin a comment"
+                                : "Autosaves · drag to place · Alt-drag to pan · scroll to zoom"}
               </span>
             </div>
           </>

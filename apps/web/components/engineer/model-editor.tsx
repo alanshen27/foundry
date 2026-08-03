@@ -19,6 +19,7 @@ import {
   GripVertical,
   Layers,
   Lock,
+  MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
   Puzzle,
@@ -73,6 +74,7 @@ import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { useCursors } from "@/lib/use-cursors";
 import { useLiveEdit } from "@/lib/use-live-edit";
+import { ViewportComments, type CommentPoint } from "@/components/engineer/viewport-comments";
 
 type CadMeasurement = {
   unit: "mm";
@@ -570,6 +572,9 @@ export function ModelEditor({
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [commentMode, setCommentMode] = useState(false);
+  /** Where a new comment is being composed, in normalized viewport coords. */
+  const [pendingComment, setPendingComment] = useState<CommentPoint | null>(null);
   const [syncingAfterLock, setSyncingAfterLock] = useState(false);
   const [, setHistoryVersion] = useState(0);
   const dirtyRef = useRef(false);
@@ -1036,6 +1041,20 @@ export function ModelEditor({
             normalizedCursorCoordinate((event.clientY - rect.top) / rect.height),
           );
         }}
+        onClickCapture={(event) => {
+          if (!commentMode || pendingComment) return;
+          // Comment mode pins on the scene, not on toolbar/panel controls.
+          const target = event.target as HTMLElement;
+          if (target.closest("button, input, textarea, select, a")) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          setPendingComment({
+            x: normalizedCursorCoordinate((event.clientX - rect.left) / rect.width),
+            y: normalizedCursorCoordinate((event.clientY - rect.top) / rect.height),
+          });
+        }}
       >
         {active?.kind === "instructions" ? (
           <InstructionsPreview content={active.content} />
@@ -1107,6 +1126,18 @@ export function ModelEditor({
           self={cursorSelf}
           reportRef={reportCursorRef}
         />
+        <ViewportComments
+          projectId={projectId}
+          branchId={branchId}
+          surface={cadCursorSurface(active?.id ?? "none")}
+          viewerId={viewer.data?.id ?? ""}
+          toScreen={(point) => ({ x: `${point.x * 100}%`, y: `${point.y * 100}%` })}
+          pending={pendingComment}
+          onClearPending={() => {
+            setPendingComment(null);
+            setCommentMode(false);
+          }}
+        />
         {partDragActive ? (
           <div className="border-primary/70 bg-primary/10 pointer-events-none absolute inset-3 z-[65] flex items-center justify-center rounded-xl border-2 border-dashed backdrop-blur-[1px]">
             <div className="bg-card/95 flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium shadow-lg">
@@ -1168,6 +1199,20 @@ export function ModelEditor({
             className={cn(showCode && "bg-muted")}
           >
             <Code className="size-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => {
+              setCommentMode((mode) => !mode);
+              setPendingComment(null);
+            }}
+            aria-label={commentMode ? "Exit comment mode" : "Pin a comment to the viewport"}
+            aria-pressed={commentMode}
+            title="Pin a comment to the viewport"
+            className={cn(commentMode && "bg-muted")}
+          >
+            <MessageSquare className="size-4" />
           </Button>
           <Button
             variant="ghost"
