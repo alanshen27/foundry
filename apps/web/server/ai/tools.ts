@@ -449,6 +449,12 @@ export function buildProjectTools(ctx: ToolContext) {
   const { projectId, branchId } = ctx;
 
   /**
+   * Generation attempts per part in text_to_cad: the first try plus one
+   * self-heal retry that feeds the engine error back into the prompt.
+   */
+  const CAD_PART_MAX_ATTEMPTS = 2;
+
+  /**
    * Report what a multi-minute CAD tool is doing right now, and record it in
    * a per-call timeline that long CAD tools persist on their output
    * (`progressLog`) so the transcript can replay it after the run.
@@ -1439,36 +1445,113 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
 
           progress(toolCallId, "generate");
 
-          // Zoo jobs are independent HTTP operations, so fan them out and wait
-          // once instead of paying the queue+poll latency per part.
-          const outcomes = await Promise.all(
-            jobs.map(async (job) => {
-              const label = jobs.length > 1 ? `${job.partName ?? "main"}: ` : "";
-              const result = await cad.textToCad(job.prompt, {
+          type PartVerdict = Awaited<ReturnType<typeof verifyPartScript>>;
+          type JobOutcome = {
+            job: { partName?: string; prompt: string };
+            generated?: { script: string; operationId: string; attempts: number };
+            verdict?: PartVerdict;
+            failure?: string;
+          };
+
+          // Each part is a self-healing agent: generate, engine-verify, and on
+          // a verification failure regenerate once with the engine error fed
+          // back into the prompt — all parts run concurrently.
+          const runJob = async (job: {
+            partName?: string;
+            prompt: string;
+          }): Promise<JobOutcome> => {
+            const label = jobs.length > 1 ? `${job.partName ?? "main"}: ` : "";
+            let lastError: string | undefined;
+            for (let attempt = 1; attempt <= CAD_PART_MAX_ATTEMPTS; attempt += 1) {
+              if (abortSignal?.aborted) break;
+              const prompt =
+                attempt === 1
+                  ? job.prompt
+                  : `${job.prompt}\n\nIMPORTANT: a previous attempt produced KCL that failed in the engine with this error:\n${lastError}\nGenerate corrected KCL that avoids this exact error.`;
+              const result = await cad.textToCad(prompt, {
                 projectName: projectId,
                 signal: abortSignal,
-                onProgress: (note) => progress(toolCallId, "generate", `${label}${note}`),
-                // Resume only applies to the single-part form.
-                existingOpId: jobs.length === 1 ? resumeId : undefined,
+                onProgress: (note) =>
+                  progress(
+                    toolCallId,
+                    "generate",
+                    `${label}${attempt > 1 ? `(retry ${attempt - 1}) ` : ""}${note}`,
+                  ),
+                // Resume only applies to the single-part, first-attempt form.
+                existingOpId: jobs.length === 1 && attempt === 1 ? resumeId : undefined,
               });
-              return { job, result };
-            }),
-          );
+              if (!result.ok) {
+                lastError = result.error;
+                // Deadline/cancel exhausted the budget — retrying can't help.
+                if (/cancelled|timed out/i.test(result.error)) break;
+                if (attempt < CAD_PART_MAX_ATTEMPTS) {
+                  progress(toolCallId, "generate", `${label}retrying after: ${result.error}`);
+                }
+                continue;
+              }
+              if (!result.data.kcl.trim()) {
+                lastError = "Zoo returned empty KCL — retry with a simpler prompt";
+                continue;
+              }
+              progress(toolCallId, "execute", `${label}verifying in the engine`);
+              const verdict = await verifyPartScript(result.data.kcl).catch((): PartVerdict => ({
+                verified: "UNVERIFIED",
+                reason: "verification errored",
+              }));
+              if (verdict.verified === false && attempt < CAD_PART_MAX_ATTEMPTS) {
+                lastError = verdict.executeError;
+                progress(
+                  toolCallId,
+                  "generate",
+                  `${label}KCL failed execute — regenerating with the error`,
+                );
+                continue;
+              }
+              progress(
+                toolCallId,
+                "execute",
+                verdict.verified === true
+                  ? `${label}KCL executes clean`
+                  : verdict.verified === false
+                    ? `${label}${verdict.executeError}`
+                    : `${label}saved unverified (${verdict.reason})`,
+              );
+              return {
+                job,
+                generated: {
+                  script: result.data.kcl,
+                  operationId: result.data.id,
+                  attempts: attempt,
+                },
+                verdict,
+              };
+            }
+            return { job, failure: lastError ?? "CAD generation failed" };
+          };
+
+          const outcomes = await Promise.all(jobs.map(runJob));
 
           const generated: { partName?: string; script: string }[] = [];
-          const succeeded: { partName?: string; operationId: string; kclChars: number }[] = [];
+          const succeeded: {
+            partName?: string;
+            operationId: string;
+            kclChars: number;
+            attempts: number;
+          }[] = [];
           const failed: { partName?: string; error: string; zooOpId?: string; hint?: string }[] =
             [];
+          const verdicts = new Map<string | undefined, PartVerdict>();
 
-          for (const { job, result } of outcomes) {
-            if (!result.ok) {
-              const fromErr = /zooOpId=([0-9a-f-]{36})/i.exec(result.error)?.[1];
+          for (const outcome of outcomes) {
+            if (!outcome.generated) {
+              const error = outcome.failure ?? "CAD generation failed";
+              const fromErr = /zooOpId=([0-9a-f-]{36})/i.exec(error)?.[1];
               const realFromErr = fromErr && isPlausibleZooOpId(fromErr) ? fromErr : undefined;
               failed.push({
-                partName: job.partName,
-                error: result.error,
+                partName: outcome.job.partName,
+                error,
                 ...(realFromErr ? { zooOpId: realFromErr } : {}),
-                ...(/ObjectNotFound|status=404|invent/i.test(result.error)
+                ...(/ObjectNotFound|status=404|invent/i.test(error)
                   ? {
                       hint: "Call text_to_cad again with only prompt (no zooOpId) to start a new Zoo job.",
                     }
@@ -1476,19 +1559,14 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
               });
               continue;
             }
-            if (!result.data.kcl.trim()) {
-              failed.push({
-                partName: job.partName,
-                error: "Zoo returned empty KCL — retry with a simpler prompt",
-              });
-              continue;
-            }
-            generated.push({ partName: job.partName, script: result.data.kcl });
+            generated.push({ partName: outcome.job.partName, script: outcome.generated.script });
             succeeded.push({
-              partName: job.partName,
-              operationId: result.data.id,
-              kclChars: result.data.kcl.length,
+              partName: outcome.job.partName,
+              operationId: outcome.generated.operationId,
+              kclChars: outcome.generated.script.length,
+              attempts: outcome.generated.attempts,
             });
+            if (outcome.verdict) verdicts.set(outcome.job.partName, outcome.verdict);
           }
 
           if (generated.length === 0) {
@@ -1502,28 +1580,8 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             };
           }
 
-          // Verify each part independently (real engine execute via Zoo MCP)
-          // so broken parts surface now, per part, instead of at assembly time.
-          // Best-effort: without MCP the parts stay saved but UNVERIFIED.
-          progress(toolCallId, "execute");
-          const verifications = await Promise.all(
-            generated.map(async (part) => {
-              const label = part.partName ?? "main";
-              const verdict = await verifyPartScript(part.script);
-              progress(
-                toolCallId,
-                "execute",
-                verdict.verified === true
-                  ? `${label}: KCL executes clean`
-                  : verdict.verified === false
-                    ? `${label}: ${verdict.executeError}`
-                    : `${label}: saved unverified (${verdict.reason})`,
-              );
-              return { partName: part.partName, verdict };
-            }),
-          ).catch(() => null);
           const verifyOf = (partName?: string) =>
-            verifications?.find((v) => v.partName === partName)?.verdict ?? {
+            verdicts.get(partName) ?? {
               verified: "UNVERIFIED" as const,
               reason: "verification errored",
             };
@@ -1564,8 +1622,8 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             hint:
               failed.length > 0
                 ? "Some parts failed — retry those with a shorter prompt or save_cad_script, then render_model_views."
-                : verifications?.some((v) => v.verdict.verified === false)
-                  ? "Some parts saved but fail engine execute (see executeError) — fix just those with patch_cad_script or a text_to_cad retry, then render_model_views."
+                : [...verdicts.values()].some((v) => v.verified === false)
+                  ? "Some parts saved but still fail engine execute after a self-heal retry (see executeError) — fix just those with patch_cad_script or python_cad, then render_model_views."
                   : "Call render_model_views to inspect, or save_cad_script / create_cad_component for more parts.",
             ...(() => {
               const log = takeProgressLog(toolCallId);
