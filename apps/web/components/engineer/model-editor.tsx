@@ -72,6 +72,7 @@ import { monacoThemeFor } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { useCursors } from "@/lib/use-cursors";
+import { useLiveEdit } from "@/lib/use-live-edit";
 
 type CadMeasurement = {
   unit: "mm";
@@ -585,7 +586,25 @@ export function ModelEditor({
   const saveRef = useRef(save);
   saveRef.current = save;
   const locked = Boolean(aiLock.data);
-  const editable = canEdit && !locked && !syncingAfterLock;
+
+  // Human soft locks per component: while a collaborator edits a part's KCL,
+  // that part is read-only for everyone else (the AI lock stays doc-wide).
+  const live = useLiveEdit(
+    projectId,
+    branchId,
+    "cad",
+    {
+      userId: viewer.data?.id ?? "anonymous",
+      name: viewer.data?.name ?? "Someone",
+    },
+    () => {
+      if (!dirtyRef.current) void query.refetch();
+    },
+  );
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const peerLock = activeId ? live.lockHolder(activeId) : undefined;
+  const editable = canEdit && !locked && !syncingAfterLock && !peerLock;
 
   const measurement = trpc.cad.measure.useQuery(
     { projectId, branchId, componentId: activeId ?? "" },
@@ -690,6 +709,7 @@ export function ModelEditor({
 
     setDoc(normalizedNext);
     dirtyRef.current = true;
+    liveRef.current.acquire(nextActiveId);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       saveRef.current.mutate(
@@ -705,6 +725,8 @@ export function ModelEditor({
             if (saved.updatedAt) {
               appliedUpdatedAtRef.current = new Date(saved.updatedAt).toISOString();
             }
+            liveRef.current.release(nextActiveId);
+            liveRef.current.commit();
           },
         },
       );
@@ -1091,6 +1113,23 @@ export function ModelEditor({
               <Boxes className="text-primary size-4" />
               Drop to place in the product assembly
             </div>
+          </div>
+        ) : null}
+        {peerLock ? (
+          <div
+            className="bg-card/95 pointer-events-none absolute top-32 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg backdrop-blur-md"
+            role="status"
+          >
+            <span
+              className="flex size-6 items-center justify-center rounded-md"
+              style={{ backgroundColor: `${peerLock.color}26`, color: peerLock.color }}
+            >
+              <Lock className="size-3.5" />
+            </span>
+            <span>
+              <span className="font-semibold">{peerLock.name} is editing this part</span>
+              <span className="text-muted-foreground ml-1.5">read-only until they finish</span>
+            </span>
           </div>
         ) : null}
         {aiLock.data ? (

@@ -19,7 +19,12 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import dynamic from "next/dynamic";
-import { pcbCursorSurface, type CursorState } from "@foundry/realtime";
+import {
+  pcbCursorSurface,
+  type CursorState,
+  type LiveLock,
+  type LiveMove,
+} from "@foundry/realtime";
 import {
   AlertTriangle,
   Box,
@@ -84,6 +89,7 @@ import { runDrc } from "@/lib/pcb/drc";
 import { fabricationFiles } from "@/lib/pcb/export";
 import { trpc } from "@/lib/trpc";
 import { useCursors } from "@/lib/use-cursors";
+import { useLiveEdit } from "@/lib/use-live-edit";
 
 const PcbPreview3d = dynamic(
   () => import("@/components/engineer/pcb-preview-3d").then((m) => m.PcbPreview3d),
@@ -341,12 +347,18 @@ function FootprintGraphic({
   layers,
   canEdit,
   onPointerDown,
+  lock,
+  liveMove,
 }: {
   fp: PcbFootprint;
   selected: boolean;
   layers: Record<LayerKey, boolean>;
   canEdit: boolean;
   onPointerDown: (e: ReactPointerEvent<SVGGElement>, id: string) => void;
+  /** Peer currently holding this footprint; renders it untouchable. */
+  lock?: LiveLock;
+  /** Peer's in-progress drag; drawn instead of the persisted position. */
+  liveMove?: LiveMove;
 }) {
   const def = footprintDef(fp.libraryId);
   if (!def) return null;
@@ -354,14 +366,41 @@ function FootprintGraphic({
     (fp.side === "front" && layers["F.Cu"]) || (fp.side === "back" && layers["B.Cu"]);
   const silkOn = layers["F.SilkS"] && fp.side === "front";
   const copper = fp.side === "front" ? "#c04040" : "#4040c0";
+  const xMm = liveMove?.x ?? fp.xMm;
+  const yMm = liveMove?.y ?? fp.yMm;
+  const rotation = liveMove?.rotation ?? fp.rotationDeg;
+  const holder = lock ?? liveMove;
 
   return (
     <g
-      transform={`translate(${fp.xMm} ${fp.yMm}) rotate(${fp.rotationDeg})`}
+      transform={`translate(${xMm} ${yMm}) rotate(${rotation})`}
       onPointerDown={(e) => onPointerDown(e, fp.id)}
-      style={{ cursor: canEdit ? "grab" : "default" }}
+      style={{ cursor: holder ? "not-allowed" : canEdit ? "grab" : "default" }}
       opacity={fp.side === "back" ? 0.85 : 1}
     >
+      {holder ? (
+        <g pointerEvents="none">
+          <rect
+            x={-def.bodyWMm / 2 - 0.4}
+            y={-def.bodyHMm / 2 - 0.4}
+            width={def.bodyWMm + 0.8}
+            height={def.bodyHMm + 0.8}
+            fill="none"
+            stroke={holder.color}
+            strokeWidth={0.15}
+            strokeDasharray="0.5 0.3"
+          />
+          <text
+            x={-def.bodyWMm / 2 - 0.4}
+            y={-def.bodyHMm / 2 - 0.8}
+            fontSize={1.1}
+            fill={holder.color}
+            style={{ userSelect: "none" }}
+          >
+            {holder.name}
+          </text>
+        </g>
+      ) : null}
       {layers.courtyard ? (
         <rect
           x={-def.bodyWMm / 2}
@@ -584,7 +623,12 @@ export function PcbCanvas({
             activeBoardId: activeBoardIdRef.current,
           },
         },
-        { onSuccess: () => (dirtyRef.current = false) },
+        {
+          onSuccess: () => {
+            dirtyRef.current = false;
+            liveRef.current.commit();
+          },
+        },
       );
     }, 800);
   }, [canEdit, projectId, branchId]);
@@ -719,6 +763,22 @@ export function PcbCanvas({
     },
   );
   const reportCursor = cursors.report;
+
+  const live = useLiveEdit(
+    projectId,
+    branchId,
+    pcbCursorSurface(activeBoardId),
+    {
+      userId: viewer.data?.id ?? "anonymous",
+      name: viewer.data?.name ?? "Someone",
+    },
+    // A peer's save landed; pick it up unless local edits are still unsaved.
+    () => {
+      if (!dirtyRef.current) void query.refetch();
+    },
+  );
+  const liveRef = useRef(live);
+  liveRef.current = live;
 
   const fullCircuit = useMemo(
     () => (circuitQuery.data ? normalizeCircuitDoc(circuitQuery.data.data) : EMPTY_CIRCUIT),
@@ -946,8 +1006,11 @@ export function PcbCanvas({
       setSelectedTrackId(null);
       setInspectorTab("inspect");
       if (!canEdit) return;
+      // Someone else is holding this footprint — show, don't grab.
+      if (liveRef.current.lockHolder(id)) return;
       const fp = docRef.current.footprints.find((f) => f.id === id);
       if (!fp) return;
+      liveRef.current.acquire(id);
       pushHistory();
       dragRef.current = {
         id,
@@ -1107,16 +1170,13 @@ export function PcbCanvas({
       if (!drag || !canEdit) return;
       const dx = (e.clientX - drag.startClientX) / scale;
       const dy = (e.clientY - drag.startClientY) / scale;
+      const nextX = Math.round((drag.originX + dx) * 20) / 20;
+      const nextY = Math.round((drag.originY + dy) * 20) / 20;
+      liveRef.current.reportMove(drag.id, nextX, nextY);
       setDoc((d) => ({
         ...d,
         footprints: d.footprints.map((f) =>
-          f.id === drag.id
-            ? {
-                ...f,
-                xMm: Math.round((drag.originX + dx) * 20) / 20,
-                yMm: Math.round((drag.originY + dy) * 20) / 20,
-              }
-            : f,
+          f.id === drag.id ? { ...f, xMm: nextX, yMm: nextY } : f,
         ),
       }));
     },
@@ -1125,6 +1185,7 @@ export function PcbCanvas({
 
   const onSvgPointerUp = useCallback(() => {
     if (dragRef.current) {
+      liveRef.current.release(dragRef.current.id);
       dragRef.current = null;
       scheduleSave();
     }
@@ -1749,6 +1810,8 @@ export function PcbCanvas({
                     layers={layers}
                     canEdit={canEdit}
                     onPointerDown={onFootprintPointerDown}
+                    lock={live.lockHolder(fp.id)}
+                    liveMove={live.moves.get(fp.id)}
                   />
                 ))}
 
