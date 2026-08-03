@@ -6,7 +6,9 @@ import type { CadBoundingBox, CadResult } from "./port";
  * Engine calls are seconds; the first `uvx zoo-mcp` of a machine also pays a
  * Python cold start. Anything past this is hung, not slow.
  */
-const DEFAULT_MCP_TIMEOUT_MS = 180_000;
+// Assembly executes and multi-view snapshots on large models routinely take
+// minutes; a short cap turns slow-but-working operations into failures.
+const DEFAULT_MCP_TIMEOUT_MS = 300_000;
 
 export type ZooMcpOptions = {
   token: string;

@@ -329,7 +329,10 @@ export async function executeChatRun(runId: string): Promise<void> {
         messages: modelMessages,
         tools,
         abortSignal: abort.signal,
-        stopWhen: stepCountIs(14),
+        // A full bootstrap (brief → schematic → PCB → parts → assembly →
+        // renders → fixes) can legitimately need ~20 steps; a low cap makes
+        // the run stop mid-build with partial output.
+        stopWhen: stepCountIs(24),
         onStepFinish: ({ toolCalls, toolResults, finishReason }) => {
           if (toolCalls.length === 0 && toolResults.length === 0) {
             console.log(`[chat-run ${runId}] step finish reason=${finishReason} (no tools)`);
