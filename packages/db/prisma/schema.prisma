@@ -183,6 +183,7 @@ model Project {
   sites                 Site[]
   media                 ProductMedia[]
   mediaJobs             MediaJob[]
+  viewportComments      ViewportComment[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, folderId])
@@ -651,6 +652,30 @@ model ValidationCheck {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId, branchId])
+}
+
+/// A comment pinned to a spot on a visual canvas (PCB board, CAD component).
+/// One model serves every surface — the surface string matches the live
+/// cursor/lock surfaces (e.g. "pcb:<boardId>", "cad:<componentId>").
+model ViewportComment {
+  id           String    @id @default(cuid())
+  projectId    String
+  branchId     String
+  surface      String
+  /// Anchor in the surface's own coordinate space (mm for PCB, normalized
+  /// viewport coordinates for CAD).
+  x            Float
+  y            Float
+  body         String
+  authorId     String
+  resolvedById String?
+  resolvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, branchId, surface])
 }
 
 // ---------- Stage 4: Launch ----------

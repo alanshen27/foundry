@@ -41,6 +41,11 @@ export const DOMAIN_EVENT_TYPES = [
   "ChatMessageEdited",
   "ChatMessageDeleted",
   "ChatReactionToggled",
+  // Viewport comments (pinned to CAD/PCB canvases)
+  "ViewportCommentCreated",
+  "ViewportCommentResolved",
+  "ViewportCommentReopened",
+  "ViewportCommentDeleted",
   // Verify
   "ValidationCheckCreated",
   "ValidationCheckUpdated",

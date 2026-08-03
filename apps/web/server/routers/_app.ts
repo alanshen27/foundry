@@ -11,6 +11,7 @@ import { launchRouter } from "./launch";
 import { designRouter } from "./design";
 import { codeRouter } from "./code";
 import { chatRouter } from "./chat";
+import { commentsRouter } from "./comments";
 import { cadRouter } from "./cad";
 import { collaborationRouter } from "./collaboration";
 import { siteRouter } from "./site";
@@ -31,6 +32,7 @@ export const appRouter = router({
   design: designRouter,
   code: codeRouter,
   chat: chatRouter,
+  comments: commentsRouter,
   cad: cadRouter,
   collaboration: collaborationRouter,
   site: siteRouter,
