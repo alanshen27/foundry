@@ -1,22 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronsUpDown,
-  Combine,
-  FolderGit2,
-  Images,
-  LayoutDashboard,
-  Lightbulb,
   PanelRightClose,
   PanelRightOpen,
   Plus,
-  Rocket,
   Settings,
-  ShieldCheck,
 } from "lucide-react";
 import type { UIMessage } from "ai";
 import type { Stage } from "@foundry/domain";
@@ -35,19 +28,6 @@ import {
 } from "@/components/copilot/copilot-provider";
 import { ChatSidebar } from "@/components/copilot/chat-sidebar";
 import { DiscordChat } from "@/components/copilot/discord-chat";
-import { STAGE_THEME } from "@/lib/stage-theme";
-import { cn } from "@/lib/utils";
-
-const STATUS_DOT: Record<string, string> = {
-  NOT_STARTED: "bg-muted-foreground/35",
-  DRAFT: "bg-sky-500",
-  RUNNING: "bg-primary animate-pulse",
-  NEEDS_REVIEW: "bg-amber-500",
-  APPROVED: "bg-emerald-500",
-  BLOCKED: "bg-red-500",
-  STALE: "bg-orange-400",
-};
-
 export type ShellWorkspace = { id: string; name: string; slug: string };
 
 export type ProjectShellProps = {
@@ -141,136 +121,12 @@ export function WorkspaceSwitcher({
   );
 }
 
-/**
- * Process stages + Repository. CAD / Schematic / PCB open as Engineer top tabs.
- */
-type ProcessStep = {
-  key: string;
-  label: string;
-  icon: typeof Lightbulb;
-  href: string;
-  stage: Stage | null;
-};
-
-function processSteps(base: string): ProcessStep[] {
-  return [
-    {
-      key: "overview",
-      label: "Overview",
-      icon: LayoutDashboard,
-      href: `${base}/overview`,
-      stage: null,
-    },
-    { key: "ideate", label: "Ideation", icon: Lightbulb, href: `${base}/ideate`, stage: "IDEATE" },
-    {
-      key: "engineer",
-      label: "Engineer",
-      icon: Combine,
-      href: `${base}/engineer`,
-      stage: "ENGINEER",
-    },
-    {
-      key: "repository",
-      label: "Repository",
-      icon: FolderGit2,
-      href: `${base}/engineer?view=code`,
-      stage: "ENGINEER",
-    },
-    { key: "verify", label: "Verify", icon: ShieldCheck, href: `${base}/verify`, stage: "VERIFY" },
-    { key: "launch", label: "Launch", icon: Rocket, href: `${base}/launch`, stage: "LAUNCH" },
-    {
-      key: "renders",
-      label: "Renders",
-      icon: Images,
-      href: `${base}/launch?view=renders`,
-      stage: "LAUNCH",
-    },
-  ];
-}
-
-function ProcessFooter({
-  base,
-  stageStatuses,
-  workspaceSlug,
-}: {
-  base: string;
-  stageStatuses: Record<Stage, string>;
-  workspaceSlug: string;
-}) {
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const viewParam = searchParams.get("view");
-  const steps = processSteps(base);
-
-  return (
-    <footer className="bg-card flex h-10 shrink-0 items-center border-t px-1">
-      <nav aria-label="Design process" className="flex h-full min-w-0 flex-1 items-stretch gap-0.5">
-        {steps.map((step) => {
-          const stepPath = step.href.split("?")[0] ?? step.href;
-          const onPath = Boolean(pathname?.startsWith(stepPath));
-          const active =
-            step.key === "repository"
-              ? onPath && viewParam === "code"
-              : step.key === "engineer"
-                ? onPath && viewParam !== "code"
-                : step.key === "renders"
-                  ? onPath && viewParam === "renders"
-                  : step.key === "launch"
-                    ? onPath && viewParam !== "renders"
-                    : onPath;
-          const status = step.stage ? (stageStatuses[step.stage] ?? "NOT_STARTED") : null;
-          const Icon = step.icon;
-          const phase = step.stage ? STAGE_THEME[step.stage] : null;
-          return (
-            <Link
-              key={step.key}
-              href={step.href}
-              className={cn(
-                "group relative flex items-center gap-1.5 rounded-none px-2.5 text-[12px] font-medium transition-colors sm:px-3",
-                active
-                  ? (phase?.active ?? "bg-muted text-foreground")
-                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-              )}
-            >
-              {active && phase ? (
-                <span
-                  aria-hidden
-                  className={cn("absolute inset-x-2 top-0 h-0.5 rounded-full", phase.rail)}
-                />
-              ) : null}
-              <Icon
-                className={cn("size-3.5", active ? "" : (phase?.idleIcon ?? "opacity-80"))}
-                strokeWidth={1.75}
-              />
-              <span className="hidden md:inline">{step.label}</span>
-              {status && step.key !== "repository" ? (
-                <span
-                  title={status.replaceAll("_", " ").toLowerCase()}
-                  className={cn("size-1.5 rounded-full", STATUS_DOT[status])}
-                />
-              ) : null}
-            </Link>
-          );
-        })}
-      </nav>
-      <Link
-        href={`/w/${workspaceSlug}/settings`}
-        title="Workspace settings"
-        className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-8 items-center justify-center rounded-none"
-      >
-        <Settings className="size-3.5" strokeWidth={1.75} />
-      </Link>
-    </footer>
-  );
-}
-
 function ShellInner({
   workspaces,
   workspace,
   project,
   branchId,
   branchName,
-  stageStatuses,
   user,
   children,
 }: Omit<ProjectShellProps, "initialChatMessages">) {
@@ -302,15 +158,29 @@ function ShellInner({
           <span className="text-border flex h-5 items-center text-[13px] leading-none" aria-hidden>
             /
           </span>
-          <span className="text-foreground flex h-5 max-w-52 items-center truncate text-[13px] leading-none font-medium">
+          <Link
+            href={`${base}/overview`}
+            className="text-foreground hover:text-primary flex h-5 max-w-52 items-center truncate text-[13px] leading-none font-medium"
+          >
             {project.name}
-          </span>
+          </Link>
           <span className="bg-muted text-muted-foreground ml-0.5 flex h-5 items-center rounded-none px-1.5 font-mono text-[11px] leading-none">
             {branchName}
           </span>
         </nav>
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          <ReleaseChip projectId={project.id} branchId={branchId} launchHref={`${base}/launch`} />
+          <ReleaseChip
+            projectId={project.id}
+            branchId={branchId}
+            launchHref={`${base}/engineer?view=launch`}
+          />
+          <Link
+            href={`/w/${workspace.slug}/settings`}
+            title="Workspace settings"
+            className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-7 items-center justify-center rounded-none"
+          >
+            <Settings className="size-3.5" strokeWidth={1.75} />
+          </Link>
           <PresenceBar
             channel={`presence:project:${project.id}`}
             self={{ userId: user.id, name: user.name, avatarUrl: user.avatarUrl }}
@@ -341,10 +211,6 @@ function ShellInner({
         </main>
         <ChatSidebar />
       </div>
-
-      <Suspense fallback={<footer className="bg-card/60 h-11 shrink-0 border-t" />}>
-        <ProcessFooter base={base} stageStatuses={stageStatuses} workspaceSlug={workspace.slug} />
-      </Suspense>
     </div>
   );
 }
