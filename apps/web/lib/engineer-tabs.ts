@@ -1,15 +1,25 @@
 /**
- * Engineer document tabs — Assembly is the pinned home; CAD / Schematic / PCB
- * open as closable tabs (Chrome / Fusion style). `code` maps `?view=code` for
- * the process-footer Repository surface (not a document tab).
+ * Workspace document tabs — Assembly is the pinned home; every other surface
+ * (CAD / Schematic / PCB / Checks / Repository / Ideate / Verify / Launch /
+ * Renders) opens as a closable tab in the same window (Chrome / Fusion style).
  */
-export type EngineerDocKind = "assembly" | "model" | "schematic" | "pcb" | "code" | "checks";
+export type EngineerDocKind =
+  | "assembly"
+  | "model"
+  | "schematic"
+  | "pcb"
+  | "code"
+  | "checks"
+  | "ideate"
+  | "verify"
+  | "launch"
+  | "renders";
 
 export type EngineerDocTab =
   | { key: "assembly"; kind: "assembly"; label: string; pinned: true }
   | {
       key: string;
-      kind: "model" | "schematic" | "pcb" | "code" | "checks";
+      kind: Exclude<EngineerDocKind, "assembly">;
       label: string;
       pinned?: false;
       /** CadDoc component id when kind === "model". */
@@ -45,6 +55,14 @@ export function labelForKind(kind: EngineerDocKind): string {
       return "Repository";
     case "checks":
       return "Checks";
+    case "ideate":
+      return "Ideate";
+    case "verify":
+      return "Verify";
+    case "launch":
+      return "Launch";
+    case "renders":
+      return "Renders";
   }
 }
 
@@ -69,6 +87,9 @@ export function tabFromViewParam(view: string | undefined, partId?: string | nul
   }
   if (view === "checks") {
     return { key: "checks", kind: "checks", label: "Checks" };
+  }
+  if (view === "ideate" || view === "verify" || view === "launch" || view === "renders") {
+    return { key: view, kind: view, label: labelForKind(view) };
   }
   // sourcing / design / missing → home
   return ASSEMBLY_TAB;

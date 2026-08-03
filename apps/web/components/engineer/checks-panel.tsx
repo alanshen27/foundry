@@ -21,7 +21,7 @@ type Props = {
 
 export function ChecksPanel({ projectId, branchId }: Props) {
   const pathname = usePathname();
-  const verifyHref = pathname?.replace(/\/engineer.*$/, "/verify") ?? "";
+  const verifyHref = pathname ? `${pathname}?view=verify` : "";
   const list = trpc.verify.listChecks.useQuery({ projectId, branchId });
 
   if (list.isLoading) {

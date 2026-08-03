@@ -1,14 +1,26 @@
 "use client";
 
 /**
- * Engineer workspace: Assembly is the pinned home viewport. CAD / Schematic /
- * PCB open via the + dropdown as closable top tabs. Repository lives in the
- * process footer (`?view=code`) as its own full surface.
+ * Single-window workspace: Assembly is the pinned home viewport. Every other
+ * surface — CAD / Schematic / PCB / Checks / Repository / Ideate / Verify /
+ * Launch / Renders — opens via the + dropdown as a closable top tab.
  */
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Boxes, CircuitBoard, Combine, Plus, ShieldCheck, Waypoints, X } from "lucide-react";
+import {
+  Boxes,
+  CircuitBoard,
+  Combine,
+  FolderGit2,
+  Images,
+  Lightbulb,
+  Plus,
+  Rocket,
+  ShieldCheck,
+  Waypoints,
+  X,
+} from "lucide-react";
 import {
   ASSEMBLY_TAB,
   labelForKind,
@@ -69,55 +81,113 @@ const CodeWorkspace = dynamic(
   },
 );
 
+const IdeateStage = dynamic(
+  () => import("@/components/stages/ideate-stage").then((m) => m.IdeateStage),
+  {
+    ssr: false,
+    loading: () => <DotMatrixLoader className="absolute inset-0" label="Loading ideation" />,
+  },
+);
+
+const VerifyStage = dynamic(
+  () => import("@/components/stages/verify-stage").then((m) => m.VerifyStage),
+  {
+    ssr: false,
+    loading: () => <DotMatrixLoader className="absolute inset-0" label="Loading verification" />,
+  },
+);
+
+const LaunchStage = dynamic(
+  () => import("@/components/stages/launch-stage").then((m) => m.LaunchStage),
+  {
+    ssr: false,
+    loading: () => <DotMatrixLoader className="absolute inset-0" label="Loading launch" />,
+  },
+);
+
 /** Views the stage page may still pass (legacy deep links). */
 export type EngineerView =
-  "sourcing" | "schematic" | "pcb" | "model" | "code" | "design" | "assembly" | "checks";
+  | "sourcing"
+  | "schematic"
+  | "pcb"
+  | "model"
+  | "code"
+  | "design"
+  | "assembly"
+  | "checks"
+  | "ideate"
+  | "verify"
+  | "launch"
+  | "renders";
+
+/** Capabilities the stage tabs need (computed server-side). */
+export type StageCaps = {
+  canEditIdeate: boolean;
+  canRunVerify: boolean;
+  canApproveVerify: boolean;
+  canCreateRelease: boolean;
+  canEditMedia: boolean;
+  canApproveMedia: boolean;
+  verifyStatus: string;
+};
 
 type Props = {
   projectId: string;
   branchId: string;
   canEdit: boolean;
   view: EngineerView;
+  caps: StageCaps;
 };
 
-/** Windows the + menu can open inside Engineer (not Repository — that is a footer tab). */
-type OpenableKind = "model" | "schematic" | "pcb" | "checks";
+/** Windows the + menu can open in the workspace. */
+type OpenableKind = Exclude<EngineerDocKind, "assembly">;
 
 const OPENABLE: { kind: OpenableKind; label: string; icon: typeof Boxes }[] = [
   { kind: "model", label: "CAD", icon: Boxes },
   { kind: "schematic", label: "Schematic", icon: Waypoints },
   { kind: "pcb", label: "PCB", icon: CircuitBoard },
   { kind: "checks", label: "Checks", icon: ShieldCheck },
+  { kind: "code", label: "Repository", icon: FolderGit2 },
+  { kind: "ideate", label: "Ideate", icon: Lightbulb },
+  { kind: "verify", label: "Verify", icon: ShieldCheck },
+  { kind: "launch", label: "Launch", icon: Rocket },
+  { kind: "renders", label: "Renders", icon: Images },
 ];
 
-function TabIcon({ kind }: { kind: Exclude<EngineerDocKind, "code"> }) {
+function TabIcon({ kind }: { kind: EngineerDocKind }) {
   if (kind === "assembly") return <Combine className="size-3" strokeWidth={2} />;
   if (kind === "model") return <Boxes className="size-3" strokeWidth={2} />;
   if (kind === "pcb") return <CircuitBoard className="size-3" strokeWidth={2} />;
   if (kind === "checks") return <ShieldCheck className="size-3" strokeWidth={2} />;
+  if (kind === "code") return <FolderGit2 className="size-3" strokeWidth={2} />;
+  if (kind === "ideate") return <Lightbulb className="size-3" strokeWidth={2} />;
+  if (kind === "verify") return <ShieldCheck className="size-3" strokeWidth={2} />;
+  if (kind === "launch") return <Rocket className="size-3" strokeWidth={2} />;
+  if (kind === "renders") return <Images className="size-3" strokeWidth={2} />;
   return <Waypoints className="size-3" strokeWidth={2} />;
 }
 
-export function EngineerStage({ projectId, branchId, canEdit, view }: Props) {
+/** Centered-document surfaces (Ideate / Verify / Launch) inside a scrollable tab pane. */
+function DocumentPane({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="bg-background/60 h-full overflow-y-auto">
+      <div className="mx-auto w-full max-w-4xl p-6 lg:p-8">{children}</div>
+    </div>
+  );
+}
+
+export function EngineerStage({ projectId, branchId, canEdit, view, caps }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const partParam = searchParams.get("part");
-
-  // Repository is a process-footer peer, not an Engineer document tab.
-  if (view === "code") {
-    return (
-      <div className="relative h-full overflow-hidden">
-        <CodeWorkspace projectId={projectId} branchId={branchId} canEdit={canEdit} />
-      </div>
-    );
-  }
 
   return (
     <EngineerDocWorkspace
       projectId={projectId}
       branchId={branchId}
       canEdit={canEdit}
+      caps={caps}
       view={view}
       partParam={partParam}
       pathname={pathname}
@@ -130,6 +200,7 @@ function EngineerDocWorkspace({
   projectId,
   branchId,
   canEdit,
+  caps,
   view,
   partParam,
   pathname,
@@ -138,7 +209,8 @@ function EngineerDocWorkspace({
   projectId: string;
   branchId: string;
   canEdit: boolean;
-  view: Exclude<EngineerView, "code">;
+  caps: StageCaps;
+  view: EngineerView;
   partParam: string | null;
   pathname: string;
   router: ReturnType<typeof useRouter>;
@@ -153,7 +225,6 @@ function EngineerDocWorkspace({
 
   useEffect(() => {
     const next = tabFromViewParam(view, partParam);
-    if (next.kind === "code") return;
     setTabs((prev) => {
       if (prev.some((t) => t.key === next.key)) return prev;
       return [...prev, next];
@@ -220,7 +291,7 @@ function EngineerDocWorkspace({
     return lastModel?.kind === "model" ? lastModel.componentId : undefined;
   }, [active, tabs]);
 
-  const docTabs = tabs.filter((t) => t.kind !== "code");
+  const docTabs = tabs;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -237,7 +308,7 @@ function EngineerDocWorkspace({
               )}
               onClick={() => activate(tab)}
             >
-              <TabIcon kind={tab.kind as Exclude<EngineerDocKind, "code">} />
+              <TabIcon kind={tab.kind} />
               <span className="max-w-36 truncate">{tab.label}</span>
               {!tab.pinned ? (
                 <button
@@ -345,7 +416,7 @@ function EngineerDocWorkspace({
         ) : null}
 
         {tabs
-          .filter((t) => t.kind === "pcb" || t.kind === "schematic" || t.kind === "checks")
+          .filter((t) => t.kind !== "assembly" && t.kind !== "model")
           .map((tab) => (
             <div
               key={tab.key}
@@ -363,6 +434,44 @@ function EngineerDocWorkspace({
               ) : null}
               {tab.kind === "checks" ? (
                 <ChecksPanel projectId={projectId} branchId={branchId} />
+              ) : null}
+              {tab.kind === "code" ? (
+                <div className="relative h-full overflow-hidden">
+                  <CodeWorkspace projectId={projectId} branchId={branchId} canEdit={canEdit} />
+                </div>
+              ) : null}
+              {tab.kind === "ideate" ? (
+                <DocumentPane>
+                  <IdeateStage
+                    projectId={projectId}
+                    branchId={branchId}
+                    canEdit={caps.canEditIdeate}
+                  />
+                </DocumentPane>
+              ) : null}
+              {tab.kind === "verify" ? (
+                <DocumentPane>
+                  <VerifyStage
+                    projectId={projectId}
+                    branchId={branchId}
+                    canRun={caps.canRunVerify}
+                    canApprove={caps.canApproveVerify}
+                    verifyStatus={caps.verifyStatus}
+                  />
+                </DocumentPane>
+              ) : null}
+              {tab.kind === "launch" || tab.kind === "renders" ? (
+                <DocumentPane>
+                  <LaunchStage
+                    projectId={projectId}
+                    branchId={branchId}
+                    canCreate={caps.canCreateRelease}
+                    verifyApproved={caps.verifyStatus === "APPROVED"}
+                    canEditMedia={caps.canEditMedia}
+                    canApproveMedia={caps.canApproveMedia}
+                    view={tab.kind === "renders" ? "renders" : "releases"}
+                  />
+                </DocumentPane>
               ) : null}
             </div>
           ))}

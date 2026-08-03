@@ -9,11 +9,7 @@ import {
   type WorkspaceRole,
 } from "@foundry/domain";
 import { getCurrentUser } from "@/server/session";
-import { SignalPageHeader } from "@/components/signal-page-header";
-import { IdeateStage } from "@/components/stages/ideate-stage";
-import { EngineerStage } from "@/components/stages/engineer-stage";
-import { VerifyStage } from "@/components/stages/verify-stage";
-import { LaunchStage } from "@/components/stages/launch-stage";
+import { EngineerStage, type EngineerView } from "@/components/stages/engineer-stage";
 
 export default async function StagePage({
   params,
@@ -26,6 +22,13 @@ export default async function StagePage({
   const { view } = await searchParams;
   const stage = stageParam.toUpperCase() as Stage;
   if (!STAGES.includes(stage)) notFound();
+
+  // Single-window workspace: every stage is a tab inside Engineer now, so
+  // legacy stage routes redirect into the one surface.
+  const base = `/w/${workspaceSlug}/projects/${projectSlug}/engineer`;
+  if (stage === "IDEATE") redirect(`${base}?view=ideate`);
+  if (stage === "VERIFY") redirect(`${base}?view=verify`);
+  if (stage === "LAUNCH") redirect(`${base}?view=${view === "renders" ? "renders" : "launch"}`);
 
   const user = await getCurrentUser();
   if (!user) {
@@ -65,77 +68,39 @@ export default async function StagePage({
     "design",
     "assembly",
     "checks",
+    "ideate",
+    "verify",
+    "launch",
+    "renders",
   ] as const;
-  const engineerView = engineerViews.includes(view as (typeof engineerViews)[number])
+  const engineerView: EngineerView = engineerViews.includes(view as (typeof engineerViews)[number])
     ? (view as (typeof engineerViews)[number])
     : "assembly";
 
-  // Engineer is a full-bleed editing surface (Figma-like); other stages are
-  // centered documents.
   return (
-    <div className={stage === "ENGINEER" ? "h-full" : "mx-auto w-full max-w-4xl p-6 lg:p-8"}>
-      {stage === "IDEATE" ? (
-        <>
-          <SignalPageHeader
-            code="Stage / 01"
-            title="Ideate"
-            glyphSeed={`${project.id}-ideate`}
-            className="mb-6"
-          />
-          <IdeateStage projectId={project.id} branchId={branchId} canEdit={can("ideate.edit")} />
-        </>
-      ) : null}
-      {stage === "ENGINEER" ? (
-        <Suspense fallback={<div className="bg-muted/30 h-full" />}>
-          <EngineerStage
-            projectId={project.id}
-            branchId={branchId}
-            view={engineerView}
-            canEdit={
-              can("electronics.edit") ||
-              can("mechanical.edit") ||
-              can("software.edit") ||
-              can("site.edit")
-            }
-          />
-        </Suspense>
-      ) : null}
-      {stage === "VERIFY" ? (
-        <>
-          <SignalPageHeader
-            code="Stage / 03"
-            title="Verify"
-            glyphSeed={`${project.id}-verify`}
-            className="mb-6"
-          />
-          <VerifyStage
-            projectId={project.id}
-            branchId={branchId}
-            canRun={can("verification.run")}
-            canApprove={can("verification.approve")}
-            verifyStatus={verifyState?.status ?? "NOT_STARTED"}
-          />
-        </>
-      ) : null}
-      {stage === "LAUNCH" ? (
-        <>
-          <SignalPageHeader
-            code="Stage / 04"
-            title={view === "renders" ? "Renders" : "Launch"}
-            glyphSeed={`${project.id}-launch`}
-            className="mb-6"
-          />
-          <LaunchStage
-            projectId={project.id}
-            branchId={branchId}
-            canCreate={can("release.create")}
-            verifyApproved={verifyState?.status === "APPROVED"}
-            canEditMedia={can("site.edit")}
-            canApproveMedia={can("site.publish")}
-            view={view === "renders" ? "renders" : "releases"}
-          />
-        </>
-      ) : null}
+    <div className="h-full">
+      <Suspense fallback={<div className="bg-muted/30 h-full" />}>
+        <EngineerStage
+          projectId={project.id}
+          branchId={branchId}
+          view={engineerView}
+          canEdit={
+            can("electronics.edit") ||
+            can("mechanical.edit") ||
+            can("software.edit") ||
+            can("site.edit")
+          }
+          caps={{
+            canEditIdeate: can("ideate.edit"),
+            canRunVerify: can("verification.run"),
+            canApproveVerify: can("verification.approve"),
+            canCreateRelease: can("release.create"),
+            canEditMedia: can("site.edit"),
+            canApproveMedia: can("site.publish"),
+            verifyStatus: verifyState?.status ?? "NOT_STARTED",
+          }}
+        />
+      </Suspense>
     </div>
   );
 }
