@@ -40,7 +40,7 @@ test("full Phase 0 journey", async ({ browser }) => {
   await builder.getByRole("button", { name: "More" }).click();
   await builder.getByLabel("Project name").fill("Test Rover");
   await builder.getByRole("button", { name: "Build" }).click();
-  await builder.waitForURL(`**/w/${workspaceSlug}/projects/test-rover/overview`);
+  await builder.waitForURL(`**/w/${workspaceSlug}/projects/test-rover/engineer`);
   expect(builder.url()).toMatch(new RegExp(`/w/${workspaceSlug}/projects/test-rover`));
   expect(builder.url()).not.toMatch(/\/w\/test-rover(?:\/|$)/);
   await expect(builder.getByRole("heading", { name: "Test Rover" })).toBeVisible();
@@ -84,7 +84,7 @@ test("full Phase 0 journey", async ({ browser }) => {
 
   // Reviewer can open the project and see stage statuses
   await reviewer.getByRole("link", { name: /Test Rover/ }).click();
-  await reviewer.waitForURL("**/projects/test-rover/overview");
+  await reviewer.waitForURL("**/projects/test-rover/engineer");
   await expect(reviewer.getByRole("heading", { name: "Test Rover" })).toBeVisible();
 
   // Shared work has no place in the reviewer's own folder tree, so their home
@@ -121,7 +121,7 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
   await page.getByRole("button", { name: "More" }).click();
   await page.getByLabel("Project name").fill("Param Rig");
   await page.getByRole("button", { name: "Build" }).click();
-  await page.waitForURL(`**/w/${workspaceSlug}/projects/param-rig/overview`);
+  await page.waitForURL(`**/w/${workspaceSlug}/projects/param-rig/engineer`);
   expect(page.url()).not.toMatch(/\/w\/param-rig(?:\/|$)/);
 
   // --- Copilot channels: create one, switch, persist across reloads.
@@ -141,7 +141,7 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
   await page.keyboard.press("Escape");
 
   // --- Visual CAD parameters: edit a value, autosave, survive reload.
-  await page.goto(page.url().replace(/\/overview.*$/, "/engineer?view=model"));
+  await page.goto(page.url().replace(/\/engineer.*$/, "/engineer?view=model"));
   await expect(page.getByText("Parameters")).toBeVisible({ timeout: 60_000 });
   const width = page.locator('label:has-text("width") input[type="number"]');
   await expect(width).toHaveValue("60");

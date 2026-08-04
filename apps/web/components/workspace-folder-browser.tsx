@@ -198,7 +198,7 @@ export function WorkspaceFolderBrowser({
       setNewProjectOpen(false);
       setProjectName("");
       setProjectDescription("");
-      router.push(`/w/${workspaceSlug}/projects/${project.slug}/overview`);
+      router.push(`/w/${workspaceSlug}/projects/${project.slug}/engineer`);
       router.refresh();
     },
   });
@@ -445,7 +445,7 @@ export function WorkspaceFolderBrowser({
           {projectsHere.map((project) => (
             <div key={project.id} className="group relative">
               <Link
-                href={`/w/${workspaceSlug}/projects/${project.slug}/overview`}
+                href={`/w/${workspaceSlug}/projects/${project.slug}/engineer`}
                 className="block"
               >
                 <Card className="gap-0 py-0 transition-colors hover:ring-foreground/30">

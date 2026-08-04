@@ -27,6 +27,16 @@ describe("cad progress chunks", () => {
     expect(readCadProgress(chunk)?.note).toBe("Sketching the profile");
   });
 
+  it("parses mid-run saved events so clients can refetch geometry", () => {
+    const chunk = cadProgressChunk({
+      toolCallId: "call_1",
+      phase: "saved",
+      note: "lid: part saved to the workspace",
+      startedAt: 1_700_000_000_000,
+    });
+    expect(readCadProgress(chunk)?.phase).toBe("saved");
+  });
+
   it("ignores unrelated or malformed chunks", () => {
     expect(readCadProgress({ type: "text-delta", delta: "hi", id: "1" })).toBeNull();
     expect(readCadProgress(null)).toBeNull();

@@ -1516,6 +1516,14 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
                     ? `${label}${verdict.executeError}`
                     : `${label}saved unverified (${verdict.reason})`,
               );
+              // Stream the part into the workspace the moment it exists, so
+              // open viewports render it while the other parts still generate.
+              // mutateModel3dDoc serializes writers, so concurrent jobs are safe.
+              await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
+                upsertPartScripts(base, [{ partName: job.partName, script: result.data.kcl }]),
+              )
+                .then(() => progress(toolCallId, "saved", `${label}part saved to the workspace`))
+                .catch(() => undefined);
               return {
                 job,
                 generated: {

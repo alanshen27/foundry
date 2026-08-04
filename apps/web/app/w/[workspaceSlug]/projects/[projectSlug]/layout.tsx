@@ -16,7 +16,7 @@ export default async function ProjectShellLayout({
 }) {
   const { workspaceSlug, projectSlug } = await params;
   const user = await getCurrentUser();
-  if (!user) redirect(`/auth/sign-in?next=/w/${workspaceSlug}/projects/${projectSlug}/overview`);
+  if (!user) redirect(`/auth/sign-in?next=/w/${workspaceSlug}/projects/${projectSlug}/engineer`);
 
   const [workspace, memberships] = await Promise.all([
     prisma.workspace.findFirst({

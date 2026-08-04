@@ -10,7 +10,13 @@ import type { UIMessageChunk } from "ai";
 
 export const CAD_PROGRESS_CHUNK_TYPE = "data-cad-progress";
 
-export const CAD_PROGRESS_PHASES = ["generate", "assemble", "execute", "snapshot"] as const;
+export const CAD_PROGRESS_PHASES = [
+  "generate",
+  "assemble",
+  "execute",
+  "snapshot",
+  "saved",
+] as const;
 export type CadProgressPhase = (typeof CAD_PROGRESS_PHASES)[number];
 
 export const CAD_PHASE_LABEL: Record<CadProgressPhase, string> = {
@@ -18,6 +24,7 @@ export const CAD_PHASE_LABEL: Record<CadProgressPhase, string> = {
   assemble: "Assembling on Zoo",
   execute: "Executing KCL in the engine",
   snapshot: "Rendering views",
+  saved: "Saved to workspace",
 };
 
 /** Longest note we forward — Zoo narration can be a whole paragraph. */

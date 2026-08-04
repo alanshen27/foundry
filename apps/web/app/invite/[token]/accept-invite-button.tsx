@@ -10,7 +10,7 @@ export function AcceptInviteButton({ token }: { token: string }) {
     onSuccess: ({ workspaceSlug, projectSlug }) => {
       router.push(
         projectSlug
-          ? `/w/${workspaceSlug}/projects/${projectSlug}/overview`
+          ? `/w/${workspaceSlug}/projects/${projectSlug}/engineer`
           : `/w/${workspaceSlug}`,
       );
       router.refresh();

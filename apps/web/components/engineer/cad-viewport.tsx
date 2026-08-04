@@ -288,6 +288,61 @@ function ensureTokenAuthClient(client: zoo.Client, onAuthFailure: () => void): z
   return client;
 }
 
+/**
+ * Warm-session pool. A Zoo WebRTC connection takes seconds to negotiate, and
+ * closing/reopening a viewport tab paid that price every time. When a viewport
+ * unmounts cleanly, its connected session (rtc + video element) is parked here
+ * for a short window; the next viewport with the same token/options adopts it
+ * and only re-executes its script. Sessions are keyed on everything baked in at
+ * connect time, and two live viewports never share one session — the pool only
+ * holds sessions no component is using.
+ */
+type PooledEngineSession = {
+  rtc: zoo.WebRTC;
+  video: HTMLVideoElement;
+  wrap: HTMLDivElement;
+  connectPromise: Promise<void>;
+};
+
+const WARM_SESSION_TTL_MS = 120_000;
+const warmSessions = new Map<
+  string,
+  { session: PooledEngineSession; timer: ReturnType<typeof setTimeout> }
+>();
+
+function engineSessionKey(
+  token: string,
+  baseUrl: string | undefined,
+  headless: boolean,
+  scenery: boolean,
+): string {
+  return `${token}|${baseUrl ?? ""}|${headless ? "h" : "i"}|${scenery ? "g" : "p"}`;
+}
+
+function takeWarmSession(key: string): PooledEngineSession | null {
+  const entry = warmSessions.get(key);
+  if (!entry) return null;
+  warmSessions.delete(key);
+  clearTimeout(entry.timer);
+  return entry.session;
+}
+
+function parkWarmSession(key: string, session: PooledEngineSession): void {
+  const existing = warmSessions.get(key);
+  if (existing) {
+    // One warm spare per key is enough; drop the older one.
+    clearTimeout(existing.timer);
+    existing.session.rtc.deconstructor();
+  }
+  warmSessions.set(key, {
+    session,
+    timer: setTimeout(() => {
+      warmSessions.delete(key);
+      session.rtc.deconstructor();
+    }, WARM_SESSION_TTL_MS),
+  });
+}
+
 function ToolbarBtn({
   active,
   title,
@@ -656,49 +711,56 @@ export function CadViewport({
       return;
     }
 
-    let authFailed = false;
-    const client = ensureTokenAuthClient(
-      new zoo.Client({
-        token,
-        baseUrl: engine.baseUrl ?? "https://api.zoo.dev",
-      }),
-      () => {
-        authFailed = true;
-        rtc?.deconstructor();
-      },
-    );
-
     // Headless capture downscales anyway, so only the interactive viewport pays
     // for the extra pixels a 2x display needs.
     const maxEdge = headless ? 1440 : 2200;
     const size = streamSize(host, maxEdge);
     streamSizeRef.current = size;
-    const wrap = document.createElement("div");
-    wrap.style.cssText = "position:relative;width:100%;height:100%;background:#1c222e";
-    const video = document.createElement("video");
-    video.muted = true;
-    video.playsInline = true;
-    video.autoplay = true;
-    // `contain`, not `cover`: the stream now matches the host's aspect ratio, and
-    // cropping a CAD view to fill would silently cut geometry off the edges.
-    video.style.cssText = "width:100%;height:100%;object-fit:contain;background:#1c222e";
-    wrap.appendChild(video);
-    host.replaceChildren(wrap);
 
-    rtc = new zoo.WebRTC({
-      client,
-      video_res_width: size.width,
-      video_res_height: size.height,
-      fps: 30,
-      unlocked_framerate: true,
-      post_effect: "ssao",
-      show_grid: scenery,
-      order_independent_transparency: true,
-      webrtc: true,
-    });
+    const poolKey = engineSessionKey(token, engine.baseUrl, headless, scenery);
+    const warm = takeWarmSession(poolKey);
+    let session: PooledEngineSession;
+    let connectFailed = false;
 
-    const connect = async () => {
-      await new Promise<void>((resolve, reject) => {
+    if (warm) {
+      session = warm;
+    } else {
+      let authFailed = false;
+      const client = ensureTokenAuthClient(
+        new zoo.Client({
+          token,
+          baseUrl: engine.baseUrl ?? "https://api.zoo.dev",
+        }),
+        () => {
+          authFailed = true;
+          rtc?.deconstructor();
+        },
+      );
+
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "position:relative;width:100%;height:100%;background:#1c222e";
+      const video = document.createElement("video");
+      video.muted = true;
+      video.playsInline = true;
+      video.autoplay = true;
+      // `contain`, not `cover`: the stream now matches the host's aspect ratio, and
+      // cropping a CAD view to fill would silently cut geometry off the edges.
+      video.style.cssText = "width:100%;height:100%;object-fit:contain;background:#1c222e";
+      wrap.appendChild(video);
+
+      rtc = new zoo.WebRTC({
+        client,
+        video_res_width: size.width,
+        video_res_height: size.height,
+        fps: 30,
+        unlocked_framerate: true,
+        post_effect: "ssao",
+        show_grid: scenery,
+        order_independent_transparency: true,
+        webrtc: true,
+      });
+
+      const connectPromise = new Promise<void>((resolve, reject) => {
         const t = setTimeout(() => {
           if (authPoll) clearInterval(authPoll);
           reject(
@@ -734,18 +796,20 @@ export function CadViewport({
         void rtc!.start();
       });
 
-      if (cancelled || !rtc) return;
-      rtcRef.current = rtc;
-      setRtcReady(true);
-    };
+      session = { rtc, video, wrap, connectPromise };
+    }
+
+    const video = session.video;
+    host.replaceChildren(session.wrap);
+    void video.play().catch(() => undefined);
 
     // The engine's window coordinate space, kept in sync with reconfigures.
     let streamed = size;
 
-    const session = rtc;
+    const sessionRtc = session.rtc;
     input = attachViewportInput({
       video,
-      send: (cmd) => sendInteraction(session, cmd),
+      send: (cmd) => sendInteraction(sessionRtc, cmd),
       getTool: () => navToolRef.current,
       getStreamSize: () => streamed,
       objectFit: "contain",
@@ -777,14 +841,30 @@ export function CadViewport({
     });
     resizeObserver.observe(host);
 
-    void connect().catch((err) => {
-      if (cancelled) return;
-      const message = safeCadError(err, "connection");
-      setStatus("error");
-      setError(message);
-      onErrorRef.current?.(message);
-      onReadyRef.current?.();
-    });
+    void session.connectPromise
+      .then(() => {
+        if (cancelled) return;
+        rtcRef.current = sessionRtc;
+        setRtcReady(true);
+        // An adopted session may have connected at a different host size.
+        const next = streamSize(host, maxEdge);
+        if (next.width !== streamed.width || next.height !== streamed.height) {
+          streamed = next;
+          streamSizeRef.current = next;
+          video.width = next.width;
+          video.height = next.height;
+          sessionRtc.resize(next);
+        }
+      })
+      .catch((err) => {
+        connectFailed = true;
+        if (cancelled) return;
+        const message = safeCadError(err, "connection");
+        setStatus("error");
+        setError(message);
+        onErrorRef.current?.(message);
+        onReadyRef.current?.();
+      });
 
     return () => {
       cancelled = true;
@@ -794,8 +874,14 @@ export function CadViewport({
       input?.detach();
       setRtcReady(false);
       rtcRef.current = null;
-      rtc?.deconstructor();
       host.replaceChildren();
+      // A healthy connection is worth keeping: park it so the next viewport
+      // with the same engine options skips the multi-second handshake.
+      if (connectFailed) {
+        sessionRtc.deconstructor();
+      } else {
+        parkWarmSession(poolKey, session);
+      }
     };
   }, [engine.token, engine.baseUrl, headless, scenery]);
 

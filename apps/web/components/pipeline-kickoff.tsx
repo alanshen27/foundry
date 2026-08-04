@@ -6,7 +6,7 @@ import { PROJECT_KICKOFF_KEY } from "@/components/project-create-bar";
 
 /**
  * After create-from-projects-page, fire the pending prompt once into the
- * sidebar copilot. No visible embed — overview stays stage/status only.
+ * sidebar copilot. No visible embed — the workbench stays viewport-first.
  */
 export function PipelineKickoffListener({ hasBrief }: { hasBrief: boolean }) {
   const { send, status } = useCopilot();
