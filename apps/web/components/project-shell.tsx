@@ -158,12 +158,14 @@ function ShellInner({
           <span className="text-border flex h-5 items-center text-[13px] leading-none" aria-hidden>
             /
           </span>
-          <Link
-            href={`${base}/engineer`}
-            className="text-foreground hover:text-primary flex h-5 max-w-52 items-center truncate text-[13px] leading-none font-medium"
-          >
-            {project.name}
-          </Link>
+          <h1 className="flex h-5 max-w-52 items-center">
+            <Link
+              href={`${base}/engineer`}
+              className="text-foreground hover:text-primary flex h-5 items-center truncate text-[13px] leading-none font-medium"
+            >
+              {project.name}
+            </Link>
+          </h1>
           <span className="bg-muted text-muted-foreground ml-0.5 flex h-5 items-center rounded-none px-1.5 font-mono text-[11px] leading-none">
             {branchName}
           </span>
