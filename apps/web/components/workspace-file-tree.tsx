@@ -235,7 +235,7 @@ function FolderRow({
             />
           ))}
           {childProjects.map((project) => {
-            const projectHref = `/w/${workspaceSlug}/projects/${project.slug}/overview`;
+            const projectHref = `/w/${workspaceSlug}/projects/${project.slug}/engineer`;
             const projectActive = pathname?.startsWith(
               `/w/${workspaceSlug}/projects/${project.slug}`,
             );
@@ -397,7 +397,7 @@ export function WorkspaceFileTree({
       setProjectDialogOpen(false);
       setProjectName("");
       setCreating(null);
-      router.push(`/w/${workspaceSlug}/projects/${project.slug}/overview`);
+      router.push(`/w/${workspaceSlug}/projects/${project.slug}/engineer`);
       router.refresh();
     },
   });
@@ -521,7 +521,7 @@ export function WorkspaceFileTree({
       ))}
 
       {rootProjects.map((project) => {
-        const href = `/w/${workspaceSlug}/projects/${project.slug}/overview`;
+        const href = `/w/${workspaceSlug}/projects/${project.slug}/engineer`;
         const active = pathname?.startsWith(`/w/${workspaceSlug}/projects/${project.slug}`);
         const projectMenuId = `p:${project.id}`;
         return (

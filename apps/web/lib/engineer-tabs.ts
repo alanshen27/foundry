@@ -1,7 +1,8 @@
 /**
- * Workspace document tabs — Assembly is the pinned home; every other surface
- * (CAD / Schematic / PCB / Checks / Repository / Ideate / Verify / Launch /
- * Renders) opens as a closable tab in the same window (Chrome / Fusion style).
+ * Workspace documents. Single-instance surfaces (Assembly / PCB / Checks /
+ * Repository / Ideate / Verify / Launch / Renders) are permanent top-bar
+ * buttons; only multi-component surfaces (CAD / Schematic) open as closable
+ * tabs.
  */
 export type EngineerDocKind =
   | "assembly"

@@ -9,7 +9,7 @@ import { folderBreadcrumbs, type FolderRef } from "@/lib/workspace-folders";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
-/** sessionStorage key — overview PipelineKickoff reads this once after create. */
+/** sessionStorage key — the workbench PipelineKickoff reads this once after create. */
 export const PROJECT_KICKOFF_KEY = "foundry:project-kickoff";
 
 function nameFromPrompt(prompt: string): string {
@@ -35,7 +35,7 @@ function folderOptions(folders: FolderRef[]): { id: string; label: string }[] {
 
 /**
  * Lovable-style create bar for the workspace projects page.
- * Prompt → create project (optional folder) → overview with AI kickoff.
+ * Prompt → create project (optional folder) → workbench with AI kickoff.
  */
 export function ProjectCreateBar({
   workspaceId,
@@ -71,13 +71,13 @@ export function ProjectCreateBar({
         try {
           sessionStorage.setItem(PROJECT_KICKOFF_KEY, text);
         } catch {
-          // Private mode / quota — overview still opens; user can retype.
+          // Private mode / quota — the workbench still opens; user can retype.
         }
       }
       setPrompt("");
       setNameOverride("");
       setError(null);
-      router.push(`/w/${workspaceSlug}/projects/${project.slug}/overview`);
+      router.push(`/w/${workspaceSlug}/projects/${project.slug}/engineer`);
       router.refresh();
     },
     onError: (err) => setError(err.message),

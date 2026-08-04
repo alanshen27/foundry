@@ -261,7 +261,13 @@ function ChatEngine({
     messages: seedRef.current,
     onData: (chunk) => {
       const progress = readCadProgress(chunk);
-      if (progress) cadProgressRef.current.set(progress);
+      if (progress) {
+        cadProgressRef.current.set(progress);
+        // A "saved" event means geometry just landed in the workspace mid-run:
+        // refetch so open viewports render it without waiting for the tool to
+        // finish. refreshProjectData is debounced, so bursts coalesce.
+        if (progress.phase === "saved") refreshProjectData();
+      }
     },
     // Manual resume only (see effect below). SDK auto-resume + our send SSE
     // both attach to the same run and the UI flashes as chunks replay twice.

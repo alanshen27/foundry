@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * Single-window workspace: Assembly is the pinned home viewport. Every other
- * surface — CAD / Schematic / PCB / Checks / Repository / Ideate / Verify /
- * Launch / Renders — opens via the + dropdown as a closable top tab.
+ * Single-window workspace. Surfaces that exist once per project — Assembly,
+ * PCB, Checks, Repository, Ideate, Verify, Launch, Renders — are permanent
+ * buttons in the top bar. Only CAD and Schematic open as closable tabs, since
+ * those can have several components open side by side.
  */
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -139,12 +140,19 @@ type Props = {
   caps: StageCaps;
 };
 
-/** Windows the + menu can open in the workspace. */
+/** Windows the + menu can open as tabs — multi-component surfaces only. */
 type OpenableKind = Exclude<EngineerDocKind, "assembly">;
 
 const OPENABLE: { kind: OpenableKind; label: string; icon: typeof Boxes }[] = [
   { kind: "model", label: "CAD", icon: Boxes },
   { kind: "schematic", label: "Schematic", icon: Waypoints },
+];
+
+/** Single-instance surfaces pinned to the top bar. */
+type FixedKind = Exclude<EngineerDocKind, "model" | "schematic">;
+
+const FIXED: { kind: FixedKind; label: string; icon: typeof Boxes }[] = [
+  { kind: "assembly", label: "Assembly", icon: Combine },
   { kind: "pcb", label: "PCB", icon: CircuitBoard },
   { kind: "checks", label: "Checks", icon: ShieldCheck },
   { kind: "code", label: "Repository", icon: FolderGit2 },
@@ -153,6 +161,8 @@ const OPENABLE: { kind: OpenableKind; label: string; icon: typeof Boxes }[] = [
   { kind: "launch", label: "Launch", icon: Rocket },
   { kind: "renders", label: "Renders", icon: Images },
 ];
+
+const FIXED_KINDS = new Set<EngineerDocKind>(FIXED.map((f) => f.kind));
 
 function TabIcon({ kind }: { kind: EngineerDocKind }) {
   if (kind === "assembly") return <Combine className="size-3" strokeWidth={2} />;
@@ -217,18 +227,24 @@ function EngineerDocWorkspace({
 }) {
   const initial = useMemo(() => tabFromViewParam(view, partParam), [view, partParam]);
 
+  // Only multi-component surfaces (CAD / Schematic) live in the tab strip;
+  // fixed surfaces are top-bar buttons and mount lazily on first visit.
   const [tabs, setTabs] = useState<EngineerDocTab[]>(() =>
-    initial.key === "assembly" ? [ASSEMBLY_TAB] : [ASSEMBLY_TAB, initial],
+    FIXED_KINDS.has(initial.kind) ? [] : [initial],
   );
   const [activeKey, setActiveKey] = useState(initial.key);
+  const [visitedFixed, setVisitedFixed] = useState<Set<string>>(
+    () => new Set(["assembly", ...(FIXED_KINDS.has(initial.kind) ? [initial.key] : [])]),
+  );
   const [newOpen, setNewOpen] = useState(false);
 
   useEffect(() => {
     const next = tabFromViewParam(view, partParam);
-    setTabs((prev) => {
-      if (prev.some((t) => t.key === next.key)) return prev;
-      return [...prev, next];
-    });
+    if (FIXED_KINDS.has(next.kind)) {
+      setVisitedFixed((prev) => (prev.has(next.key) ? prev : new Set([...prev, next.key])));
+    } else {
+      setTabs((prev) => (prev.some((t) => t.key === next.key) ? prev : [...prev, next]));
+    }
     setActiveKey(next.key);
   }, [view, partParam]);
 
@@ -252,6 +268,14 @@ function EngineerDocWorkspace({
 
   const openTab = useCallback(
     (kind: OpenableKind, opts?: { componentId?: string; label?: string }) => {
+      if (FIXED_KINDS.has(kind)) {
+        const key = tabKeyFor(kind);
+        setVisitedFixed((prev) => (prev.has(key) ? prev : new Set([...prev, key])));
+        setActiveKey(key);
+        syncUrl({ key, kind, label: labelForKind(kind) });
+        setNewOpen(false);
+        return;
+      }
       const key = tabKeyFor(kind, opts?.componentId);
       const tab: EngineerDocTab = {
         key,
@@ -267,14 +291,23 @@ function EngineerDocWorkspace({
     [syncUrl],
   );
 
+  const activateFixed = useCallback(
+    (kind: FixedKind) => {
+      setVisitedFixed((prev) => (prev.has(kind) ? prev : new Set([...prev, kind])));
+      setActiveKey(kind);
+      syncUrl(kind === "assembly" ? ASSEMBLY_TAB : { key: kind, kind, label: labelForKind(kind) });
+    },
+    [syncUrl],
+  );
+
   const closeTab = useCallback(
     (key: string) => {
       setTabs((prev) => {
-        const next = prev.filter((t) => t.key !== key || t.kind === "assembly");
+        const next = prev.filter((t) => t.key !== key);
         if (activeKey === key) {
-          const fallback = next[next.length - 1] ?? ASSEMBLY_TAB;
-          setActiveKey(fallback.key);
-          syncUrl(fallback);
+          const fallback = next[next.length - 1];
+          setActiveKey(fallback?.key ?? "assembly");
+          syncUrl(fallback ?? ASSEMBLY_TAB);
         }
         return next;
       });
@@ -282,8 +315,15 @@ function EngineerDocWorkspace({
     [activeKey, syncUrl],
   );
 
-  const active = tabs.find((t) => t.key === activeKey) ?? ASSEMBLY_TAB;
-  const mountedKeys = useMemo(() => new Set(tabs.map((t) => t.key)), [tabs]);
+  const active: EngineerDocTab =
+    tabs.find((t) => t.key === activeKey) ??
+    (activeKey !== "assembly" && FIXED_KINDS.has(activeKey as EngineerDocKind)
+      ? {
+          key: activeKey,
+          kind: activeKey as Exclude<EngineerDocKind, "assembly">,
+          label: labelForKind(activeKey as EngineerDocKind),
+        }
+      : ASSEMBLY_TAB);
   const hasModelTab = tabs.some((t) => t.kind === "model");
   const modelFocusId = useMemo(() => {
     if (active.kind === "model") return active.componentId;
@@ -291,13 +331,31 @@ function EngineerDocWorkspace({
     return lastModel?.kind === "model" ? lastModel.componentId : undefined;
   }, [active, tabs]);
 
-  const docTabs = tabs;
-
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="bg-card/60 flex h-9 shrink-0 items-center border-b px-1">
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-          {docTabs.map((tab) => (
+          {FIXED.map(({ kind, label, icon: Icon }) => (
+            <button
+              key={kind}
+              type="button"
+              onClick={() => activateFixed(kind)}
+              aria-pressed={active.kind === kind}
+              className={cn(
+                "flex h-7 shrink-0 items-center gap-1.5 rounded-none px-2.5 text-xs",
+                active.kind === kind
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:bg-muted/50",
+              )}
+            >
+              <Icon className="size-3" strokeWidth={2} />
+              <span>{label}</span>
+            </button>
+          ))}
+          {tabs.length > 0 ? (
+            <span className="bg-border mx-1 h-4 w-px shrink-0" aria-hidden />
+          ) : null}
+          {tabs.map((tab) => (
             <div
               key={tab.key}
               className={cn(
@@ -373,7 +431,7 @@ function EngineerDocWorkspace({
       </div>
 
       <div className="relative min-h-0 flex-1">
-        {mountedKeys.has("assembly") ? (
+        {visitedFixed.has("assembly") ? (
           <div
             className={cn(
               "absolute inset-0",
@@ -416,7 +474,7 @@ function EngineerDocWorkspace({
         ) : null}
 
         {tabs
-          .filter((t) => t.kind !== "assembly" && t.kind !== "model")
+          .filter((t) => t.kind === "schematic")
           .map((tab) => (
             <div
               key={tab.key}
@@ -426,21 +484,30 @@ function EngineerDocWorkspace({
               )}
               aria-hidden={active.key !== tab.key}
             >
-              {tab.kind === "pcb" ? (
+              <CircuitCanvas projectId={projectId} branchId={branchId} canEdit={canEdit} />
+            </div>
+          ))}
+
+        {FIXED.filter(({ kind }) => kind !== "assembly" && visitedFixed.has(kind)).map(
+          ({ kind }) => (
+            <div
+              key={kind}
+              className={cn(
+                "absolute inset-0",
+                active.kind === kind ? "z-10" : "pointer-events-none invisible z-0",
+              )}
+              aria-hidden={active.kind !== kind}
+            >
+              {kind === "pcb" ? (
                 <PcbCanvas projectId={projectId} branchId={branchId} canEdit={canEdit} />
               ) : null}
-              {tab.kind === "schematic" ? (
-                <CircuitCanvas projectId={projectId} branchId={branchId} canEdit={canEdit} />
-              ) : null}
-              {tab.kind === "checks" ? (
-                <ChecksPanel projectId={projectId} branchId={branchId} />
-              ) : null}
-              {tab.kind === "code" ? (
+              {kind === "checks" ? <ChecksPanel projectId={projectId} branchId={branchId} /> : null}
+              {kind === "code" ? (
                 <div className="relative h-full overflow-hidden">
                   <CodeWorkspace projectId={projectId} branchId={branchId} canEdit={canEdit} />
                 </div>
               ) : null}
-              {tab.kind === "ideate" ? (
+              {kind === "ideate" ? (
                 <DocumentPane>
                   <IdeateStage
                     projectId={projectId}
@@ -449,7 +516,7 @@ function EngineerDocWorkspace({
                   />
                 </DocumentPane>
               ) : null}
-              {tab.kind === "verify" ? (
+              {kind === "verify" ? (
                 <DocumentPane>
                   <VerifyStage
                     projectId={projectId}
@@ -460,7 +527,7 @@ function EngineerDocWorkspace({
                   />
                 </DocumentPane>
               ) : null}
-              {tab.kind === "launch" || tab.kind === "renders" ? (
+              {kind === "launch" || kind === "renders" ? (
                 <DocumentPane>
                   <LaunchStage
                     projectId={projectId}
@@ -469,12 +536,13 @@ function EngineerDocWorkspace({
                     verifyApproved={caps.verifyStatus === "APPROVED"}
                     canEditMedia={caps.canEditMedia}
                     canApproveMedia={caps.canApproveMedia}
-                    view={tab.kind === "renders" ? "renders" : "releases"}
+                    view={kind === "renders" ? "renders" : "releases"}
                   />
                 </DocumentPane>
               ) : null}
             </div>
-          ))}
+          ),
+        )}
       </div>
     </div>
   );

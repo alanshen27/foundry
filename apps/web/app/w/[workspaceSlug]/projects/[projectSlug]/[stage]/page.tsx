@@ -10,6 +10,7 @@ import {
 } from "@foundry/domain";
 import { getCurrentUser } from "@/server/session";
 import { EngineerStage, type EngineerView } from "@/components/stages/engineer-stage";
+import { PipelineKickoffListener } from "@/components/pipeline-kickoff";
 
 export default async function StagePage({
   params,
@@ -59,6 +60,12 @@ export default async function StagePage({
     (s) => s.stage === "VERIFY" && s.branchId === branchId,
   );
 
+  // The workbench is the landing page now, so the create-flow kickoff prompt
+  // fires here instead of on the old overview page.
+  const brief = await prisma.projectBrief.findUnique({
+    where: { projectId_branchId: { projectId: project.id, branchId } },
+  });
+
   const engineerViews = [
     "sourcing",
     "schematic",
@@ -79,6 +86,7 @@ export default async function StagePage({
 
   return (
     <div className="h-full">
+      <PipelineKickoffListener hasBrief={Boolean(brief?.prompt || brief?.intendedUse)} />
       <Suspense fallback={<div className="bg-muted/30 h-full" />}>
         <EngineerStage
           projectId={project.id}

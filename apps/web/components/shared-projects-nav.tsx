@@ -53,7 +53,7 @@ export function SharedProjectsNav({
             return (
               <Link
                 key={project.id}
-                href={`${base}/overview`}
+                href={`${base}/engineer`}
                 title={`${project.name} — ${project.workspaceName} (${project.ownerName})`}
                 className={cn(
                   "flex items-center gap-2.5 rounded-none py-[7px] pr-2.5 pl-[22px] text-[13px] transition-colors",

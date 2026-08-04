@@ -159,7 +159,7 @@ function ShellInner({
             /
           </span>
           <Link
-            href={`${base}/overview`}
+            href={`${base}/engineer`}
             className="text-foreground hover:text-primary flex h-5 max-w-52 items-center truncate text-[13px] leading-none font-medium"
           >
             {project.name}
