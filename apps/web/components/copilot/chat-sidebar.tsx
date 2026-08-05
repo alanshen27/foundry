@@ -292,8 +292,12 @@ function toolDetail(name: string, part: ToolPart): string | null {
     typeof out.deleted === "number"
   )
     bits.push(`${out.deleted} deleted`);
-  if (name === "extract_product_images" && Array.isArray(out.images))
+  if (name === "extract_product_images" && Array.isArray(out.images)) {
     bits.push(`${out.images.length} images`);
+    // An empty result is usually the distributor refusing robots, not a bug.
+    if (out.problem === "blocked") bits.push("distributor blocked the reader");
+    else if (out.problem === "browser-unavailable") bits.push("page could not be read");
+  }
   if (name === "add_components" && typeof out.created === "number")
     bits.push(`${out.created} parts`);
   if (name === "text_to_cad" && typeof out.generated === "number" && out.generated > 1)
