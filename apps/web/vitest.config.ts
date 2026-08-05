@@ -2,6 +2,7 @@ import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
 
 export default defineConfig({
+  esbuild: { jsx: "automatic" },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL(".", import.meta.url)),
@@ -10,6 +11,6 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["test/**/*.test.ts"],
+    include: ["test/**/*.{test,spec}.{ts,tsx}"],
   },
 });
