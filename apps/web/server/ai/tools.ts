@@ -1027,15 +1027,17 @@ export function buildProjectTools(ctx: ToolContext) {
       execute: async ({ url, limit }: { url: string; limit?: number }) =>
         guard(ctx, "project.read", async () => {
           try {
-            const images = await extractProductImages(url, { limit: limit ?? 6 });
-            return {
-              ok: true,
-              url,
-              images,
-              hint: images[0]
-                ? `Use images[0].url as imageUrl on add_components (${images[0].source}).`
-                : "No usable images found — try another product URL.",
-            };
+            const { images, via, problem } = await extractProductImages(url, {
+              limit: limit ?? 6,
+            });
+            const hint = images[0]
+              ? `Use images[0].url as imageUrl on add_components (${images[0].source}).`
+              : problem === "blocked"
+                ? "This distributor served an anti-bot page — try another distributor's URL for the same part."
+                : problem === "browser-unavailable"
+                  ? "The page could not be read this time — try another product URL, or add the component without imageUrl."
+                  : "No usable images found — try another product URL.";
+            return { ok: true, url, images, via, ...(problem ? { problem } : {}), hint };
           } catch (err) {
             return { error: err instanceof Error ? err.message : "Image extraction failed" };
           }

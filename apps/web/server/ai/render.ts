@@ -1,5 +1,14 @@
 import "server-only";
 import { chromium, type Browser } from "playwright-core";
+import {
+  fetchProductImages,
+  looksLikeBotChallenge,
+  rankCandidates,
+  type ProductImageResult,
+  type RawImageCandidate,
+} from "./product-images";
+
+export type { ProductImageCandidate, ProductImageResult } from "./product-images";
 
 /**
  * Headless-browser screenshots of the /render/* pages, so the copilot can see
@@ -81,6 +90,12 @@ async function closeBrowser(): Promise<void> {
   }
 }
 
+/** A browser that died since we cached it, e.g. an OOM kill on a 512MB dyno. */
+const isDeadBrowser = (err: unknown) =>
+  /Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i.test(
+    err instanceof Error ? err.message : String(err),
+  );
+
 /**
  * Run one Playwright job under the global lock, then shut Chromium down if the
  * queue is idle so RSS returns to the Next.js baseline.
@@ -89,12 +104,29 @@ async function withBrowserPage<T>(
   viewport: { width: number; height: number },
   fn: (page: Awaited<ReturnType<Browser["newPage"]>>) => Promise<T>,
 ): Promise<T> {
-  const run = async (): Promise<T> => {
+  /**
+   * A cached browser can be dead before we touch it: Chromium is single-process
+   * on these dynos, so an OOM kill leaves a resolved promise pointing at a
+   * corpse and newPage() fails with "…has been closed". Drop it and launch once
+   * more rather than failing a job for the previous job's crash.
+   */
+  const newPage = async () => {
     const browser = await getBrowser();
-    const page = await browser.newPage({
-      viewport,
-      deviceScaleFactor: 1,
-    });
+    if (!browser.isConnected()) {
+      await closeBrowser();
+      return (await getBrowser()).newPage({ viewport, deviceScaleFactor: 1 });
+    }
+    try {
+      return await browser.newPage({ viewport, deviceScaleFactor: 1 });
+    } catch (err) {
+      if (!isDeadBrowser(err)) throw err;
+      await closeBrowser();
+      return (await getBrowser()).newPage({ viewport, deviceScaleFactor: 1 });
+    }
+  };
+
+  const run = async (): Promise<T> => {
+    const page = await newPage();
     try {
       return await fn(page);
     } finally {
@@ -154,13 +186,6 @@ export async function screenshotRenderPage(
     return await page.screenshot({ type: "png" });
   });
 }
-
-export type ProductImageCandidate = {
-  url: string;
-  source: "og" | "twitter" | "jsonld" | "img";
-  width: number;
-  height: number;
-};
 
 /**
  * Image-harvest script, kept as a source string on purpose.
@@ -222,42 +247,53 @@ export const HARVEST_PRODUCT_IMAGES_SCRIPT = `(() => {
   return out;
 })()`;
 
-type RawImageCandidate = { url: string; source: string; width: number; height: number };
-
 /**
  * Open a product page and harvest likely component photos (og/twitter/JSON-LD
- * + large &lt;img&gt; elements). Uses the rendered DOM so lazy-loaded images resolve.
+ * + large &lt;img&gt; elements). The rendered DOM is the better reader, so it goes
+ * first; plain HTML answers whenever the browser cannot (an anti-bot
+ * interstitial, or Chromium dying on a small dyno) rather than reporting the
+ * page as a failure.
  */
 export async function extractProductImages(
   pageUrl: string,
   { limit = 8 }: { limit?: number } = {},
-): Promise<ProductImageCandidate[]> {
-  return withBrowserPage({ width: 1280, height: 900 }, async (page) => {
-    await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 25_000 });
-    await new Promise((r) => setTimeout(r, 800));
-    const raw = (await page.evaluate(HARVEST_PRODUCT_IMAGES_SCRIPT)) as RawImageCandidate[];
+): Promise<ProductImageResult> {
+  let browserFailure: unknown;
+  let blockedInBrowser = false;
 
-    const seen = new Set<string>();
-    return raw
-      .filter((c) => {
-        if (seen.has(c.url)) return false;
-        seen.add(c.url);
-        return true;
-      })
-      .map((c) => ({
-        url: c.url,
-        source: c.source as ProductImageCandidate["source"],
-        width: c.width,
-        height: c.height,
-      }))
-      .sort((a, b) => {
-        const score = (c: ProductImageCandidate) => {
-          const sourceScore =
-            c.source === "og" ? 4 : c.source === "twitter" ? 3 : c.source === "jsonld" ? 2 : 1;
-          return sourceScore * 1_000_000 + c.width * c.height;
-        };
-        return score(b) - score(a);
-      })
-      .slice(0, limit);
-  });
+  try {
+    const viaBrowser = await withBrowserPage({ width: 1280, height: 900 }, async (page) => {
+      await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 25_000 });
+      await new Promise((r) => setTimeout(r, 800));
+      const blocked = looksLikeBotChallenge(await page.content().catch(() => ""));
+      const raw = blocked
+        ? []
+        : ((await page.evaluate(HARVEST_PRODUCT_IMAGES_SCRIPT)) as RawImageCandidate[]);
+      return { raw, blocked };
+    });
+    if (viaBrowser.raw.length > 0) {
+      return { images: rankCandidates(viaBrowser.raw, limit), via: "browser" };
+    }
+    blockedInBrowser = viaBrowser.blocked;
+  } catch (err) {
+    // A missing binary is a deployment fact the operator must see, not a page
+    // problem to paper over with a fetch.
+    if (/rendering service is unavailable/i.test(err instanceof Error ? err.message : ""))
+      throw err;
+    browserFailure = err;
+  }
+
+  const viaHtml = await fetchProductImages(pageUrl);
+  if (viaHtml.raw.length > 0) return { images: rankCandidates(viaHtml.raw, limit), via: "html" };
+
+  const blocked = blockedInBrowser || viaHtml.blocked;
+  return {
+    images: [],
+    via: browserFailure ? "html" : "browser",
+    ...(blocked
+      ? { problem: "blocked" as const }
+      : browserFailure
+        ? { problem: "browser-unavailable" as const }
+        : {}),
+  };
 }
