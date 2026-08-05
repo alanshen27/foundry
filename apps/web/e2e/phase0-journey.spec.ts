@@ -127,7 +127,8 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
   // --- Copilot channels: create one, switch, persist across reloads.
   await page.getByRole("button", { name: /General/ }).click();
   await page.getByRole("button", { name: "New channel" }).click();
-  await page.getByLabel("New channel name").fill("enclosure");
+  // "New channel" is the dialog title; the field itself is labelled "Channel name".
+  await page.getByRole("dialog").getByLabel("Channel name").fill("enclosure");
   await page.getByRole("button", { name: "Create", exact: true }).click();
   // The header switches to the new (empty) channel.
   await expect(page.getByRole("button", { name: /enclosure/ })).toBeVisible();
@@ -179,7 +180,8 @@ test("sites chatbar creates a Site under the workspace, not a Workspace", async 
 test("unauthenticated users are redirected to sign-in", async ({ page }) => {
   await page.goto("/workspaces");
   await page.waitForURL("**/auth/sign-in**");
-  await expect(page.getByText("Sign in to FOUNDRY")).toBeVisible();
+  // Match the heading, not the submit button, which is also labelled "Sign in".
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
 
 test("render pages and project files require valid tokens/session", async ({ request }) => {
