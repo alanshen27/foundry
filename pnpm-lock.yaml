@@ -373,6 +373,25 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
 
+  packages/kcl-corpus:
+    dependencies:
+      '@foundry/cad':
+        specifier: workspace:*
+        version: link:../cad
+      '@supabase/supabase-js':
+        specifier: ^2.48.1
+        version: 2.110.8
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
+
   packages/media:
     devDependencies:
       '@types/node':
