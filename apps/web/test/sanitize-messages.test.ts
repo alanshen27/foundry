@@ -3,13 +3,16 @@ import type { ModelMessage, UIMessage } from "ai";
 import {
   markFailedAssistantMessages,
   pruneEmptyAssistantMessages,
+  repairInterruptedToolParts,
   sanitizeUiMessagesForModel,
   stripOrphanToolCalls,
+  stripOrphanToolResults,
   stripProviderExecutedToolParts,
+  validateResumableUIMessages,
 } from "@/lib/copilot/messages";
 
 describe("sanitizeUiMessagesForModel", () => {
-  it("keeps completed tool parts and drops incomplete ones", () => {
+  it("keeps completed tool parts and reports incomplete ones as errored", () => {
     const messages = [
       {
         id: "a1",
@@ -35,11 +38,12 @@ describe("sanitizeUiMessagesForModel", () => {
 
     const sanitized = sanitizeUiMessagesForModel(messages);
     expect(sanitized).toHaveLength(1);
-    expect(sanitized[0]!.parts).toHaveLength(2);
     expect(sanitized[0]!.parts.map((p) => ("toolCallId" in p ? p.toolCallId : p.type))).toEqual([
       "text",
+      "call_incomplete",
       "call_done",
     ]);
+    expect(sanitized[0]!.parts[1]).toMatchObject({ state: "output-error" });
   });
 
   it("JSON-clones tool outputs so Date fields become strings", () => {
@@ -143,7 +147,21 @@ describe("sanitizeUiMessagesForModel", () => {
     expect(sanitizeUiMessagesForModel(messages)).toEqual([]);
   });
 
-  it("drops assistant messages that only had incomplete tools", () => {
+  it("drops tool parts with no call id, since nothing can answer them", () => {
+    const messages = [
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [{ type: "tool-save_cad_script", state: "input-available", input: {} }],
+      },
+    ] as unknown as UIMessage[];
+
+    expect(sanitizeUiMessagesForModel(messages)).toEqual([]);
+  });
+});
+
+describe("repairInterruptedToolParts", () => {
+  it("turns a call the run never answered into an errored result", () => {
     const messages = [
       {
         id: "a1",
@@ -151,15 +169,99 @@ describe("sanitizeUiMessagesForModel", () => {
         parts: [
           {
             type: "tool-save_cad_script",
-            toolCallId: "call_orphan",
+            toolCallId: "call_1",
             state: "approval-requested",
             input: { script: "x = 1" },
+            approval: { id: "ap_1" },
           },
         ],
       },
     ] as unknown as UIMessage[];
 
-    expect(sanitizeUiMessagesForModel(messages)).toEqual([]);
+    expect(repairInterruptedToolParts(messages)[0]!.parts[0]).toEqual({
+      type: "tool-save_cad_script",
+      toolCallId: "call_1",
+      state: "output-error",
+      input: { script: "x = 1" },
+      errorText: "Interrupted before this tool reported a result.",
+    });
+  });
+
+  it("fills in terminal parts whose required fields were never written", () => {
+    const messages = [
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          { type: "tool-a", toolCallId: "call_1", state: "output-error", input: {} },
+          { type: "tool-b", toolCallId: "call_2", state: "output-available", input: {} },
+        ],
+      },
+    ] as unknown as UIMessage[];
+
+    const parts = repairInterruptedToolParts(messages)[0]!.parts as Array<{
+      state: string;
+      errorText?: string;
+    }>;
+    expect(parts.map((p) => p.state)).toEqual(["output-error", "output-error"]);
+    expect(parts[0]!.errorText).toBe("Interrupted before this tool reported a result.");
+  });
+
+  it("leaves finished tool parts alone", () => {
+    const messages = [
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-a",
+            toolCallId: "call_1",
+            state: "output-available",
+            input: {},
+            output: { ok: true },
+          },
+        ],
+      },
+    ] as unknown as UIMessage[];
+
+    expect(repairInterruptedToolParts(messages)[0]).toBe(messages[0]);
+  });
+});
+
+describe("validateResumableUIMessages", () => {
+  it("accepts a transcript interrupted mid tool call", async () => {
+    const stored = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "@AI draw it" }] },
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "Drawing", state: "streaming" },
+          {
+            type: "tool-save_circuit",
+            toolCallId: "call_1",
+            state: "input-available",
+            input: { parts: ["uno"] },
+          },
+        ],
+      },
+      { id: "u2", role: "user", parts: [{ type: "text", text: "@AI try again" }] },
+    ];
+
+    const messages = await validateResumableUIMessages(stored);
+    expect(messages.map((m) => m.id)).toEqual(["u1", "a1", "u2"]);
+    expect(messages[1]!.parts[1]).toMatchObject({ state: "output-error" });
+  });
+
+  it("drops only the messages that cannot be repaired", async () => {
+    const stored = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "@AI hi" }] },
+      { id: "broken", role: "assistant", parts: [{ type: "text" }] },
+      { id: "u2", role: "user", parts: [{ type: "text", text: "@AI again" }] },
+    ];
+
+    const messages = await validateResumableUIMessages(stored);
+    expect(messages.map((m) => m.id)).toEqual(["u1", "u2"]);
   });
 });
 
@@ -302,5 +404,26 @@ describe("stripOrphanToolCalls", () => {
         input: {},
       },
     ]);
+  });
+});
+
+describe("stripOrphanToolResults", () => {
+  it("removes tool results whose call is no longer in the window", () => {
+    const messages = [
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call_gone",
+            toolName: "text_to_cad",
+            output: { type: "json", value: { ok: true } },
+          },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "carry on" }] },
+    ] as ModelMessage[];
+
+    expect(stripOrphanToolResults(messages).map((m) => m.role)).toEqual(["user"]);
   });
 });

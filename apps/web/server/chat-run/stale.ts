@@ -1,8 +1,9 @@
 import "server-only";
 
 import { prisma, type Prisma } from "@foundry/db";
-import { validateUIMessages, type UIMessage } from "ai";
+import { type UIMessage } from "ai";
 import { persistFailedRunFromEvents } from "./persist";
+import { validateResumableUIMessages } from "./sanitize-messages";
 import { publishRunFinished } from "./publish";
 
 /** PENDING with no worker pickup — usually Redis/worker down. */
@@ -111,9 +112,7 @@ async function persistAndBroadcastExpired(expired: ExpiredRun[]): Promise<void> 
       try {
         let inputMessages: UIMessage[] = [];
         try {
-          inputMessages = await validateUIMessages({
-            messages: run.inputMessages as unknown[],
-          });
+          inputMessages = await validateResumableUIMessages(run.inputMessages as unknown[]);
         } catch {
           inputMessages = [];
         }

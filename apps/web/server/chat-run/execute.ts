@@ -4,7 +4,6 @@ import {
   convertToModelMessages,
   stepCountIs,
   streamText,
-  validateUIMessages,
   type ModelMessage,
   type UIMessage,
 } from "ai";
@@ -22,10 +21,11 @@ import { createCadProgressEmitter } from "./cad-progress";
 import { maxRunEventSeq, publishRunChunk, publishRunFinished, publishRunStarted } from "./publish";
 import {
   markFailedAssistantMessages,
+  pairToolCallsWithResults,
   sanitizeUiMessagesForModel,
   stripAllToolParts,
-  stripOrphanToolCalls,
   stripProviderExecutedToolParts,
+  validateResumableUIMessages,
 } from "./sanitize-messages";
 
 function isMissingToolResultsError(err: unknown): boolean {
@@ -76,7 +76,7 @@ async function toModelMessages(
 ): Promise<{ ui: UIMessage[]; model: ModelMessage[] }> {
   const sanitized = sanitizeUiMessagesForModel(uiMessages);
   try {
-    const model = stripOrphanToolCalls(
+    const model = pairToolCallsWithResults(
       await convertToModelMessages(sanitized, {
         tools,
         ignoreIncompleteToolCalls: true,
@@ -90,7 +90,7 @@ async function toModelMessages(
       err instanceof Error ? err.message : err,
     );
     const stripped = stripAllToolParts(sanitized);
-    const model = stripOrphanToolCalls(
+    const model = pairToolCallsWithResults(
       await convertToModelMessages(stripped, {
         tools,
         ignoreIncompleteToolCalls: true,
@@ -132,7 +132,7 @@ async function failDeadRunningAttempt(
   console.warn(`[chat-run ${run.id}] dead RUNNING attempt — failed cleanly (no re-run)`);
   let inputMessages: UIMessage[] = [];
   try {
-    inputMessages = await validateUIMessages({ messages: run.inputMessages as unknown[] });
+    inputMessages = await validateResumableUIMessages(run.inputMessages as unknown[]);
   } catch {
     // Unparseable history — persist from events alone.
   }
@@ -176,9 +176,7 @@ export async function executeChatRun(runId: string): Promise<void> {
     return;
   }
 
-  const rawMessages = await validateUIMessages({
-    messages: run.inputMessages as unknown[],
-  });
+  const rawMessages = await validateResumableUIMessages(run.inputMessages as unknown[]);
 
   await publishRunStarted(runId, channelId);
 
@@ -448,7 +446,7 @@ export async function executeChatRun(runId: string): Promise<void> {
           : stripAllToolParts(prepared.ui);
       prepared = {
         ui: stripped,
-        model: stripOrphanToolCalls(
+        model: pairToolCallsWithResults(
           await convertToModelMessages(stripped, {
             tools,
             ignoreIncompleteToolCalls: true,
