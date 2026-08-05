@@ -70,7 +70,8 @@ import { partitionBoards, type BoardPartition } from "@/lib/circuit/groups";
 import { runCircuitErc } from "@/lib/circuit/erc";
 import { buildNets } from "@/lib/pcb/netlist";
 import { Simulator } from "@/lib/sim/engine";
-import { MCU_TYPES, partModel } from "@/lib/sim/parts";
+import { buildModelIndex, findMcuPart } from "@/lib/sim/models";
+import { isRunnablePath, sketchSourceFor } from "@/lib/sim/arduino";
 import { runSketch, type SketchHandle } from "@/lib/sim/sketch";
 import { useCursors } from "@/lib/use-cursors";
 import type { CursorState } from "@foundry/realtime";
@@ -201,18 +202,25 @@ function CursorLayer({ peers }: { peers: CursorState[] }) {
   );
 }
 
-const DEFAULT_SKETCH = `// Simulated, not compiled firmware: JavaScript with the Arduino API's shape.
-// delay() must be yielded, which is what keeps the virtual clock deterministic.
+/**
+ * Starter firmware. Real Arduino C++ rather than a simulator-only sketch: the
+ * canvas translates a supported subset, so the file you simulate is the file
+ * you build — there is nothing to keep in sync by hand.
+ */
+const DEFAULT_SKETCH = `#include <Arduino.h>
 
-function setup() {
-  pinMode(13, OUTPUT);
+const int LED_PIN = 13;
+
+void setup() {
+  pinMode(LED_PIN, OUTPUT);
+  Serial.begin(9600);
 }
 
-function* loop() {
-  digitalWrite(13, HIGH);
-  yield delay(500);
-  digitalWrite(13, LOW);
-  yield delay(500);
+void loop() {
+  digitalWrite(LED_PIN, HIGH);
+  delay(500);
+  digitalWrite(LED_PIN, LOW);
+  delay(500);
 }
 `;
 
@@ -221,11 +229,15 @@ function graphToDoc(
   edges: Edge[],
   groups: CircuitGroup[] = [],
   sketchFileId?: string,
+  models?: CircuitDoc["models"],
 ): CircuitDoc {
   return {
     version: 2,
     groups,
     sketchFileId,
+    // Part internals belong to the document, not the canvas: dropping them on
+    // a layout save would silently un-simulate every AI-authored part.
+    models,
     parts: nodes.map((n) => ({
       id: n.id,
       type: n.data.partType,
@@ -339,6 +351,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
   } | null>(null);
   const [groupTool, setGroupTool] = useState(false);
   const [sketchFileId, setSketchFileId] = useState<string | null>(null);
+  const [partSpecs, setPartSpecs] = useState<CircuitDoc["models"]>(undefined);
   const utils = trpc.useUtils();
   // Sim sketches are project code files (not a GitHub-connected repo).
   const codeFiles = trpc.code.listProjectFiles.useQuery({ projectId, branchId });
@@ -351,10 +364,26 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     { id: sketchFileId ?? "" },
     { enabled: Boolean(sketchFileId) },
   );
-  /** Runnable sketches: JavaScript only, since that is what the runtime executes. */
+  /**
+   * Everything the simulator can run: JavaScript sketches directly, and the
+   * project's Arduino firmware through the translator — so what runs here is
+   * the firmware that ships, not a second copy of it.
+   */
   const runnableFiles = useMemo(
-    () => (codeFiles.data ?? []).filter((f) => /\.(js|mjs)$/i.test(f.path)),
+    () => (codeFiles.data ?? []).filter((f) => isRunnablePath(f.path)),
     [codeFiles.data],
+  );
+  /**
+   * The sketch the runtime executes. Firmware is translated rather than
+   * hand-mirrored, so simulating exercises the code that ships; a translation
+   * that fails is reported instead of running something the firmware isn't.
+   */
+  const translation = useMemo(
+    () =>
+      sketchFile.data
+        ? sketchSourceFor(sketchFile.data.path, sketchFile.data.content)
+        : { source: "", warnings: [] as string[], errors: [] as string[] },
+    [sketchFile.data],
   );
   const [simRunning, setSimRunning] = useState(false);
   const [simOutputs, setSimOutputs] = useState<Map<string, number>>(new Map());
@@ -370,19 +399,35 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
   const simRef = useRef<{ sim: Simulator; handle: SketchHandle | null } | null>(null);
   const dirtyRef = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stateRef = useRef({ nodes, edges, groups, sketchFileId, source: "" });
-  stateRef.current = { ...stateRef.current, nodes, edges, groups, sketchFileId };
+  const stateRef = useRef({ nodes, edges, groups, sketchFileId, partSpecs });
+  stateRef.current = { ...stateRef.current, nodes, edges, groups, sketchFileId, partSpecs };
   const saveRef = useRef(save);
   saveRef.current = save;
+  /**
+   * Models for the parts on the canvas: built-in, or the internals the document
+   * carries for parts the catalog does not cover. Interaction and simulation
+   * both read it, so an AI-authored button is as pressable as a catalog one.
+   */
+  const modelIndex = useMemo(
+    () => buildModelIndex(graphToDoc(nodes, edges, groups, undefined, partSpecs)),
+    [nodes, edges, groups, partSpecs],
+  );
+  const modelRef = useRef(modelIndex);
+  modelRef.current = modelIndex;
 
   const scheduleSave = useCallback(() => {
     if (!canEdit) return;
     dirtyRef.current = true;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const { nodes: n, edges: e, groups: g, sketchFileId: f } = stateRef.current;
+      const { nodes: n, edges: e, groups: g, sketchFileId: f, partSpecs: m } = stateRef.current;
       saveRef.current.mutate(
-        { projectId, branchId, kind: "CIRCUIT", data: graphToDoc(n, e, g, f ?? undefined) },
+        {
+          projectId,
+          branchId,
+          kind: "CIRCUIT",
+          data: graphToDoc(n, e, g, f ?? undefined, m),
+        },
         { onSuccess: () => (dirtyRef.current = false) },
       );
     }, 800);
@@ -397,6 +442,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     setEdges(graph.edges);
     setGroups(doc.groups);
     setSketchFileId(doc.sketchFileId ?? null);
+    setPartSpecs(doc.models);
   }, [query.data, canEdit, setNodes, setEdges]);
 
   /**
@@ -410,10 +456,17 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
   useEffect(() => {
     if (!simRunning) return;
 
-    const doc = graphToDoc(stateRef.current.nodes, stateRef.current.edges, stateRef.current.groups);
+    const doc = graphToDoc(
+      stateRef.current.nodes,
+      stateRef.current.edges,
+      stateRef.current.groups,
+      undefined,
+      stateRef.current.partSpecs,
+    );
     const sim = new Simulator(doc);
-    const mcu = doc.parts.find((p) => MCU_TYPES.has(p.type));
-    const handle = mcu ? runSketch(sim, mcu.id, stateRef.current.source) : null;
+    const mcu = findMcuPart(doc);
+    const handle =
+      mcu && !translation.errors.length ? runSketch(sim, mcu.id, translation.source) : null;
 
     // Run setup, then settle, before any loop() body executes. setup() is what
     // configures the pull-ups, and the settle turns those into levels — without
@@ -427,9 +480,11 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
       handle?.error ??
         (!mcu
           ? "No microcontroller on the schematic."
-          : !stateRef.current.source
-            ? "No sketch selected — create a .js sketch to simulate."
-            : null),
+          : translation.errors.length > 0
+            ? `Firmware cannot be simulated: ${translation.errors.join(" ")}`
+            : !translation.source
+              ? "No firmware selected — pick src/main.cpp or a .js sketch to simulate."
+              : null),
     );
 
     const startedAt = performance.now();
@@ -460,10 +515,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
       simRef.current = null;
     };
     // Restarts when the selected file's contents change.
-  }, [simRunning, sketchFile.data?.content, nodes.length, edges.length]);
-
-  // Keep the source the run loop reads in step with the selected file.
-  stateRef.current.source = sketchFile.data?.content ?? "";
+  }, [simRunning, translation, nodes.length, edges.length]);
 
   /** Creates a starter sketch in the project's internal files bucket. */
   const createSketch = useCallback(async () => {
@@ -479,7 +531,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     }
     const made = await createFile.mutateAsync({
       repoId: repo.id,
-      path: "sim/sketch.js",
+      path: "src/main.cpp",
       content: DEFAULT_SKETCH,
     });
     await utils.code.listProjectFiles.invalidate();
@@ -710,7 +762,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     const live = simRef.current;
     if (!live) return;
     const type = stateRef.current.nodes.find((n) => n.id === partId)?.data.partType;
-    const model = type ? partModel(type) : undefined;
+    const model = type ? modelRef.current.of(type) : undefined;
     if (!model?.interactive) return;
 
     if (model.interactive === "latching") {
@@ -735,14 +787,14 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
     if (!simRunning) return nodes;
     return nodes.map((n) => {
       const value = simOutputs.get(n.id);
-      const canPress = Boolean(partModel(n.data.partType)?.interactive);
+      const canPress = Boolean(modelIndex.of(n.data.partType).interactive);
       if (value === undefined && !canPress) return n;
       return {
         ...n,
         data: { ...n.data, simValue: value ?? 0, onInteract: canPress ? interact : undefined },
       };
     });
-  }, [nodes, simRunning, simOutputs, interact]);
+  }, [nodes, simRunning, simOutputs, interact, modelIndex]);
 
   const { theme } = useTheme();
   const categories = useMemo(
@@ -1248,10 +1300,10 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
                   scheduleSave();
                 }}
                 className="bg-background min-w-0 flex-1 rounded-md border px-1.5 py-1 font-mono text-[10px]"
-                aria-label="Simulation sketch"
+                aria-label="Simulation firmware"
                 disabled={!canEdit}
               >
-                <option value="">no sketch</option>
+                <option value="">no firmware</option>
                 {runnableFiles.map((f) => (
                   <option key={f.id} value={f.id}>
                     {f.path}
@@ -1270,11 +1322,11 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
               </span>
             </div>
 
-            {/* No sketch yet: offer to create one. */}
+            {/* Nothing runnable yet: offer a starter sketch. */}
             {runnableFiles.length === 0 ? (
               <div className="flex items-center gap-2 border-b px-2 py-1.5">
                 <p className="text-muted-foreground flex-1 text-[10px] leading-snug">
-                  No .js sketch yet.
+                  No firmware yet — write src/main.cpp, or start from a sketch.
                 </p>
                 <Button
                   variant="outline"
@@ -1285,6 +1337,20 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
                   <Code2 className="size-3" /> Create
                 </Button>
               </div>
+            ) : null}
+
+            {/* What the simulation is not covering, before its results. */}
+            {translation.warnings.length > 0 || modelIndex.unmodelled.length > 0 ? (
+              <p className="text-muted-foreground border-b px-2 py-1.5 text-[10px] leading-snug">
+                {[
+                  ...translation.warnings,
+                  ...(modelIndex.unmodelled.length > 0
+                    ? [
+                        `No internals for ${modelIndex.unmodelled.join(", ")} — ask the copilot to generate them.`,
+                      ]
+                    : []),
+                ].join(" ")}
+              </p>
             ) : null}
 
             {/* Faults first — they explain everything below them. */}

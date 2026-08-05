@@ -18,7 +18,8 @@ import type { CircuitDoc } from "@/lib/circuit/catalog";
 import { buildNets } from "@/lib/pcb/netlist";
 import { DisjointSet } from "@/lib/pcb/routing";
 import { FLOATING, resolveNet, type Drive, type NetState } from "@/lib/sim/net";
-import { MCU_TYPES, partModel, type PartState } from "@/lib/sim/parts";
+import type { PartState } from "@/lib/sim/parts";
+import { buildModelIndex, type ModelIndex } from "@/lib/sim/models";
 
 /** Rounds allowed before the engine calls a circuit unstable (e.g. a ring oscillator). */
 const MAX_ROUNDS = 12;
@@ -44,6 +45,12 @@ export type SimSnapshot = {
 
 export class Simulator {
   private circuit: CircuitDoc;
+  /**
+   * Model per part type: built-in, document-authored spec, or inert. Held on
+   * the simulator rather than looked up globally so an imported schematic can
+   * bring the internals its parts need.
+   */
+  private models: ModelIndex;
   /** Wire-derived net index per pin; isolated pins get their own. */
   private netOfPin = new Map<string, number>();
   /** Mutable per-part state (pressed, switch position, wiper). */
@@ -59,11 +66,18 @@ export class Simulator {
 
   constructor(circuit: CircuitDoc) {
     this.circuit = circuit;
+    this.models = buildModelIndex(circuit);
     this.rebuild();
+  }
+
+  /** Part types on this schematic that nothing knows how to simulate. */
+  unmodelledTypes(): string[] {
+    return this.models.unmodelled;
   }
 
   /** Recomputes the static net map. Call when the schematic itself changes. */
   rebuild() {
+    this.models = buildModelIndex(this.circuit);
     this.netOfPin.clear();
     let next = 0;
 
@@ -75,8 +89,7 @@ export class Simulator {
     // Every modelled pin needs a net even when nothing is wired to it, or a
     // switch could not merge it into anything.
     for (const part of this.circuit.parts) {
-      const model = partModel(part.type);
-      if (!model) continue;
+      const model = this.models.of(part.type);
       for (const pin of model.pins) {
         const key = pinKey(part.id, pin);
         if (!this.netOfPin.has(key)) this.netOfPin.set(key, next++);
@@ -132,6 +145,11 @@ export class Simulator {
         const raw = this.stateOf(part.id).value;
         return typeof raw === "number" ? Math.max(0, Math.min(1023, raw)) : 0;
       }
+      // Spec-authored sensors report a fixed reading on their output net.
+      for (const source of this.models.analogSources) {
+        if (this.netOfPin.get(pinKey(source.partId, source.pin)) !== net) continue;
+        return Math.max(0, Math.min(1023, source.value));
+      }
     }
     const level = this.pinState(partId, pin).level;
     return level === 1 ? 1023 : 0;
@@ -160,8 +178,8 @@ export class Simulator {
 
       // Phase 1: switches and passives merge nets before anything is driven.
       for (const part of this.circuit.parts) {
-        const model = partModel(part.type);
-        if (!model?.shorts) continue;
+        const model = this.models.of(part.type);
+        if (!model.shorts) continue;
         const ctx = { net: (pin: string) => stateFor(part.id, pin), state: this.stateOf(part.id) };
         for (const group of model.shorts(ctx)) {
           const nets = group
@@ -183,11 +201,10 @@ export class Simulator {
       };
 
       for (const part of this.circuit.parts) {
-        const model = partModel(part.type);
-        if (!model) continue;
+        const model = this.models.of(part.type);
 
         // The sketch drives MCU pins; everything else drives itself.
-        if (MCU_TYPES.has(part.type)) {
+        if (this.models.isMcu(part.type)) {
           for (const pin of model.pins) {
             const key = pinKey(part.id, pin);
             const net = this.netOfPin.get(key);
@@ -247,8 +264,8 @@ export class Simulator {
 
     const outputs = new Map<string, number>();
     for (const part of this.circuit.parts) {
-      const model = partModel(part.type);
-      if (!model?.output) continue;
+      const model = this.models.of(part.type);
+      if (!model.output) continue;
       outputs.set(
         part.id,
         model.output({
