@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { avatarColor, avatarInitials } from "@/lib/avatar-color";
+import { avatarColor, avatarInitials, firstInitial } from "@/lib/avatar-color";
 
 /** Any lone UTF-16 surrogate renders as a replacement glyph in the avatar. */
 const hasLoneSurrogate = (s: string) =>
@@ -30,6 +30,23 @@ describe("avatarInitials", () => {
     for (const name of ["🙂 Smith", "🙂", "𝒲illiam Sun"]) {
       expect(hasLoneSurrogate(avatarInitials(name))).toBe(false);
     }
+  });
+});
+
+describe("firstInitial", () => {
+  it("uppercases the leading character", () => {
+    expect(firstInitial("workspace")).toBe("W");
+    expect(firstInitial("  padded  ")).toBe("P");
+  });
+
+  it("returns empty for blank input so callers can supply a fallback", () => {
+    expect(firstInitial("")).toBe("");
+    expect(firstInitial("   ")).toBe("");
+  });
+
+  it("keeps an astral leading character whole", () => {
+    expect(firstInitial("🚀 Launch")).toBe("🚀");
+    expect(hasLoneSurrogate(firstInitial("🚀 Launch"))).toBe(false);
   });
 });
 

@@ -80,17 +80,19 @@ export function avatarColor(seed: string): { bg: string; text: string; tile: str
 }
 
 /**
- * First character of a word by code point. Slicing by UTF-16 unit would cut an
- * astral character — an emoji or a mathematical letter — in half and render the
- * lone surrogate as a replacement glyph.
+ * Leading character of a name, uppercased, taken by code point. Slicing by
+ * UTF-16 unit would cut an astral character — an emoji or a mathematical
+ * letter — in half and render the lone surrogate as a replacement glyph.
+ *
+ * Shared with the workspace/folder tiles, which letter themselves the same way.
  */
-function firstChar(word: string): string {
-  return Array.from(word)[0] ?? "";
+export function firstInitial(word: string): string {
+  return (Array.from(word.trim())[0] ?? "").toUpperCase();
 }
 
 export function avatarInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
-  if (parts.length === 1) return firstChar(parts[0]!).toUpperCase();
-  return `${firstChar(parts[0]!)}${firstChar(parts[1]!)}`.toUpperCase();
+  if (parts.length === 1) return firstInitial(parts[0]!);
+  return `${firstInitial(parts[0]!)}${firstInitial(parts[1]!)}`;
 }

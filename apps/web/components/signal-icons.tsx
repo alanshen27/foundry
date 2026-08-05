@@ -1,4 +1,5 @@
 import { MatrixScreen } from "@/components/matrix-cover";
+import { firstInitial } from "@/lib/avatar-color";
 import { cn } from "@/lib/utils";
 
 /**
@@ -57,7 +58,7 @@ export function SignalIconTile({
   letter?: string;
   className?: string;
 }) {
-  const initial = (letter.trim().slice(0, 1) || "?").toUpperCase();
+  const initial = firstInitial(letter) || "?";
   const delayMs = (hashSeed(seed) % 900) + 200;
 
   if (kind === "folder") {
