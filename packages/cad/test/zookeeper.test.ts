@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   closeFailureMessage,
+  errorDetail,
   extractKclOutputs,
   reasoningText,
   toolResultText,
@@ -131,5 +132,49 @@ describe("closeFailureMessage", () => {
     });
     expect(message).toContain("…");
     expect(message.length).toBeLessThan(360);
+  });
+});
+
+describe("errorDetail", () => {
+  it("uses a string error", () => {
+    expect(errorDetail({ error: "prompt blocked" })).toBe(
+      "The CAD generation service rejected the request: prompt blocked",
+    );
+  });
+
+  it("extracts detail from an error object", () => {
+    expect(errorDetail({ error: { detail: "Unsupported geometry" } })).toBe(
+      "The CAD generation service rejected the request: Unsupported geometry",
+    );
+  });
+
+  it("prefers detail but falls back to message", () => {
+    expect(errorDetail({ error: { message: "Quota exceeded", error_code: "quota" } })).toBe(
+      "The CAD generation service rejected the request: Quota exceeded (code=quota)",
+    );
+  });
+
+  it("includes request_id when present", () => {
+    expect(
+      errorDetail({
+        error: { detail: "Bad request", error_code: "bad_request", request_id: "r1" },
+      }),
+    ).toBe(
+      "The CAD generation service rejected the request: Bad request (code=bad_request, request_id=r1)",
+    );
+  });
+
+  it("falls back to a bounded JSON dump for unknown shapes", () => {
+    const msg = errorDetail({ error: { foo: "bar".repeat(200) } });
+    expect(msg).toContain("The CAD generation service rejected the request:");
+    expect(msg).toContain("foo");
+    expect(msg).toContain("…");
+    expect(msg.length).toBeLessThan(320);
+  });
+
+  it("returns the generic message for a missing error", () => {
+    expect(errorDetail({ unexpected: true })).toBe(
+      "The CAD generation service rejected the request.",
+    );
   });
 });

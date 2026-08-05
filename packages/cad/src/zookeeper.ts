@@ -219,11 +219,31 @@ function timeoutError(totalMs: number): string {
   return `Zoo Zookeeper timed out after ~${label}`;
 }
 
-function errorDetail(msg: ServerMessage): string {
+function formatServiceError(err: unknown): string | null {
+  if (typeof err === "string") return flatten(err);
+  if (!err || typeof err !== "object") return null;
+  const obj = err as Record<string, unknown>;
+  const detail = flatten(obj.detail) ?? flatten(obj.message);
+  const code = flatten(obj.error_code, 60);
+  const requestId = flatten(obj.request_id, 60);
+  const extras = [code && `code=${code}`, requestId && `request_id=${requestId}`].filter(
+    (x): x is string => Boolean(x),
+  );
+  if (detail) return extras.length ? `${detail} (${extras.join(", ")})` : detail;
+  // Last resort: a compact, bounded dump of whatever shape Zoo returned.
+  try {
+    const raw = JSON.stringify(obj);
+    return raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
+  } catch {
+    return null;
+  }
+}
+
+export function errorDetail(msg: ServerMessage): string {
   const err = msg.error;
-  return typeof err === "string" || (err && typeof err === "object")
-    ? "The CAD generation service rejected the request."
-    : "The CAD generation service could not complete the request.";
+  const detail = formatServiceError(err);
+  if (detail) return `The CAD generation service rejected the request: ${detail}`;
+  return "The CAD generation service rejected the request.";
 }
 
 /** Everything one turn accumulates; survives reconnects within that turn. */
