@@ -395,8 +395,8 @@ function CadProgressLine({ toolCallId }: { toolCallId: string | undefined }) {
         {CAD_PHASE_LABEL[progress.phase]} · {formatElapsed(now - progress.startedAt)}
       </span>
       {progress.note ? (
-        <span className="block truncate italic" title={progress.note}>
-          {progress.note}
+        <span className="block truncate" title={progress.note}>
+          <Markdown text={progress.note} inline />
         </span>
       ) : null}
     </span>
@@ -423,13 +423,18 @@ function CadProgressTimeline({ entries }: { entries: CadProgressLogEntry[] }) {
         timeline ({entries.length})
       </button>
       {open ? (
-        <ol className="border-border/60 mt-1 max-h-48 space-y-0.5 overflow-y-auto border-l pl-2">
+        <ol
+          className="border-border/60 mt-1 max-h-48 space-y-0.5 overflow-y-auto border-l pl-2 pr-1"
+          style={{ scrollbarWidth: "thin", scrollbarColor: "var(--border) transparent" }}
+        >
           {entries.map((entry, i) => (
             <li key={`${entry.at}-${i}`} className="text-muted-foreground/80 text-[10px]">
               <span className="font-mono tabular-nums">+{formatElapsed(entry.at - t0)}</span>{" "}
               <span className="text-foreground/60">{CAD_PHASE_LABEL[entry.phase]}</span>
               {entry.note ? (
-                <span className="block break-words whitespace-pre-wrap italic">{entry.note}</span>
+                <span className="block break-words text-foreground/60">
+                  <Markdown text={entry.note} />
+                </span>
               ) : null}
             </li>
           ))}

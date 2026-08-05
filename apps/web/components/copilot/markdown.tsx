@@ -66,9 +66,20 @@ const components: Components = {
   td: ({ children }) => <td className="border-border/50 border-b px-2 py-1">{children}</td>,
 };
 
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+function getMarkdownComponents(inline?: boolean): Components {
+  if (!inline) return components;
+  return { ...components, p: ({ children }) => <span className="inline">{children}</span> };
+}
+
+export const Markdown = memo(function Markdown({
+  text,
+  inline,
+}: {
+  text: string;
+  inline?: boolean;
+}) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={getMarkdownComponents(inline)}>
       {text}
     </ReactMarkdown>
   );
