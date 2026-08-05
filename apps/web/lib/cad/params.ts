@@ -27,9 +27,9 @@ export function parseCadParams(script: string): CadParam[] {
     const match = ASSIGNMENT_RE.exec(trimmed);
     if (!match) break;
     const [, name, literal] = match as unknown as [string, string, string];
-    const litInLine = line.indexOf(literal);
-    const valueStart =
-      offset + (litInLine >= 0 ? litInLine : line.indexOf(match[0]!) + match[0]!.indexOf(literal));
+    // Search after the `=` so a digit inside the name can't be mistaken for the
+    // value: in `d1 = 1`, a plain indexOf("1") would point at the name.
+    const valueStart = offset + line.indexOf(literal, line.indexOf("=") + 1);
     let value: number | boolean | string;
     if (literal === "true" || literal === "false") value = literal === "true";
     else if (literal.startsWith('"')) value = JSON.parse(literal) as string;

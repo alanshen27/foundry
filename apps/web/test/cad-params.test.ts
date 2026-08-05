@@ -29,6 +29,19 @@ describe("parseCadParams", () => {
     const script = `a = 1\nsketch001 = startSketchOn(XY)\nb = 2\n`;
     expect(parseCadParams(script).map((p) => p.name)).toEqual(["a"]);
   });
+
+  it("locates the value when the name ends in the same digits", () => {
+    const params = parseCadParams("d1 = 1\nhole12 = 12\n");
+    expect(params.map((p) => [p.name, p.value])).toEqual([
+      ["d1", 1],
+      ["hole12", 12],
+    ]);
+    // Offsets must point at the literal after `=`, not at a digit in the name.
+    expect(params.map((p) => [p.start, p.end])).toEqual([
+      [5, 6],
+      [16, 18],
+    ]);
+  });
 });
 
 describe("setCadParam", () => {
