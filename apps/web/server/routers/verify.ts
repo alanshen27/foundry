@@ -5,6 +5,7 @@ import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";
 import { ensureStageStarted, markDownstreamStale, setStageStatus } from "../stage-state";
+import { runFitCheck } from "../fit-check";
 
 const category = z.enum(["VISUAL", "ELECTRICAL", "MECHANICAL", "SOFTWARE", "CROSS_DOMAIN"]);
 const status = z.enum(["PENDING", "PASS", "FAIL", "WARNING", "SKIPPED", "SIMULATED", "ERROR"]);
@@ -16,6 +17,18 @@ const targetPath = z.string().trim().min(1).max(300);
 const BLOCKING_STATUSES = new Set(["PENDING", "FAIL", "ERROR"]);
 
 export const verifyRouter = router({
+  /**
+   * Cross-stage fit check: whether schematic, board, firmware, BOM and CAD
+   * agree, plus a simulated run of the firmware against the schematic. Read
+   * only — it reports, it does not create checks or move a stage.
+   */
+  fitCheck: protectedProcedure
+    .input(z.object({ projectId: z.string(), branchId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
+      return runFitCheck(input.projectId, input.branchId);
+    }),
+
   listChecks: protectedProcedure
     .input(z.object({ projectId: z.string(), branchId: z.string() }))
     .query(async ({ ctx, input }) => {

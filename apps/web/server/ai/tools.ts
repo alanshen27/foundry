@@ -18,6 +18,9 @@ import {
 } from "@/lib/pcb/doc";
 import { buildNets, buildRatsnest } from "@/lib/pcb/netlist";
 import { runDrc } from "@/lib/pcb/drc";
+import { buildModelIndex } from "@/lib/sim/models";
+import { validatePartSpec, type PartSpec } from "@/lib/sim/part-spec";
+import { runFitCheck } from "../fit-check";
 import { circuitForGroup, partitionBoards } from "@/lib/circuit/groups";
 import { boardPads } from "@/lib/pcb/geometry";
 import { isPlausibleZooOpId } from "@foundry/cad";
@@ -105,6 +108,47 @@ const priority = z.enum(["MUST", "SHOULD", "MAY"]);
 const disciplineEnum = z.enum(["ELECTRONICS", "MECHANICAL", "SOFTWARE", "DESIGN"]);
 const checkCategory = z.enum(["VISUAL", "ELECTRICAL", "MECHANICAL", "SOFTWARE", "CROSS_DOMAIN"]);
 const checkSeverity = z.enum(["INFO", "MINOR", "MAJOR", "CRITICAL"]);
+const driveEnum = z.enum(["float", "pulldown", "pullup", "low", "high"]);
+
+/**
+ * Behavioural internals for a part type the simulator has no model for. Data,
+ * never code: the schema is what keeps a model-authored part safe to run.
+ */
+const specCondition = z.object({
+  when: z.enum(["always", "toggled", "not-toggled", "pin"]).default("always"),
+  whenPin: z.string().max(40).optional().describe('Pin to test, when `when` is "pin"'),
+  is: z.enum(["high", "low", "floating"]).optional(),
+});
+
+const partSpecSchema = z.object({
+  label: z.string().min(1).max(60),
+  pins: z
+    .array(z.string().min(1).max(40))
+    .min(1)
+    .max(60)
+    .describe("Pin names, exactly as the wires reference them"),
+  mcu: z.boolean().optional().describe("True when firmware runs on this part"),
+  interactive: z.enum(["momentary", "latching"]).optional(),
+  drives: z
+    .array(specCondition.extend({ pin: z.string().max(40), drive: driveEnum }))
+    .max(40)
+    .optional()
+    .describe("What the part asserts on a pin; later rules win"),
+  shorts: z
+    .array(specCondition.extend({ pins: z.array(z.string().max(40)).min(2).max(12) }))
+    .max(20)
+    .optional()
+    .describe("Pins joined together, e.g. the two sides of a closed switch"),
+  indicator: z
+    .object({ high: z.string().max(40), low: z.string().max(40) })
+    .optional()
+    .describe("Lights up when `high` reads high and `low` reads low (LED semantics)"),
+  analog: z
+    .object({ pin: z.string().max(40), value: z.number().min(0).max(1023) })
+    .optional()
+    .describe("Fixed analogRead value this part presents on a pin"),
+  note: z.string().max(300).optional().describe("What the real part does that this omits"),
+});
 
 const circuitSchema = z.object({
   parts: z
@@ -137,6 +181,12 @@ const circuitSchema = z.object({
       }),
     )
     .max(200),
+  models: z
+    .record(z.string(), partSpecSchema)
+    .optional()
+    .describe(
+      "Simulation internals per part type, for types the simulator has no built-in model for. Without a spec the part is inert and the firmware cannot be exercised against it.",
+    ),
 });
 
 type CircuitInput = z.infer<typeof circuitSchema>;
@@ -1003,7 +1053,20 @@ export function buildProjectTools(ctx: ToolContext) {
               error: `These part types have no renderable element: ${unsupported.join(", ")}. Replace each with the closest supported type and call save_circuit again. Supported: ${PART_TYPES.join(", ")}.`,
             };
           }
-          const data = { version: 2, parts: doc.parts, wires: doc.wires };
+          const specProblems = Object.entries(doc.models ?? {}).flatMap(([type, spec]) =>
+            validatePartSpec(spec).map((problem) => `${type}: ${problem}`),
+          );
+          if (specProblems.length > 0) {
+            return {
+              error: `These part specs are not usable: ${specProblems.join("; ")}. Pin names in a spec must match the pins the wires reference.`,
+            };
+          }
+          const data = {
+            version: 2,
+            parts: doc.parts,
+            wires: doc.wires,
+            ...(doc.models ? { models: doc.models } : {}),
+          };
           await prisma.designDoc.upsert({
             where: { projectId_branchId_kind: { projectId, branchId, kind: "CIRCUIT" } },
             create: {
@@ -1016,11 +1079,15 @@ export function buildProjectTools(ctx: ToolContext) {
             update: { data: data as unknown as Prisma.InputJsonValue, updatedById: ctx.userId },
           });
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
+          const unmodelled = buildModelIndex(normalizeCircuitDoc(data)).unmodelled;
           return {
             ok: true,
             parts: doc.parts.length,
             wires: doc.wires.length,
             staleStages: staled,
+            // Parts the simulator cannot exercise yet, so the model can supply
+            // internals rather than discovering the gap at the fit check.
+            ...(unmodelled.length > 0 ? { partsWithoutSimulationModel: unmodelled } : {}),
           };
         }),
     },
@@ -1056,6 +1123,7 @@ export function buildProjectTools(ctx: ToolContext) {
           });
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
           const generic = unsupportedWokwiTypes(doc.parts);
+          const unmodelled = buildModelIndex(doc).unmodelled;
           return {
             ok: true,
             parts: doc.parts.length,
@@ -1064,6 +1132,62 @@ export function buildProjectTools(ctx: ToolContext) {
             // Imported diagrams may use parts wokwi.com has but the element
             // library doesn't; these render as generic chips.
             ...(generic.length > 0 ? { renderedAsGenericChips: generic } : {}),
+            // An imported diagram brings no internals with it: every part type
+            // listed here needs a spec before firmware can be run against it.
+            ...(unmodelled.length > 0 ? { partsWithoutSimulationModel: unmodelled } : {}),
+          };
+        }),
+    },
+
+    define_part_models: {
+      description:
+        "Give simulation internals to part types the simulator has no built-in model for (imported diagrams, sensors, drivers, boards outside the Wokwi primitives). Merges into the schematic's existing specs; a type already specced is replaced. Pin names must match the wires exactly. Do this for every type reported in partsWithoutSimulationModel — until then those parts are inert and check_integration cannot exercise the firmware against them.",
+      inputSchema: z.object({
+        models: z
+          .record(z.string(), partSpecSchema)
+          .describe("Keyed by part type, e.g. wokwi-dht22"),
+      }),
+      execute: async ({ models }: { models: Record<string, PartSpec> }) =>
+        guard(ctx, "electronics.edit", async (workspaceId) => {
+          const problems = Object.entries(models).flatMap(([type, spec]) =>
+            validatePartSpec(spec).map((problem) => `${type}: ${problem}`),
+          );
+          if (problems.length > 0) return { error: `Unusable specs: ${problems.join("; ")}` };
+
+          const existing = await prisma.designDoc.findUnique({
+            where: { projectId_branchId_kind: { projectId, branchId, kind: "CIRCUIT" } },
+          });
+          if (!existing?.data) return { error: "There is no schematic to attach part models to." };
+
+          const doc = normalizeCircuitDoc(existing.data);
+          const merged = { ...doc, models: { ...(doc.models ?? {}), ...models } };
+          await prisma.designDoc.update({
+            where: { projectId_branchId_kind: { projectId, branchId, kind: "CIRCUIT" } },
+            data: { data: merged as unknown as Prisma.InputJsonValue, updatedById: ctx.userId },
+          });
+          const staled = await touchStage(ctx, workspaceId, "ENGINEER");
+          return {
+            ok: true,
+            modelled: Object.keys(models),
+            stillUnmodelled: buildModelIndex(merged).unmodelled,
+            staleStages: staled,
+          };
+        }),
+    },
+
+    check_integration: {
+      description:
+        "The fit check: does the project actually work as one thing? Compares schematic, PCB, firmware, BOM and CAD against each other, then runs the firmware against the schematic in the behavioural simulator (SIMULATED, not compiled) and reports what the run did — pins used but unwired, parts that never activate, contention, serial output. Run it after a bootstrap and after any change that crosses stages, then fix what it reports.",
+      inputSchema: z.object({}),
+      execute: async () =>
+        guard(ctx, "project.read", async () => {
+          const report = await runFitCheck(projectId, branchId);
+          return {
+            ok: report.ok,
+            errors: report.counts.errors,
+            warnings: report.counts.warnings,
+            findings: report.findings,
+            simulation: report.simulation,
           };
         }),
     },

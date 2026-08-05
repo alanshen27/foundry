@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
+import { FitCheckPanel } from "@/components/verify/fit-check-panel";
 import { trpc } from "@/lib/trpc";
 import { selectClass } from "@/lib/format";
 
@@ -171,6 +172,8 @@ export function VerifyStage({ projectId, branchId, canRun, canApprove, verifySta
           ) : null}
         </CardHeader>
       </Card>
+
+      <FitCheckPanel projectId={projectId} branchId={branchId} />
 
       <Card>
         <CardHeader>

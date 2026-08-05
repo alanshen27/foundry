@@ -6,6 +6,8 @@
  * de-facto standard format.
  */
 
+import { validatePartSpec, type PartSpec, type PartSpecMap } from "@/lib/sim/part-spec";
+
 export type CircuitPart = {
   id: string;
   /** Wokwi element type, e.g. "wokwi-esp32-devkit-v1", or "generic:<label>" for unknown/legacy parts. */
@@ -63,6 +65,13 @@ export type CircuitDoc = {
    * source here would immediately create two copies that drift.
    */
   sketchFileId?: string;
+  /**
+   * Behavioural internals for part types the simulator has no built-in model
+   * for, keyed by part type. Imported and AI-authored schematics use parts
+   * outside the built-in catalog; without internals those parts are inert and
+   * the firmware written against them cannot be exercised.
+   */
+  models?: PartSpecMap;
 };
 
 export type CatalogEntry = {
@@ -448,6 +457,23 @@ function normalizeGroups(raw: unknown): CircuitGroup[] {
 }
 
 /**
+ * Keeps only structurally sound part specs. A spec with a broken reference
+ * would compile into a model wired to nothing, which reads as a working part
+ * that does nothing — worse than having no model at all.
+ */
+function normalizePartSpecs(raw: unknown): PartSpecMap | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: PartSpecMap = {};
+  for (const [type, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== "object") continue;
+    const spec = value as PartSpec;
+    if (validatePartSpec(spec).length > 0) continue;
+    out[type] = spec;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
  * Accepts any previously persisted circuit document (legacy v1 glyph format
  * or current v2 Wokwi format) and returns a v2 doc. Legacy parts become
  * "generic:" nodes with numeric pins so old wires stay connected.
@@ -484,6 +510,7 @@ export function normalizeCircuitDoc(raw: unknown): CircuitDoc {
         typeof doc.sketchFileId === "string" && doc.sketchFileId
           ? doc.sketchFileId.slice(0, 60)
           : undefined,
+      models: normalizePartSpecs(doc.models),
     };
   }
 
