@@ -79,9 +79,18 @@ export function avatarColor(seed: string): { bg: string; text: string; tile: str
   return AVATAR_PALETTE[hashSeed(key) % AVATAR_PALETTE.length]!;
 }
 
+/**
+ * First character of a word by code point. Slicing by UTF-16 unit would cut an
+ * astral character — an emoji or a mathematical letter — in half and render the
+ * lone surrogate as a replacement glyph.
+ */
+function firstChar(word: string): string {
+  return Array.from(word)[0] ?? "";
+}
+
 export function avatarInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0]!.slice(0, 1).toUpperCase();
-  return `${parts[0]!.slice(0, 1)}${parts[1]!.slice(0, 1)}`.toUpperCase();
+  if (parts.length === 1) return firstChar(parts[0]!).toUpperCase();
+  return `${firstChar(parts[0]!)}${firstChar(parts[1]!)}`.toUpperCase();
 }
