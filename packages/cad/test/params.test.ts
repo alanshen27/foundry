@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCadParams, setCadParam } from "@/lib/cad/params";
+import { parseCadParams, setCadParam } from "../src/params";
 
 const SCRIPT = `// demo
 width = 60

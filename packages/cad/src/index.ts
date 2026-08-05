@@ -70,3 +70,4 @@ export {
   importMeshAsPart,
 } from "./doc";
 export type { CadAssetImportMode, KclProjectBuild } from "./doc";
+export { parseCadParams, setCadParam, type CadParam } from "./params";
