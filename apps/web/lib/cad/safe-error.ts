@@ -18,6 +18,36 @@ function rawMessage(error: unknown): string {
 }
 
 /**
+ * Failure buckets, most specific first. Each maps raw engine text to a public
+ * message that names the next action without echoing anything from the error.
+ */
+const BUCKETS: { keywords: string[]; message: string }[] = [
+  {
+    keywords: [
+      "auth_token_invalid",
+      "unauthorized",
+      "forbidden",
+      "401",
+      "403",
+      "api token",
+      "api_token",
+      "bearer ",
+    ],
+    message:
+      "The CAD service could not authenticate. Ask a workspace administrator to check the CAD connection.",
+  },
+  {
+    keywords: ["not configured", "token is empty", "missing token", "environment variable"],
+    message:
+      "CAD is not available in this workspace yet. Ask a workspace administrator to configure the CAD service.",
+  },
+  {
+    keywords: ["timed out", "timeout", "network", "fetch failed", "websocket", "webrtc"],
+    message: "The CAD service did not respond. Check your connection and try again.",
+  },
+];
+
+/**
  * Convert engine failures into useful public messages without leaking
  * credentials, environment names, server paths, URLs, headers, stack traces,
  * request internals, or provider implementation details.
@@ -26,38 +56,8 @@ export function safeCadError(error: unknown, context: CadErrorContext = "executi
   const message = rawMessage(error);
   const raw = message.toLowerCase();
 
-  if (
-    raw.includes("auth_token_invalid") ||
-    raw.includes("unauthorized") ||
-    raw.includes("forbidden") ||
-    raw.includes("401") ||
-    raw.includes("403") ||
-    raw.includes("api token") ||
-    raw.includes("api_token") ||
-    raw.includes("bearer ")
-  ) {
-    return "The CAD service could not authenticate. Ask a workspace administrator to check the CAD connection.";
-  }
-
-  if (
-    raw.includes("not configured") ||
-    raw.includes("token is empty") ||
-    raw.includes("missing token") ||
-    raw.includes("environment variable")
-  ) {
-    return "CAD is not available in this workspace yet. Ask a workspace administrator to configure the CAD service.";
-  }
-
-  if (
-    raw.includes("timed out") ||
-    raw.includes("timeout") ||
-    raw.includes("network") ||
-    raw.includes("fetch failed") ||
-    raw.includes("websocket") ||
-    raw.includes("webrtc")
-  ) {
-    return "The CAD service did not respond. Check your connection and try again.";
-  }
+  const bucket = BUCKETS.find((b) => b.keywords.some((k) => raw.includes(k)));
+  if (bucket) return bucket.message;
 
   if (context === "import") {
     return "This file could not be imported. Check that it is a supported design file and is not damaged.";
