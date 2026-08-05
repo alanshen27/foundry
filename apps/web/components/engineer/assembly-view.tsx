@@ -130,6 +130,10 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
       console.warn("[Assembly] no assembly/product.kcl to render");
       return;
     }
+    // The assembled source is a build artefact, not what the editor shows, so
+    // it stays available while developing — but printing every project's
+    // geometry into a user's console is noise.
+    if (process.env.NODE_ENV === "production") return;
     console.groupCollapsed(`[Assembly] product assembly · ${product.path}`);
     console.log(viewport.script);
     if (viewport.projectFiles) {
