@@ -13,10 +13,9 @@ import {
 import { loadChannelHistory, persistRunMessages } from "../chat-run/persist";
 import { publishRunFinished } from "../chat-run/publish";
 import { expireStaleChatRuns } from "../chat-run/stale";
-import { markFailedAssistantMessages } from "@/lib/copilot/messages";
+import { markFailedAssistantMessages, validateResumableUIMessages } from "@/lib/copilot/messages";
 import { CHAT_REACTION_EMOJIS } from "@/lib/copilot/chat-message-meta";
 import type { UIMessage } from "ai";
-import { validateUIMessages } from "ai";
 
 const reactionEmojiSchema = z.enum(CHAT_REACTION_EMOJIS);
 
@@ -284,7 +283,7 @@ export const chatRouter = router({
 
       let messages: UIMessage[];
       try {
-        messages = await validateUIMessages({ messages: input.messages });
+        messages = await validateResumableUIMessages(input.messages);
       } catch {
         messages = (input.messages as UIMessage[]).filter(
           (m) => m && typeof m === "object" && typeof m.id === "string" && Array.isArray(m.parts),

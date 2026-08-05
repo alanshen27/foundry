@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { validateUIMessages } from "ai";
 import { prisma } from "@foundry/db";
 import { getServerEnv } from "@foundry/config";
 import { getCurrentUser } from "@/server/session";
@@ -16,6 +15,7 @@ import {
   uiMessageText,
 } from "@/server/chat-run/should-respond";
 import { stampLatestUserAuthor } from "@/lib/copilot/chat-message-meta";
+import { validateResumableUIMessages } from "@/lib/copilot/messages";
 
 const bodySchema = z.object({
   projectId: z.string(),
@@ -53,7 +53,13 @@ export async function POST(request: Request) {
       channelId = (await ensureDefaultChannel(projectId, branchId)).id;
     }
 
-    const validated = await validateUIMessages({ messages: parsed.data.messages });
+    // Repairing before validation is what lets a channel recover on its own:
+    // a run killed mid-tool leaves a call with no result in the stored
+    // transcript, and that message alone used to reject every later send.
+    const validated = await validateResumableUIMessages(parsed.data.messages);
+    if (validated.length === 0) {
+      return NextResponse.json({ error: "No usable messages in this request" }, { status: 400 });
+    }
     // Attribute only the newest user turn to the session user — never rewrite
     // teammate messages that arrived without author metadata in the payload.
     const messages = stampLatestUserAuthor(validated, {

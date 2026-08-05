@@ -1,4 +1,4 @@
-import { isToolUIPart, type ModelMessage, type UIMessage } from "ai";
+import { isToolUIPart, validateUIMessages, type ModelMessage, type UIMessage } from "ai";
 
 /** Terminal tool states that include a result the model can consume. */
 const COMPLETE_TOOL_STATES = new Set(["output-available", "output-error", "output-denied"]);
@@ -53,6 +53,123 @@ function stripOpenAIItemIds<T extends UIMessage["parts"][number]>(part: T): T {
   return patched;
 }
 
+/** Shown in place of a tool result a killed run never wrote. */
+export const INTERRUPTED_TOOL_ERROR = "Interrupted before this tool reported a result.";
+
+type ToolPartShape = {
+  type: string;
+  toolCallId?: unknown;
+  toolName?: unknown;
+  state?: unknown;
+  input?: unknown;
+  output?: unknown;
+  errorText?: unknown;
+  providerExecuted?: unknown;
+  approval?: unknown;
+};
+
+function isDeniedShape(part: ToolPartShape): boolean {
+  const approval = part.approval;
+  return (
+    typeof approval === "object" &&
+    approval !== null &&
+    (approval as { approved?: unknown }).approved === false
+  );
+}
+
+/**
+ * Rewrite one tool part into a shape the AI SDK message schema accepts, or
+ * null when nothing usable is left. A tool call is only replayable as a
+ * call/result pair, so anything without a recorded result becomes an errored
+ * result rather than a call the next turn has to answer for.
+ */
+function repairToolPart(
+  part: UIMessage["parts"][number],
+  reason: string,
+): UIMessage["parts"][number] | null {
+  const shape = part as ToolPartShape;
+  const toolCallId = shape.toolCallId;
+  if (typeof toolCallId !== "string" || !toolCallId) return null;
+  const isDynamic = shape.type === "dynamic-tool";
+  if (isDynamic && typeof shape.toolName !== "string") return null;
+
+  const state = shape.state;
+  const errorText = typeof shape.errorText === "string" ? shape.errorText.trim() : "";
+  if (state === "output-available" && shape.output !== undefined) return part;
+  if (state === "output-error" && errorText && shape.output === undefined) return part;
+  if (state === "output-denied" && isDeniedShape(shape) && shape.output === undefined) return part;
+
+  return {
+    ...(isDynamic
+      ? { type: "dynamic-tool", toolName: shape.toolName }
+      : { type: shape.type as `tool-${string}` }),
+    toolCallId,
+    state: "output-error",
+    input: shape.input ?? {},
+    errorText: errorText || reason,
+    ...(shape.providerExecuted === true ? { providerExecuted: true } : {}),
+  } as UIMessage["parts"][number];
+}
+
+/**
+ * Make a transcript left behind by a killed run usable again.
+ *
+ * A worker that dies mid-tool (deploy, OOM, cancelled stream) stores the call
+ * with no result, and half-written parts can miss fields their state requires
+ * — both of which make the next turn fail validation instead of resuming.
+ */
+export function repairInterruptedToolParts(
+  messages: UIMessage[],
+  reason: string = INTERRUPTED_TOOL_ERROR,
+): UIMessage[] {
+  return messages.map((message) => {
+    if (!Array.isArray(message.parts)) return message;
+    let changed = false;
+    const parts: UIMessage["parts"] = [];
+    for (const part of message.parts) {
+      if (
+        !part ||
+        typeof part !== "object" ||
+        !(isToolPart(part) || part.type === "dynamic-tool")
+      ) {
+        parts.push(part);
+        continue;
+      }
+      const repaired = repairToolPart(part, reason);
+      if (repaired !== part) changed = true;
+      if (repaired) parts.push(repaired);
+    }
+    return changed ? { ...message, parts } : message;
+  });
+}
+
+/**
+ * Validate a stored/client transcript, repairing interrupted tool parts first
+ * and dropping only the messages that still fail. A single unusable message
+ * must never block the whole channel — the user could not send anything else
+ * until the poisoned history aged out of the window.
+ */
+export async function validateResumableUIMessages(messages: unknown[]): Promise<UIMessage[]> {
+  const repaired = repairInterruptedToolParts(messages as UIMessage[]);
+  try {
+    return await validateUIMessages({ messages: repaired });
+  } catch (err) {
+    console.warn(
+      "[chat] transcript failed validation; dropping unusable messages",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  const kept: UIMessage[] = [];
+  for (const message of repaired) {
+    try {
+      kept.push(...(await validateUIMessages({ messages: [message] })));
+    } catch {
+      // Unrepairable message — keep the rest of the conversation.
+    }
+  }
+  return kept;
+}
+
 /**
  * Drop incomplete tool parts (interrupted runs, approval mid-flight, etc.).
  * `ignoreIncompleteToolCalls` only strips input-streaming / input-available;
@@ -72,7 +189,7 @@ function stripOpenAIItemIds<T extends UIMessage["parts"][number]>(part: T): T {
  */
 export function sanitizeUiMessagesForModel(messages: UIMessage[]): UIMessage[] {
   const seen = new Set<string>();
-  return messages
+  return repairInterruptedToolParts(messages)
     .filter((message) => {
       // Client reconnects can append the same message id twice.
       if (!message.id) return true;
@@ -176,6 +293,49 @@ export function stripOrphanToolCalls(messages: ModelMessage[]): ModelMessage[] {
       if (!Array.isArray(message.content)) return true;
       return message.content.length > 0;
     }) as ModelMessage[];
+}
+
+/**
+ * The mirror of `stripOrphanToolCalls`: a tool-result whose call is gone (a
+ * truncated history window, a dropped assistant turn) is just as invalid as a
+ * call with no result.
+ */
+export function stripOrphanToolResults(messages: ModelMessage[]): ModelMessage[] {
+  const callIds = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (
+        typeof part === "object" &&
+        part !== null &&
+        "type" in part &&
+        (part.type === "tool-call" || part.type === "tool-approval-request") &&
+        "toolCallId" in part &&
+        typeof part.toolCallId === "string"
+      ) {
+        callIds.add(part.toolCallId);
+      }
+    }
+  }
+
+  return messages
+    .map((message) => {
+      if (message.role !== "tool" || !Array.isArray(message.content)) return message;
+      const content = message.content.filter((part) => {
+        if (typeof part !== "object" || part === null || !("toolCallId" in part)) return true;
+        return typeof part.toolCallId === "string" && callIds.has(part.toolCallId);
+      });
+      return { ...message, content };
+    })
+    .filter((message) => {
+      if (!Array.isArray(message.content)) return true;
+      return message.content.length > 0;
+    }) as ModelMessage[];
+}
+
+/** Both orphan directions, in the order a converted transcript needs them. */
+export function pairToolCallsWithResults(messages: ModelMessage[]): ModelMessage[] {
+  return stripOrphanToolResults(stripOrphanToolCalls(messages));
 }
 
 /** Drop empty assistant placeholders left behind by successful/aborted runs. */
