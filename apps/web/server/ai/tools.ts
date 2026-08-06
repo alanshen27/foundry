@@ -59,6 +59,11 @@ import {
   type CadProgressPhase,
 } from "@/lib/copilot/cad-progress";
 import { applyKclEdits } from "@/lib/cad/patch-kcl";
+import {
+  buildFixIteratePrompt,
+  buildRegeneratePrompt,
+  withKclGuardrails,
+} from "@/lib/cad/zoo-guardrails";
 
 /**
  * Long CAD tools attach their narration timeline (`progressLog`) to the output
@@ -1588,24 +1593,38 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           }): Promise<JobOutcome> => {
             const label = jobs.length > 1 ? `${job.partName ?? "main"}: ` : "";
             let lastError: string | undefined;
+            let lastKcl: string | undefined;
             for (let attempt = 1; attempt <= CAD_PART_MAX_ATTEMPTS; attempt += 1) {
               if (abortSignal?.aborted) break;
-              const prompt =
-                attempt === 1
-                  ? job.prompt
-                  : `${job.prompt}\n\nIMPORTANT: a previous attempt produced KCL that failed in the engine with this error:\n${lastError}\nGenerate corrected KCL that avoids this exact error.`;
-              const result = await cad.textToCad(prompt, {
+              const genOptions = {
                 projectName: projectId,
                 signal: abortSignal,
-                onProgress: (note) =>
+                onProgress: (note: string) =>
                   progress(
                     toolCallId,
                     "generate",
                     `${label}${attempt > 1 ? `(retry ${attempt - 1}) ` : ""}${note}`,
                   ),
-                // Resume only applies to the single-part, first-attempt form.
-                existingOpId: jobs.length === 1 && attempt === 1 ? resumeId : undefined,
-              });
+              };
+              // Retries with a failing script iterate on it (edit_kcl_code)
+              // instead of regenerating the whole part from an empty project.
+              const result =
+                attempt > 1 && lastKcl && lastError
+                  ? await cad.iterateCad(
+                      lastKcl,
+                      buildFixIteratePrompt(job.prompt, lastError),
+                      genOptions,
+                    )
+                  : await cad.textToCad(
+                      attempt > 1 && lastError
+                        ? buildRegeneratePrompt(job.prompt, lastError)
+                        : withKclGuardrails(job.prompt),
+                      {
+                        ...genOptions,
+                        // Resume only applies to the single-part, first-attempt form.
+                        existingOpId: jobs.length === 1 && attempt === 1 ? resumeId : undefined,
+                      },
+                    );
               if (!result.ok) {
                 lastError = result.error;
                 // Deadline/cancel exhausted the budget — retrying can't help.
@@ -1626,10 +1645,11 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
               }));
               if (verdict.verified === false && attempt < CAD_PART_MAX_ATTEMPTS) {
                 lastError = verdict.executeError;
+                lastKcl = result.data.kcl;
                 progress(
                   toolCallId,
                   "generate",
-                  `${label}KCL failed execute — regenerating with the error`,
+                  `${label}KCL failed execute — iterating on it with the error`,
                 );
                 continue;
               }
