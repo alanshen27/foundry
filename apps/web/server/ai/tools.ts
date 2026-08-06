@@ -1894,7 +1894,9 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           .string()
           .min(20)
           .max(40_000)
-          .describe("Python build123d source. No filesystem/network access; must set `result`."),
+          .describe(
+            "Python build123d source. No filesystem/network access; must set `result`. Use `print('BUILD123D_PROGRESS: <note>')` to stream progress to the user.",
+          ),
       }),
       execute: async (
         input: { partName: string; script: string },
@@ -1903,7 +1905,10 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
         guard(ctx, "mechanical.edit", async (workspaceId) => {
           try {
             progress(toolCallId, "execute", `${input.partName}: running build123d (OCCT)`);
-            const run = await runBuild123d(input.script, { signal: abortSignal });
+            const run = await runBuild123d(input.script, {
+              signal: abortSignal,
+              onProgress: (note) => progress(toolCallId, "execute", `${input.partName}: ${note}`),
+            });
             if (!run.ok) {
               const log = takeProgressLog(toolCallId);
               return {

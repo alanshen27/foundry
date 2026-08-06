@@ -187,6 +187,30 @@ const TOOL_META: Record<
     failed: "Failed to save KCL",
     icon: Boxes,
   },
+  patch_cad_script: {
+    doing: "Patching KCL",
+    done: "Patched the 3D model",
+    failed: "KCL patch failed",
+    icon: Boxes,
+  },
+  python_cad: {
+    doing: "Modeling in Python CAD",
+    done: "Modeled the part in Python CAD",
+    failed: "Python CAD failed",
+    icon: Boxes,
+  },
+  define_part_models: {
+    doing: "Defining simulation models",
+    done: "Defined simulation models",
+    failed: "Failed to define models",
+    icon: CircuitBoard,
+  },
+  check_integration: {
+    doing: "Running fit check",
+    done: "Fit check complete",
+    failed: "Fit check failed",
+    icon: ClipboardCheck,
+  },
   add_part_to_assembly: {
     doing: "Building product preview",
     done: "Product preview ready",

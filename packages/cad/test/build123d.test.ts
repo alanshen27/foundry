@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execSync } from "node:child_process";
-import { runBuild123d, summarizePythonError } from "../src/build123d";
+import { runBuild123d, summarizePythonError, extractProgressNote } from "../src/build123d";
 
 describe("summarizePythonError", () => {
   it("prefers the explicit driver contract error", () => {
@@ -38,15 +38,51 @@ const hasUv = (() => {
   }
 })();
 
+describe("extractProgressNote", () => {
+  it("returns the note after the progress prefix", () => {
+    expect(extractProgressNote("BUILD123D_PROGRESS: sketching base")).toBe("sketching base");
+  });
+
+  it("returns null for unrelated output", () => {
+    expect(extractProgressNote("some pip noise")).toBeNull();
+    expect(extractProgressNote("")).toBeNull();
+  });
+
+  it("extracts the marker from output with leading text", () => {
+    expect(extractProgressNote("[stderr] BUILD123D_PROGRESS: exporting mesh")).toBe(
+      "exporting mesh",
+    );
+  });
+});
+
 // Real OCCT execution — needs uv on PATH (first run may download wheels).
 describe.skipIf(!hasUv)("runBuild123d (live, uv)", () => {
-  it("builds a box and reports its bounding box", { timeout: 300_000 }, async () => {
-    const result = await runBuild123d("from build123d import *\nresult = Box(10, 20, 5)\n");
+  it(
+    "builds a box, reports its bounding box, and streams progress",
+    { timeout: 300_000 },
+    async () => {
+      const notes: string[] = [];
+      const result = await runBuild123d("from build123d import *\nresult = Box(10, 20, 5)\n", {
+        onProgress: (note) => notes.push(note),
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data.stl.byteLength).toBeGreaterThan(0);
+        expect(result.data.bbox).toEqual({ x: 10, y: 20, z: 5 });
+      }
+      expect(notes).toContain("computing bounding box");
+      expect(notes).toContain("exporting mesh");
+    },
+  );
+
+  it("streams user-defined progress markers", { timeout: 300_000 }, async () => {
+    const notes: string[] = [];
+    const result = await runBuild123d(
+      "from build123d import *\nprint('BUILD123D_PROGRESS: sketching base')\nresult = Box(10, 20, 5)\n",
+      { onProgress: (note) => notes.push(note) },
+    );
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.data.stl.byteLength).toBeGreaterThan(0);
-      expect(result.data.bbox).toEqual({ x: 10, y: 20, z: 5 });
-    }
+    expect(notes).toContain("sketching base");
   });
 
   it("returns the actionable Python error on a broken script", { timeout: 300_000 }, async () => {

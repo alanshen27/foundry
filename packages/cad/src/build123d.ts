@@ -25,6 +25,8 @@ export type Build123dRunOptions = {
   signal?: AbortSignal;
   /** Override the uv binary (tests). */
   uvCommand?: string;
+  /** Stream progress notes emitted by the Python script. */
+  onProgress?: (note: string) => void;
 };
 
 export type Build123dRunOutput = {
@@ -34,16 +36,66 @@ export type Build123dRunOutput = {
   logs: string;
 };
 
+const PROGRESS_PREFIX = "BUILD123D_PROGRESS:";
+
+export function extractProgressNote(line: string): string | null {
+  const idx = line.indexOf(PROGRESS_PREFIX);
+  if (idx === -1) return null;
+  const note = line.slice(idx + PROGRESS_PREFIX.length).trim();
+  return note || null;
+}
+
+function createOutputSink(onProgress?: (note: string) => void): {
+  append: (chunk: string) => void;
+  flush: () => void;
+  raw: string;
+} {
+  let buffer = "";
+  let raw = "";
+
+  const processBuffer = () => {
+    for (;;) {
+      const nl = buffer.indexOf("\n");
+      if (nl === -1) break;
+      const line = buffer.slice(0, nl).trimEnd();
+      buffer = buffer.slice(nl + 1);
+      const note = extractProgressNote(line);
+      if (note) onProgress?.(note);
+    }
+  };
+
+  return {
+    append(chunk) {
+      raw += chunk;
+      buffer += chunk;
+      processBuffer();
+    },
+    flush() {
+      const line = buffer.trimEnd();
+      if (line) {
+        const note = extractProgressNote(line);
+        if (note) onProgress?.(note);
+      }
+      buffer = "";
+    },
+    get raw() {
+      return raw;
+    },
+  };
+}
+
 const DRIVER = `
 import json, sys
 
-import model  # user script; must define \`result\`
-
+print("BUILD123D_PROGRESS: loading build123d")
 from build123d import Shape, export_stl
 try:
     from build123d import Builder
 except ImportError:
     Builder = None
+
+print("BUILD123D_PROGRESS: executing model")
+import model  # user script; must define \`result\`
 
 shape = getattr(model, "result", None)
 if Builder is not None and isinstance(shape, Builder):
@@ -55,7 +107,9 @@ if not isinstance(shape, Shape):
     print(f"BUILD123D_ERROR: 'result' is {type(shape).__name__}, not a build123d Shape/Part", file=sys.stderr)
     sys.exit(3)
 
+print("BUILD123D_PROGRESS: computing bounding box")
 bb = shape.bounding_box()
+print("BUILD123D_PROGRESS: exporting mesh")
 export_stl(shape, "out.stl")
 with open("meta.json", "w") as f:
     json.dump({"bbox": {"x": bb.size.X, "y": bb.size.Y, "z": bb.size.Z}}, f)
@@ -82,13 +136,17 @@ export async function runBuild123d(
         `build123d==${BUILD123D_VERSION}`,
         "driver.py",
       ],
-      { cwd: dir, stdio: ["ignore", "pipe", "pipe"] },
+      {
+        cwd: dir,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, PYTHONUNBUFFERED: "1" },
+      },
     );
 
-    let out = "";
-    let errOut = "";
-    proc.stdout.on("data", (d: Buffer) => (out += d.toString()));
-    proc.stderr.on("data", (d: Buffer) => (errOut += d.toString()));
+    const outSink = createOutputSink(opts.onProgress);
+    const errSink = createOutputSink(opts.onProgress);
+    proc.stdout.on("data", (d: Buffer) => outSink.append(d.toString("utf8")));
+    proc.stderr.on("data", (d: Buffer) => errSink.append(d.toString("utf8")));
 
     const exitCode = await new Promise<number | null>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -110,10 +168,14 @@ export async function runBuild123d(
         resolve(code);
       });
     }).catch((err: Error) => {
-      errOut += `\nspawn failed: ${err.message}`;
+      errSink.append(`\nspawn failed: ${err.message}`);
       return 1;
     });
 
+    outSink.flush();
+    errSink.flush();
+    const out = outSink.raw;
+    const errOut = errSink.raw;
     const logs = [out.trim(), errOut.trim()].filter(Boolean).join("\n");
     if (exitCode === null) {
       return {
