@@ -9,6 +9,25 @@ import { expect, test, type Page } from "@playwright/test";
 
 const runId = Date.now().toString(36);
 
+/**
+ * page.goto that survives a client-side navigation still in flight.
+ *
+ * The workspace updates its own URL (tab changes call router.replace), and a
+ * goto issued while that is settling is aborted by the browser with
+ * net::ERR_ABORTED — not a failure of the page being opened. Retry only that.
+ */
+async function gotoSettled(page: Page, url: string) {
+  for (let attempt = 1; ; attempt++) {
+    await page.waitForLoadState("load");
+    try {
+      await page.goto(url);
+      return;
+    } catch (err) {
+      if (attempt >= 3 || !String(err).includes("ERR_ABORTED")) throw err;
+    }
+  }
+}
+
 async function signIn(page: Page, email: string) {
   await page.goto("/auth/sign-in");
   await page.getByLabel("Email").fill(email);
@@ -16,16 +35,22 @@ async function signIn(page: Page, email: string) {
   await page.getByRole("button", { name: "Sign in" }).click();
   // Signed-in home is the primary workspace slug, not the all-workspaces list.
   await page.waitForURL(/\/w\/[^/]+$/);
+  // Let the landing page finish loading: navigating away while the client
+  // router is still settling aborts the next page.goto (net::ERR_ABORTED).
+  await page.waitForLoadState("load");
 }
 
 test("full Phase 0 journey", async ({ browser }) => {
+  // A cold dev server compiles every stage the first time it is opened, which
+  // alone can exceed the default 60s budget.
+  test.setTimeout(240_000);
   const builderContext = await browser.newContext();
   const builder = await builderContext.newPage();
 
   await signIn(builder, "builder@foundry.local");
 
   // Optional extra workspace via manage list (separate from the project chatbar)
-  await builder.goto("/workspaces?manage=1");
+  await gotoSettled(builder, "/workspaces?manage=1");
   const workspaceName = `E2E Workspace ${runId}`;
   await builder.getByLabel("Workspace name").fill(workspaceName);
   await builder.getByRole("button", { name: "Create" }).click();
@@ -45,27 +70,28 @@ test("full Phase 0 journey", async ({ browser }) => {
   expect(builder.url()).not.toMatch(/\/w\/test-rover(?:\/|$)/);
   await expect(builder.getByRole("heading", { name: "Test Rover" })).toBeVisible();
 
-  // Walk the footer process bar and check the real editors render.
+  // Walk the stages through the workspace tab bar and check each real editor
+  // renders. The old footer "Design process" nav is gone: every stage now
+  // lives inside the engineer workspace as a tab, addressed by ?view=.
   // Clicks retry because dev-mode hydration can swallow the first one.
-  const stageMarkers: [string, RegExp, string][] = [
-    ["Ideation", /\/ideate$/, "Product brief"],
-    ["Engineer", /\/engineer/, "In this scene"],
-    ["Verify", /\/verify$/, "Validation checklist"],
-    ["Launch", /\/launch$/, "Cut a release"],
+  const stageTabs: [string, string, string][] = [
+    ["Ideate", "ideate", "Product brief"],
+    ["Verify", "verify", "Validation checklist"],
+    ["Launch", "launch", "Cut a release"],
+    ["Assembly", "assembly", "Test Rover"],
   ];
-  for (const [step, url, marker] of stageMarkers) {
+  for (const [tab, view, marker] of stageTabs) {
+    const button = builder.getByRole("button", { name: tab, exact: true });
     await expect(async () => {
-      await builder
-        .getByRole("navigation", { name: "Design process" })
-        .getByRole("link", { name: step })
-        .click();
-      await builder.waitForURL(url, { timeout: 10_000 });
-    }).toPass({ timeout: 90_000 });
-    await expect(builder.getByText(marker).first()).toBeVisible({ timeout: 30_000 });
+      await button.click();
+      await expect(button).toHaveAttribute("aria-pressed", "true", { timeout: 5_000 });
+    }).toPass({ timeout: 60_000 });
+    if (view !== "assembly") await expect(builder).toHaveURL(new RegExp(`view=${view}`));
+    await expect(builder.getByText(marker).first()).toBeVisible({ timeout: 60_000 });
   }
 
   // Invite the reviewer
-  await builder.goto(builder.url().replace(/\/projects\/.*$/, "/settings"));
+  await gotoSettled(builder, builder.url().replace(/\/projects\/.*$/, "/settings"));
   await builder.getByLabel("Invitee email").fill("reviewer@foundry.local");
   await builder.getByRole("button", { name: "Invite" }).click();
   await expect(builder.getByText("Invitation created")).toBeVisible();
@@ -77,7 +103,7 @@ test("full Phase 0 journey", async ({ browser }) => {
   const reviewerContext = await browser.newContext();
   const reviewer = await reviewerContext.newPage();
   await signIn(reviewer, "reviewer@foundry.local");
-  await reviewer.goto(invitePath);
+  await gotoSettled(reviewer, invitePath);
   await reviewer.getByRole("button", { name: "Accept invitation" }).click();
   await reviewer.waitForURL("**/w/e2e-workspace-*");
   await expect(reviewer.getByRole("heading", { name: workspaceName })).toBeVisible();
@@ -89,7 +115,7 @@ test("full Phase 0 journey", async ({ browser }) => {
 
   // Shared work has no place in the reviewer's own folder tree, so their home
   // sidebar lists it flat under "Shared with me".
-  await reviewer.goto("/");
+  await gotoSettled(reviewer, "/");
   await reviewer.waitForURL(/\/w\/[^/]+$/);
   await expect(
     reviewer
@@ -107,10 +133,11 @@ test("full Phase 0 journey", async ({ browser }) => {
 });
 
 test("chat channels and visual CAD parameters", async ({ page }) => {
+  test.setTimeout(240_000);
   await signIn(page, "builder@foundry.local");
 
   // Fresh workspace (manage form) + project via large chatbar — not workspace-named-as-project.
-  await page.goto("/workspaces?manage=1");
+  await gotoSettled(page, "/workspaces?manage=1");
   await page.getByLabel("Workspace name").fill(`E2E Studio ${runId}`);
   await page.getByRole("button", { name: "Create" }).click();
   await page.waitForURL("**/w/e2e-studio-*");
@@ -131,7 +158,7 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
   await page.getByRole("dialog").getByLabel("Channel name").fill("enclosure");
   await page.getByRole("button", { name: "Create", exact: true }).click();
   // The header switches to the new (empty) channel.
-  await expect(page.getByRole("button", { name: /enclosure/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /enclosure/ })).toBeVisible({ timeout: 15_000 });
 
   await page.reload();
   // Default channel after reload is General; the new channel is listed.
@@ -142,8 +169,12 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
   await page.keyboard.press("Escape");
 
   // --- Visual CAD parameters: edit a value, autosave, survive reload.
-  await page.goto(page.url().replace(/\/engineer.*$/, "/engineer?view=model"));
-  await expect(page.getByText("Parameters")).toBeVisible({ timeout: 60_000 });
+  await gotoSettled(page, page.url().replace(/\/engineer.*$/, "/engineer?view=model"));
+  // Parameters live in the CAD Inspector, collapsed by default.
+  const inspector = page.getByRole("button", { name: /Inspector/ });
+  await expect(inspector).toBeVisible({ timeout: 90_000 });
+  if ((await inspector.getAttribute("aria-expanded")) !== "true") await inspector.click();
+  await expect(page.getByText("Part parameters")).toBeVisible();
   const width = page.locator('label:has-text("width") input[type="number"]');
   await expect(width).toHaveValue("60");
   // Editing the control rewrites the script and autosaves (900ms debounce).
@@ -153,6 +184,9 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
   await width.fill("75");
   await saved;
   await page.reload();
+  const reopened = page.getByRole("button", { name: /Inspector/ });
+  await expect(reopened).toBeVisible({ timeout: 90_000 });
+  if ((await reopened.getAttribute("aria-expanded")) !== "true") await reopened.click();
   await expect(page.locator('label:has-text("width") input[type="number"]')).toHaveValue("75", {
     timeout: 30_000,
   });
@@ -161,13 +195,13 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
 test("sites chatbar creates a Site under the workspace, not a Workspace", async ({ page }) => {
   await signIn(page, "builder@foundry.local");
 
-  await page.goto("/workspaces?manage=1");
+  await gotoSettled(page, "/workspaces?manage=1");
   await page.getByLabel("Workspace name").fill(`E2E Sites ${runId}`);
   await page.getByRole("button", { name: "Create" }).click();
   await page.waitForURL("**/w/e2e-sites-*");
   const workspaceSlug = new URL(page.url()).pathname.split("/")[2]!;
 
-  await page.goto(`/w/${workspaceSlug}/sites`);
+  await gotoSettled(page, `/w/${workspaceSlug}/sites`);
   await page.getByLabel("Describe the site to build").fill("E2E Launch Site");
   await page.getByRole("button", { name: "Build" }).click();
   await page.waitForURL(`**/w/${workspaceSlug}/sites/e2e-launch-site/editor`, {
@@ -178,7 +212,7 @@ test("sites chatbar creates a Site under the workspace, not a Workspace", async 
 });
 
 test("unauthenticated users are redirected to sign-in", async ({ page }) => {
-  await page.goto("/workspaces");
+  await gotoSettled(page, "/workspaces");
   await page.waitForURL("**/auth/sign-in**");
   // Match the heading, not the submit button, which is also labelled "Sign in".
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
