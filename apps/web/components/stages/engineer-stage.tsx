@@ -16,6 +16,7 @@ import {
   FolderGit2,
   Images,
   Lightbulb,
+  Package,
   Plus,
   Rocket,
   ShieldCheck,
@@ -64,6 +65,11 @@ const PcbCanvas = dynamic(
     ssr: false,
     loading: () => <DotMatrixLoader className="absolute inset-0" label="Loading PCB" />,
   },
+);
+
+const SourcingPanel = dynamic(
+  () => import("@/components/engineer/sourcing-panel").then((m) => m.SourcingPanel),
+  { ssr: false, loading: () => <DotMatrixLoader label="Loading sourcing" /> },
 );
 
 const ChecksPanel = dynamic(
@@ -154,6 +160,7 @@ type FixedKind = Exclude<EngineerDocKind, "model" | "schematic">;
 const FIXED: { kind: FixedKind; label: string; icon: typeof Boxes }[] = [
   { kind: "assembly", label: "Assembly", icon: Combine },
   { kind: "pcb", label: "PCB", icon: CircuitBoard },
+  { kind: "sourcing", label: "Sourcing", icon: Package },
   { kind: "checks", label: "Checks", icon: ShieldCheck },
   { kind: "code", label: "Repository", icon: FolderGit2 },
   { kind: "ideate", label: "Ideate", icon: Lightbulb },
@@ -168,6 +175,7 @@ function TabIcon({ kind }: { kind: EngineerDocKind }) {
   if (kind === "assembly") return <Combine className="size-3" strokeWidth={2} />;
   if (kind === "model") return <Boxes className="size-3" strokeWidth={2} />;
   if (kind === "pcb") return <CircuitBoard className="size-3" strokeWidth={2} />;
+  if (kind === "sourcing") return <Package className="size-3" strokeWidth={2} />;
   if (kind === "checks") return <ShieldCheck className="size-3" strokeWidth={2} />;
   if (kind === "code") return <FolderGit2 className="size-3" strokeWidth={2} />;
   if (kind === "ideate") return <Lightbulb className="size-3" strokeWidth={2} />;
@@ -500,6 +508,11 @@ function EngineerDocWorkspace({
             >
               {kind === "pcb" ? (
                 <PcbCanvas projectId={projectId} branchId={branchId} canEdit={canEdit} />
+              ) : null}
+              {kind === "sourcing" ? (
+                <DocumentPane>
+                  <SourcingPanel projectId={projectId} branchId={branchId} canEdit={canEdit} />
+                </DocumentPane>
               ) : null}
               {kind === "checks" ? <ChecksPanel projectId={projectId} branchId={branchId} /> : null}
               {kind === "code" ? (
