@@ -188,6 +188,7 @@ model Project {
   mediaJobs             MediaJob[]
   viewportComments      ViewportComment[]
   productNodes          ProductNode[]
+  graphProposals        GraphProposal[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, folderId])
@@ -1145,4 +1146,59 @@ model ProductEdge {
   @@index([projectId, branchId, fromId])
   @@index([projectId, branchId, toId])
   @@index([projectId, branchId, origin])
+}
+
+/// What kind of write the copilot is proposing. One row per LINK, and one row
+/// per TASK/RISK in a batch — so a person can approve one and reject another
+/// rather than the whole call succeeding or failing together.
+enum GraphProposalKind {
+  LINK
+  TASK
+  RISK
+}
+
+enum GraphProposalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// A graph write the copilot asked for but has not yet taken effect.
+///
+/// Deliberately its own table rather than a "PENDING" GraphOrigin: a pending
+/// LINK has no FK-safe endpoints to point at yet (ProductEdge.fromId/toId are
+/// required, cascade-linked columns — there is no such thing as a half-real
+/// edge), and a pending TASK/RISK has no ProductNode to be pending on, since
+/// for those kinds the node itself is the thing being proposed. Keeping
+/// proposals out of ProductNode/ProductEdge entirely also means every existing
+/// reader (impactFrom, checkGraph, the impact panel) sees only what a human
+/// has actually approved, with no filtering to remember.
+model GraphProposal {
+  id     String              @id @default(cuid())
+  projectId String
+  branchId  String
+  kind   GraphProposalKind
+  status GraphProposalStatus @default(PENDING)
+
+  /// LINK: { from, to, kind, rationale } (refKeys, resolved at propose time).
+  /// TASK: { title, detail, status, dependsOn: string[] } (titles).
+  /// RISK: { title, detail, severity }.
+  payload Json
+
+  /// The copilot acts on a user's behalf; this is that user's id, not "the
+  /// agent" — so an approved proposal's audit trail still says who asked.
+  proposedById String
+  proposedAt   DateTime @default(now())
+
+  decidedById  String?
+  decidedAt    DateTime?
+  decisionNote String?
+
+  /// Set once approved and materialised, so the inbox can link to the result.
+  resultNodeId String?
+  resultEdgeId String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, branchId, status])
 }

@@ -82,6 +82,9 @@ export const DOMAIN_EVENT_TYPES = [
   "ProductEdgeCreated",
   "ProductEdgeDeleted",
   "ImpactAnalysisRun",
+  "ProductGraphProposalCreated",
+  "ProductGraphProposalApproved",
+  "ProductGraphProposalRejected",
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
 
