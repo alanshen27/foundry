@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@foundry/observability": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {
