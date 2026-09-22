@@ -16,6 +16,10 @@ export const CAPABILITIES = [
   "site.edit",
   "site.publish",
   "commerce.manage",
+  // Linking artifacts and marking impacted work reviewed is engineering
+  // judgement, not verification. Reusing verification.run would misstate
+  // intent, which capability-based checks exist to prevent.
+  "graph.edit",
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -35,6 +39,7 @@ const MEMBER_CAPABILITIES: readonly Capability[] = [
   "agent.invoke",
   "agent.apply",
   "site.edit",
+  "graph.edit",
 ];
 
 const GUEST_CAPABILITIES: readonly Capability[] = ["project.read"];

@@ -91,6 +91,9 @@ model WorkspaceMembership {
   grants    CapabilityGrant[]
 
   @@unique([workspaceId, userId])
+  // A composite unique cannot serve a userId-only lookup, and three hot
+  // paths filter exactly that way (workspace-home, sharedWithMe, user.me).
+  @@index([userId])
 }
 
 // Extends a membership beyond its role defaults (PRD 7.2). Grants never
@@ -184,6 +187,7 @@ model Project {
   media                 ProductMedia[]
   mediaJobs             MediaJob[]
   viewportComments      ViewportComment[]
+  productNodes          ProductNode[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, folderId])
@@ -397,22 +401,32 @@ model DesignDoc {
 }
 
 model Component {
-  id            String     @id @default(cuid())
-  projectId     String
-  branchId      String
-  discipline    Discipline @default(ELECTRONICS)
-  refDes        String?
-  name          String
-  manufacturer  String?
-  partNumber    String?
-  quantity      Int        @default(1)
-  unitCostCents Int?
-  sourceUrl     String?
-  imageUrl      String?
-  notes         String?
-  createdById   String
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
+  id              String     @id @default(cuid())
+  projectId       String
+  branchId        String
+  discipline      Discipline @default(ELECTRONICS)
+  refDes          String?
+  name            String
+  manufacturer    String?
+  partNumber      String?
+  quantity        Int        @default(1)
+  unitCostCents   Int?
+  sourceUrl       String?
+  imageUrl        String?
+  notes           String?
+  /// Typical continuous draw in mA at nominal voltage. Null = unknown.
+  currentDrawMa   Float?
+  /// Peak/burst draw in mA, for headroom. Null = fall back to currentDrawMa.
+  peakCurrentMa   Float?
+  /// Nominal operating voltage in volts.
+  nominalVoltageV Float?
+  /// Set on a source (cell / battery / pack); null on loads. This field IS the
+  /// source predicate — no separate boolean that could disagree with it.
+  capacityMah     Float?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -583,6 +597,9 @@ model ChatRun {
 
   @@index([channelId, status, createdAt])
   @@index([status, createdAt])
+  // findActiveAiEditLock / expireStaleProjectRuns filter on this triple, and
+  // the lock query runs inside a pg_advisory_xact_lock on every AI turn.
+  @@index([projectId, branchId, status])
 }
 
 /**
@@ -967,4 +984,149 @@ model MediaJob {
   media   ProductMedia[]
 
   @@index([projectId, status])
+}
+
+// ---------- Product Graph ----------
+//
+// The graph is an INDEX, not the store. A ProductNode addresses data that
+// already exists — a Requirement row, a CAD part inside DesignDoc(MODEL3D),
+// a net computed by buildNets() — through a namespaced `refKey`. The payload
+// stays where it lives today, so the 30 AI tools and 20 routers that write it
+// need no changes and existing projects need no backfill.
+//
+// The one exception is TASK / RISK / DECISION: the schema has nowhere else to
+// put them, so for those kinds the node IS canonical and the payload lives in
+// `data`. The model is a hybrid, deliberately.
+
+enum ProductNodeKind {
+  REQUIREMENT // Requirement row
+  COMPONENT // Component row (a BOM line)
+  CHECK // ValidationCheck row
+  FIRMWARE_FILE // CodeFile row that looks like firmware
+  CIRCUIT_PART // DesignDoc(CIRCUIT).data.parts[]
+  NET // computed by lib/pcb/netlist.buildNets()
+  FOOTPRINT // DesignDoc(PCB).data.boards[].footprints[]
+  MCU_PIN // computed from wires + the firmware simulation
+  CAD_PART // DesignDoc(MODEL3D).data.components[] kind=part
+  CAD_ASSEMBLY // …kind=assembly
+  BRIEF // ProjectBrief row
+  TASK // intrinsic — payload in ProductNode.data
+  RISK // intrinsic
+  DECISION // intrinsic
+}
+
+/// Where a node or edge came from. Answers half of "why does this exist?".
+enum GraphOrigin {
+  DERIVED // produced by lib/graph/derive.ts from existing project data
+  USER // a human authored the node or drew the link
+  AGENT // the copilot, via link_nodes / add_tasks / add_risks
+  IMPORT // arrived with a Wokwi diagram, a CAD import, etc.
+}
+
+/// DIRECTION CONVENTION, and getting this backwards is the likeliest bug in
+/// the whole feature: `from` is the DEPENDENCY, `to` is the DEPENDENT.
+///
+///   "what does changing X affect?"  =>  follow from -> to   (impactFrom)
+///   "why does this exist?"          =>  follow to -> from   (provenanceOf)
+enum ProductEdgeKind {
+  SATISFIES // COMPONENT|CAD_PART|FIRMWARE_FILE -> REQUIREMENT
+  VERIFIED_BY // any -> CHECK
+  IMPLEMENTED_BY // REQUIREMENT -> TASK|FIRMWARE_FILE
+  REALIZED_BY // COMPONENT -> CIRCUIT_PART -> FOOTPRINT
+  CONNECTS // CIRCUIT_PART -> NET, NET -> MCU_PIN
+  DRIVES // MCU_PIN -> FIRMWARE_FILE (the firmware is the dependent)
+  HOUSES // COMPONENT -> CAD_PART
+  CONTAINS // CAD_PART -> CAD_ASSEMBLY
+  POWERS // COMPONENT(source) -> COMPONENT(load)
+  DEPENDS_ON // TASK(prerequisite) -> TASK(dependent)
+  DERIVED_FROM // BRIEF -> REQUIREMENT, REQUIREMENT -> REQUIREMENT
+  MITIGATES // RISK -> any
+}
+
+/// A node in the product graph. See the block comment above for why most of
+/// these are projections rather than records.
+model ProductNode {
+  id        String          @id @default(cuid())
+  projectId String
+  branchId  String
+  kind      ProductNodeKind
+
+  /// Namespaced, stable address — the join key for everything.
+  /// e.g. "requirement:clx…", "cadpart:parts/case.kcl", "net:GND", "pin:uno:13".
+  refKey String
+  /// Set only when refKey addresses a whole row (Requirement / Component /
+  /// ValidationCheck / CodeFile / ProjectBrief). Null for sub-document and
+  /// computed nodes. No FK: the referenced tables are flat by design.
+  refId  String?
+
+  /// Denormalised for display and impact-panel speed. Refreshed on every sync.
+  label String
+  /// Payload for intrinsic nodes (TASK / RISK / DECISION). `{}` for projections.
+  data  Json   @default("{}")
+
+  origin       GraphOrigin @default(DERIVED)
+  /// e.g. "derive:refdes-match", "agent:copilot", "import:wokwi".
+  originDetail String?
+  createdById  String?
+
+  /// Hash of the source content at last sync. A change means the artifact
+  /// itself was revised, which both clears staleness and drives propagation.
+  contentHash String?
+
+  // --- staleness: the recorded result of an impact analysis ---
+  staleAt          DateTime?
+  staleReason      String?
+  /// ProductNode.id of the change that caused this. Not an FK: the origin may
+  /// be deleted while the staleness stays meaningful.
+  staleFromId      String?
+  staleDepth       Int?
+  staleConfidence  Float?
+  /// contentHash at the moment staleness was recorded. Still equal to the
+  /// current contentHash => the artifact was flagged and never revised.
+  staleContentHash String?
+
+  reviewedAt   DateTime?
+  reviewedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project  Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  outgoing ProductEdge[] @relation("EdgeFrom")
+  incoming ProductEdge[] @relation("EdgeTo")
+
+  @@unique([projectId, branchId, refKey])
+  @@index([projectId, branchId, kind])
+  @@index([projectId, branchId, staleAt])
+  @@index([projectId, branchId, origin])
+  @@index([refId])
+}
+
+/// A typed link. `from` is the dependency, `to` is the dependent.
+model ProductEdge {
+  id        String          @id @default(cuid())
+  projectId String
+  branchId  String
+  fromId    String
+  toId      String
+  kind      ProductEdgeKind
+
+  origin      GraphOrigin @default(DERIVED)
+  /// Derivation rule id, e.g. "refdes-match". Null for authored edges.
+  rule        String?
+  /// 1.0 = exact structural link. <1.0 = heuristic. Impact confidence is the
+  /// product along a path, so weak chains decay out of the results.
+  confidence  Float       @default(1)
+  /// Human-readable justification shown in the impact panel.
+  evidence    String?
+  createdById String?
+  createdAt   DateTime    @default(now())
+
+  from ProductNode @relation("EdgeFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to   ProductNode @relation("EdgeTo", fields: [toId], references: [id], onDelete: Cascade)
+
+  @@unique([fromId, toId, kind])
+  @@index([projectId, branchId, fromId])
+  @@index([projectId, branchId, toId])
+  @@index([projectId, branchId, origin])
 }
