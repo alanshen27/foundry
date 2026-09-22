@@ -7,10 +7,13 @@
   "types": "./src/index.ts",
   "scripts": {
     "generate": "prisma generate",
-    "push": "dotenv -e ../../.env -- prisma db push",
-    "migrate": "dotenv -e ../../.env -- prisma migrate dev",
-    "seed": "dotenv -e ../../.env -- tsx src/seed.ts",
-    "typecheck": "tsc --noEmit"
+    "push": "dotenv -e ../../.env.local -e ../../.env -- prisma db push",
+    "migrate": "dotenv -e ../../.env.local -e ../../.env -- prisma migrate dev",
+    "seed": "dotenv -e ../../.env.local -e ../../.env -- tsx src/seed.ts",
+    "typecheck": "tsc --noEmit",
+    "migrate:deploy": "dotenv -e ../../.env.local -e ../../.env -- prisma migrate deploy",
+    "migrate:status": "dotenv -e ../../.env.local -e ../../.env -- prisma migrate status",
+    "migrate:check": "dotenv -e ../../.env.local -e ../../.env -- sh -c 'prisma migrate diff --from-url \"$DIRECT_URL\" --to-schema-datamodel prisma/schema.prisma --exit-code'"
   },
   "dependencies": {
     "@foundry/domain": "workspace:*",
