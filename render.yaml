@@ -65,6 +65,19 @@ envVarGroups:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      # Copilot cost controls. AI_RUNS_PER_HOUR caps turns per user (default
+      # 30); AI_WORKSPACE_DAILY_TOKEN_BUDGET caps tokens per workspace per
+      # rolling 24h (unset = recorded but uncapped). Set a budget before any
+      # public demo link goes out.
+      # Error tracking for web, worker and collab. Unset = logs only.
+      - key: SENTRY_DSN
+        sync: false
+      - key: AI_RUNS_PER_HOUR
+        sync: false
+      - key: AI_WORKSPACE_DAILY_TOKEN_BUDGET
+        sync: false
+      - key: AI_MAX_OUTPUT_TOKENS
+        sync: false
       - key: ZOO_API_TOKEN
         sync: false
       - key: V0_API_KEY
