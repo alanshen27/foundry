@@ -17,6 +17,9 @@ import { decode as msgpackDecode } from "@msgpack/msgpack";
 import "./ws-masking";
 import WebSocket from "ws";
 import type { CadResult } from "./port";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("zookeeper");
 
 /** SDK path (`/ws/ml/copilot`). Docs also mention `/ws/ml/zookeeper` — that 404s today. */
 const DEFAULT_WS_URL = "wss://api.zoo.dev/ws/ml/copilot";
@@ -317,7 +320,7 @@ export function decodeFrames(data: unknown, isBinary: boolean): ServerMessage[] 
       // A replay entry we can't read shouldn't sink the whole recovery.
     }
   }
-  console.log(`[zookeeper] replayed ${frames.length} messages`);
+  log.debug("replayed messages", { count: frames.length });
   return frames;
 }
 
@@ -333,7 +336,7 @@ export function applyMessage(
     else if (block && typeof block === "object" && "conversation_id" in block) {
       state.conversationId = String((block as { conversation_id?: unknown }).conversation_id ?? "");
     }
-    if (state.conversationId) console.log(`[zookeeper] conversation=${state.conversationId}`);
+    if (state.conversationId) log.info("conversation", { conversationId: state.conversationId });
     return null;
   }
 
@@ -379,7 +382,7 @@ export function applyMessage(
     if (files) {
       state.files = files;
       const names = Object.keys(files);
-      console.log(`[zookeeper] got files=${names.join(",")}`);
+      log.info("received files", { files: names });
       onProgress?.(`Received ${names.length} KCL file(s): ${names.join(", ")}`);
     }
     return null;
@@ -494,7 +497,7 @@ function runAttempt(args: {
       try {
         frames = decodeFrames(data, isBinary);
       } catch {
-        console.warn("[zookeeper] ignored an invalid service message");
+        log.warn("ignored an invalid service message");
         return;
       }
       for (const frame of frames) {
@@ -552,11 +555,10 @@ export async function zookeeperPrompt(
     ...(opts.forcedTools?.length ? { forced_tools: opts.forcedTools } : {}),
   };
 
-  console.log(
-    `[zookeeper] prompt files=${Object.keys(opts.currentFiles).length} tools=${
-      opts.forcedTools?.join(",") ?? "(auto)"
-    }`,
-  );
+  log.info("prompt", {
+    files: Object.keys(opts.currentFiles).length,
+    tools: opts.forcedTools ?? "(auto)",
+  });
 
   const state: TurnState = { conversationId: "", files: null, narration: null };
   let drop = "Zoo Zookeeper closed without outputs";
@@ -568,9 +570,12 @@ export async function zookeeperPrompt(
 
     const resume = attempt > 0;
     if (resume) {
-      console.warn(
-        `[zookeeper] ${drop} — resuming conversation=${state.conversationId} (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
-      );
+      log.warn("connection dropped; resuming conversation", {
+        reason: drop,
+        conversationId: state.conversationId,
+        attempt: attempt + 1,
+        maxAttempts: MAX_ATTEMPTS,
+      });
       opts.onProgress?.(
         `Zoo dropped the connection — resuming the same turn (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
       );
@@ -590,13 +595,12 @@ export async function zookeeperPrompt(
 
     if (outcome.kind === "settled") {
       if (outcome.result.ok) {
-        console.log(
-          `[zookeeper] ok conversation=${outcome.result.data.conversationId} files=${
-            Object.keys(outcome.result.data.files).length
-          }`,
-        );
+        log.info("turn complete", {
+          conversationId: outcome.result.data.conversationId,
+          files: Object.keys(outcome.result.data.files).length,
+        });
       } else {
-        console.warn("[zookeeper] request failed");
+        log.warn("request failed", { reason: outcome.result.error });
       }
       return outcome.result;
     }
@@ -606,6 +610,6 @@ export async function zookeeperPrompt(
     if (!state.conversationId) break;
   }
 
-  console.warn("[zookeeper] request failed");
+  log.warn("request failed after all attempts", { reason: drop, attempts: MAX_ATTEMPTS });
   return { ok: false, error: drop };
 }

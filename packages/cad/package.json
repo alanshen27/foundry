@@ -14,6 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@foundry/observability": "workspace:*",
     "@kittycad/lib": "^4.3.12",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@msgpack/msgpack": "^3.1.3",
