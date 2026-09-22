@@ -10,6 +10,7 @@ import {
   verifyPassword,
 } from "@foundry/auth";
 import { upsertSupabaseUser } from "@/server/session";
+import { clientIp, policies, rateLimitAll, tooManyRequests } from "@/server/rate-limit";
 
 const bodySchema = z.object({ email: z.string().email(), password: z.string().min(1) });
 
@@ -20,6 +21,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
   const { email, password } = parsed.data;
+
+  // Checked before the password is: a refused attempt must not reveal whether
+  // it would have succeeded, and must not cost a scrypt verification.
+  const limits = policies();
+  const limited = await rateLimitAll([
+    { policy: limits.signInIp, identifier: clientIp(request) },
+    { policy: limits.signInEmail, identifier: email.trim().toLowerCase() },
+  ]);
+  if (!limited.allowed) {
+    return tooManyRequests(limited, "Too many sign-in attempts. Wait a few minutes and try again.");
+  }
 
   if (env.AUTH_MODE === "local") {
     const user = await prisma.user.findUnique({ where: { email } });
