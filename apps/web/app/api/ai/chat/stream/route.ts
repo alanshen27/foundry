@@ -5,6 +5,9 @@ import { getCurrentUser } from "@/server/session";
 import { requireProjectCapability } from "@/server/access";
 import { createRunEventStream } from "@/server/chat-run/stream";
 import { expireStaleChatRuns } from "@/server/chat-run/stale";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("api:chat-stream");
 
 const querySchema = z.object({
   projectId: z.string(),
@@ -55,7 +58,7 @@ export async function GET(request: Request) {
       },
     });
   } catch (err) {
-    console.error("GET /api/ai/chat/stream failed:", err);
+    log.error("stream reconnect failed", { err });
     return NextResponse.json(
       {
         error:

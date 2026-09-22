@@ -11,6 +11,9 @@ import { recordAudit } from "../audit";
 import { getMediaGenerator } from "../media";
 import { getObjectStorage } from "../storage";
 import { loadProductContext, toMediaPromptContext } from "../product-context";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("media-worker");
 
 /** A RUNNING job older than this is treated as abandoned by a dead worker. */
 export const MEDIA_JOB_STALE_MS = 20 * 60_000;
@@ -275,9 +278,7 @@ export async function reclaimMediaJobs(
     select: { id: true },
   });
   for (const job of pending) {
-    await enqueue(job.id).catch((err) =>
-      console.error(`[media-worker] re-enqueue ${job.id} failed`, err),
-    );
+    await enqueue(job.id).catch((err) => log.error("re-enqueue failed", { jobId: job.id, err }));
   }
 
   const stale = await prisma.mediaJob.updateMany({

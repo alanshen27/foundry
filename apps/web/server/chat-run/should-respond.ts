@@ -4,6 +4,9 @@ import { z } from "zod";
 import { getServerEnv } from "@foundry/config";
 import { mentionsAi } from "@/lib/copilot/mentions";
 import type { UIMessage } from "ai";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("chat-triage");
 
 const triageSchema = z.object({
   suggestPing: z
@@ -99,7 +102,7 @@ ${trimmed.slice(0, 2000)}
     });
     return object.suggestPing;
   } catch (error) {
-    console.warn("AI ping triage failed; using heuristic:", error);
+    log.warn("ping triage failed; using heuristic", { err: error });
     return heuristicSuggestPing(trimmed);
   }
 }
