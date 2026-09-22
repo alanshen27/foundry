@@ -1,5 +1,7 @@
 "use client";
 
+import "@/lib/client-observability";
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
 import { createTRPCReact } from "@trpc/react-query";
