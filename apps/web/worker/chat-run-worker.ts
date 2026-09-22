@@ -12,7 +12,13 @@ import { config } from "dotenv";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-config({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../../../.env") });
+// .env.local first: dotenv never overrides a variable that is already set, so
+// this order lets local overrides win. Loading only .env meant a locally run
+// worker used whatever .env held — which was the production database and the
+// production job queue.
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+config({ path: resolve(root, ".env.local") });
+config({ path: resolve(root, ".env") });
 
 import { prisma } from "@foundry/db";
 import { getServerEnv } from "@foundry/config";
@@ -21,6 +27,29 @@ import { Worker, type Job } from "bullmq";
 import { getRedisConnection, CHAT_RUN_QUEUE_NAME } from "../server/chat-run/queue";
 import { executeMediaJob, reclaimMediaJobs } from "../server/media-jobs/execute";
 import { enqueueMediaJob, MEDIA_JOB_QUEUE_NAME } from "../server/media-jobs/queue";
+import { createLogger, getErrorReporter } from "@foundry/observability";
+import { initObservability } from "@foundry/observability/sentry";
+
+const observability = initObservability({
+  service: "foundry-chat-worker",
+  sentryDsn: process.env.SENTRY_DSN?.trim() || undefined,
+  environment: process.env.RENDER ? "production" : (process.env.NODE_ENV ?? "development"),
+  release: process.env.RENDER_GIT_COMMIT,
+});
+const log = createLogger("chat-worker");
+const mediaLog = createLogger("media-worker");
+
+// Record, flush, then exit exactly as Node would have. Installing a handler
+// suppresses Node's own crash, and a worker left running after an uncaught
+// exception may hold a half-finished run; the platform restarting it cleanly
+// is the safer outcome. What changes is that the cause is now recorded.
+async function die(kind: string, err: unknown) {
+  log.error(kind, { err });
+  await getErrorReporter().flush?.(2_000);
+  process.exit(1);
+}
+process.on("unhandledRejection", (reason) => void die("unhandled rejection", reason));
+process.on("uncaughtException", (err) => void die("uncaught exception", err));
 
 function isPrismaDisconnect(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -33,7 +62,7 @@ function isPrismaDisconnect(err: unknown): boolean {
 }
 
 async function reconnectPrisma(): Promise<void> {
-  console.warn("[chat-worker] prisma connection lost — reconnecting…");
+  log.warn("prisma connection lost, reconnecting");
   try {
     await prisma.$disconnect();
   } catch {
@@ -41,7 +70,7 @@ async function reconnectPrisma(): Promise<void> {
   }
   await new Promise((r) => setTimeout(r, 500));
   await prisma.$connect();
-  console.log("[chat-worker] prisma reconnected");
+  log.info("prisma reconnected");
 }
 
 function assertProdRedis(redisUrl: string) {
@@ -49,8 +78,8 @@ function assertProdRedis(redisUrl: string) {
     redisUrl.includes("localhost") || redisUrl.includes("127.0.0.1") || redisUrl.includes("::1");
   if (process.env.RENDER || process.env.NODE_ENV === "production") {
     if (isLocal) {
-      console.error(
-        "[chat-worker] REDIS_URL points at localhost. On Render set foundry-shared REDIS_URL to your Upstash rediss:// URL.",
+      log.error(
+        "REDIS_URL points at localhost. On Render set foundry-shared REDIS_URL to your Upstash rediss:// URL.",
       );
       process.exit(1);
     }
@@ -61,14 +90,13 @@ const env = getServerEnv();
 assertProdRedis(env.REDIS_URL);
 
 if (!env.OPENAI_API_KEY) {
-  console.warn(
-    "[chat-worker] OPENAI_API_KEY is unset — runs will error until it is set in foundry-shared",
-  );
+  log.warn("OPENAI_API_KEY is unset; runs will error until it is set in foundry-shared");
 }
 
 if (env.NEXT_PUBLIC_REALTIME_MODE !== "supabase") {
-  console.warn(
-    `[chat-worker] NEXT_PUBLIC_REALTIME_MODE=${env.NEXT_PUBLIC_REALTIME_MODE} — set to "supabase" so run broadcasts reach the web UI (SSE still works via DB)`,
+  log.warn(
+    'realtime mode is not "supabase", so run broadcasts will not reach the web UI (SSE still works via DB)',
+    { realtimeMode: env.NEXT_PUBLIC_REALTIME_MODE },
   );
 }
 
@@ -82,28 +110,31 @@ const redisHost = (() => {
 
 const connection = getRedisConnection();
 connection.on("error", (err) => {
-  console.error("[chat-worker] redis error", err.message || err);
+  log.warn("redis error", { host: redisHost, err });
 });
 connection.on("connect", () => {
-  console.log(`[chat-worker] redis connected host=${redisHost}`);
+  log.info("redis connected", { host: redisHost });
 });
 
-console.log(
-  `[chat-worker] starting BullMQ worker… redis=${redisHost} realtime=${env.NEXT_PUBLIC_REALTIME_MODE}`,
-);
+log.info("starting", {
+  redis: redisHost,
+  realtime: env.NEXT_PUBLIC_REALTIME_MODE,
+  errorReporting: observability.sentry ? "sentry" : "logs only",
+});
 
 const worker = new Worker(
   CHAT_RUN_QUEUE_NAME,
   async (job: Job<{ runId: string }>) => {
     const { runId } = job.data;
-    console.log(`[chat-worker] run ${runId} (job ${job.id})`);
+    const runLog = log.child({ runId, jobId: job.id });
+    runLog.info("run started");
     try {
       await executeChatRun(runId);
-      console.log(`[chat-worker] run ${runId} finished`);
+      runLog.info("run finished");
     } catch (err) {
-      console.error(`[chat-worker] run ${runId} failed`, err);
+      runLog.error("run failed", { err });
       if (isPrismaDisconnect(err)) {
-        await reconnectPrisma().catch((e) => console.error("[chat-worker] reconnect failed", e));
+        await reconnectPrisma().catch((e) => runLog.error("prisma reconnect failed", { err: e }));
         throw err; // Let BullMQ retry
       }
       throw err;
@@ -123,7 +154,7 @@ const worker = new Worker(
 );
 
 worker.on("ready", () => {
-  console.log(`[chat-worker] ready on queue "${CHAT_RUN_QUEUE_NAME}"`);
+  log.info("ready", { queue: CHAT_RUN_QUEUE_NAME });
 });
 
 /**
@@ -134,14 +165,14 @@ const mediaWorker = new Worker(
   MEDIA_JOB_QUEUE_NAME,
   async (job: Job<{ jobId: string }>) => {
     const { jobId } = job.data;
-    console.log(`[media-worker] job ${jobId}`);
+    mediaLog.info("job started", { jobId });
     const result = await executeMediaJob(jobId);
     if (result.status === "failed") {
       // Recorded on the MediaJob row for the UI; do not retry a billed call.
-      console.error(`[media-worker] job ${jobId} failed: ${result.error}`);
+      mediaLog.error("job failed", { jobId, reason: result.error });
       return;
     }
-    console.log(`[media-worker] job ${jobId} ${result.status}`);
+    mediaLog.info("job finished", { jobId, status: result.status });
   },
   {
     connection,
@@ -153,30 +184,31 @@ const mediaWorker = new Worker(
 );
 
 mediaWorker.on("ready", () => {
-  console.log(`[media-worker] ready on queue "${MEDIA_JOB_QUEUE_NAME}"`);
+  mediaLog.info("ready", { queue: MEDIA_JOB_QUEUE_NAME });
 });
 
 mediaWorker.on("error", (err) => {
-  console.error("[media-worker] queue error", err);
+  mediaLog.error("queue error", { err });
 });
 
 const mediaReclaimTimer = setInterval(() => {
   void reclaimMediaJobs(enqueueMediaJob)
     .then(({ requeued, failed }) => {
       if (requeued || failed) {
-        console.warn(`[media-worker] reclaimed ${requeued} pending, failed ${failed} stale`);
+        mediaLog.warn("reclaimed jobs", { requeued, failedStale: failed });
       }
     })
-    .catch((err) => console.error("[media-worker] reclaim loop failed", err));
+    .catch((err) => mediaLog.error("reclaim loop failed", { err }));
 }, 30_000);
 mediaReclaimTimer.unref?.();
 
 worker.on("error", (err) => {
-  console.error("[chat-worker] queue error", err);
+  log.error("queue error", { err });
 });
 
 worker.on("failed", (job, err) => {
-  console.error(`[chat-worker] job ${job?.id} failed`, err.message || err);
+  // Already reported by the processor; this is the queue's own bookkeeping.
+  log.warn("job failed", { jobId: job?.id, err });
 });
 
 /**
@@ -227,34 +259,32 @@ async function reclaimOrphanedRuns() {
         // completed/failed leftover blocks the same jobId — remove then re-add.
         await job.remove().catch(() => undefined);
       }
-      console.warn(`[chat-worker] reclaiming ${run.status} run ${run.id}`);
+      log.warn("reclaiming orphaned run", { runId: run.id, status: run.status });
       await enqueueChatRun(run.id);
     } catch (err) {
-      console.error(`[chat-worker] reclaim ${run.id} failed`, err);
+      log.error("reclaim failed", { runId: run.id, err });
     }
   }
 }
 
 const reclaimTimer = setInterval(() => {
-  void reclaimOrphanedRuns().catch((err) =>
-    console.error("[chat-worker] reclaim loop failed", err),
-  );
+  void reclaimOrphanedRuns().catch((err) => log.error("reclaim loop failed", { err }));
 }, 5_000);
 reclaimTimer.unref?.();
 
 async function shutdown(signal: string) {
-  console.log(`[chat-worker] ${signal} — closing worker`);
+  log.info("shutting down", { signal });
   clearInterval(reclaimTimer);
   clearInterval(mediaReclaimTimer);
   try {
     await worker.close();
   } catch (err) {
-    console.error("[chat-worker] close failed", err);
+    log.error("close failed", { err });
   }
   try {
     await mediaWorker.close();
   } catch (err) {
-    console.error("[media-worker] close failed", err);
+    mediaLog.error("close failed", { err });
   }
   try {
     await connection.quit();
@@ -266,6 +296,9 @@ async function shutdown(signal: string) {
   } catch {
     // ignore
   }
+  // Reports are sent asynchronously; exiting straight away drops the last ones,
+  // which are usually the ones explaining why the worker is going down.
+  await getErrorReporter().flush?.(2_000);
   process.exit(0);
 }
 
