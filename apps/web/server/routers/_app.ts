@@ -18,6 +18,7 @@ import { siteRouter } from "./site";
 import { commerceRouter } from "./commerce";
 import { mediaRouter } from "./media";
 import { userRouter } from "./user";
+import { graphRouter } from "./graph";
 
 export const appRouter = router({
   workspace: workspaceRouter,
@@ -39,6 +40,7 @@ export const appRouter = router({
   commerce: commerceRouter,
   media: mediaRouter,
   user: userRouter,
+  graph: graphRouter,
 });
 
 export type AppRouter = typeof appRouter;
