@@ -13,6 +13,7 @@
     "@foundry/collaboration": "workspace:*",
     "@foundry/config": "workspace:*",
     "@foundry/db": "workspace:*",
+    "@foundry/observability": "workspace:*",
     "@hocuspocus/server": "^2.15.2"
   },
   "devDependencies": {

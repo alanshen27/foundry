@@ -19,6 +19,16 @@ import {
 } from "@foundry/collaboration";
 import { getServerEnv } from "@foundry/config";
 import { prisma } from "@foundry/db";
+import { createLogger } from "@foundry/observability";
+import { initObservability } from "@foundry/observability/sentry";
+
+const observability = initObservability({
+  service: "foundry-collab",
+  sentryDsn: process.env.SENTRY_DSN?.trim() || undefined,
+  environment: process.env.RENDER ? "production" : (process.env.NODE_ENV ?? "development"),
+  release: process.env.RENDER_GIT_COMMIT,
+});
+const log = createLogger("collab");
 
 type CollabContext = {
   claims: CollabClaims;
@@ -92,7 +102,7 @@ const server = Server.configure({
     const claims = (context as CollabContext | undefined)?.claims;
     const content = document.getText(MONACO_YTEXT_KEY).toString();
     if (content.length > 400_000) {
-      console.warn(`[collab] refusing to store oversized doc ${documentName}`);
+      log.warn("refusing to store oversized doc", { documentName, chars: content.length });
       return;
     }
 
@@ -107,4 +117,7 @@ const server = Server.configure({
 });
 
 await server.listen();
-console.log(`[collab] Hocuspocus listening on ws://localhost:${port}`);
+log.info("listening", {
+  url: `ws://localhost:${port}`,
+  errorReporting: observability.sentry ? "sentry" : "logs only",
+});
