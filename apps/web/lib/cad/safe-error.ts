@@ -32,6 +32,10 @@ const BUCKETS: { keywords: string[]; message: string }[] = [
       "api token",
       "api_token",
       "bearer ",
+      // The viewport's own auth failure (AUTH_TOKEN_INVALID_MSG in
+      // cad-viewport.tsx). Without this it fell through to the generic
+      // "could not start" message, hiding that the token was the problem.
+      "authentication token",
     ],
     message:
       "The CAD service could not authenticate. Ask a workspace administrator to check the CAD connection.",

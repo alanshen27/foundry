@@ -40,4 +40,12 @@ describe("safeCadError", () => {
       "The CAD workspace could not start. Try again or contact a workspace administrator.",
     );
   });
+  it("recognises the viewport's own rejected-token failure as an auth problem", () => {
+    // Regression: this exact message used to fall through to "could not start".
+    expect(
+      safeCadError(new Error("The CAD service rejected its authentication token."), "connection"),
+    ).toBe(
+      "The CAD service could not authenticate. Ask a workspace administrator to check the CAD connection.",
+    );
+  });
 });
