@@ -10,6 +10,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
 import { FitCheckPanel } from "@/components/verify/fit-check-panel";
 import { trpc } from "@/lib/trpc";
+import { StaleBadge, useStaleNodes } from "@/components/graph/stale-badge";
 import { selectClass } from "@/lib/format";
 
 const CATEGORIES = ["VISUAL", "ELECTRICAL", "MECHANICAL", "SOFTWARE", "CROSS_DOMAIN"] as const;
@@ -36,6 +37,7 @@ type Props = {
 export function VerifyStage({ projectId, branchId, canRun, canApprove, verifyStatus }: Props) {
   const router = useRouter();
   const list = trpc.verify.listChecks.useQuery({ projectId, branchId });
+  const stale = useStaleNodes(projectId, branchId);
   const utils = trpc.useUtils();
   const invalidate = () => {
     router.refresh();
@@ -239,9 +241,14 @@ export function VerifyStage({ projectId, branchId, canRun, canApprove, verifySta
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p
-                        className={c.waived ? "font-medium line-through opacity-70" : "font-medium"}
+                        className={
+                          c.waived
+                            ? "flex flex-wrap items-center gap-1.5 font-medium line-through opacity-70"
+                            : "flex flex-wrap items-center gap-1.5 font-medium"
+                        }
                       >
                         {c.title}
+                        <StaleBadge node={stale.byRefKey.get(`check:${c.id}`)} />
                       </p>
                       {c.detail ? (
                         <p className="text-muted-foreground text-sm">{c.detail}</p>
