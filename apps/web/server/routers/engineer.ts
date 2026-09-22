@@ -5,7 +5,7 @@ import type { Capability } from "@foundry/domain";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";
-import { ensureStageStarted, markDownstreamStale } from "../stage-state";
+import { ensureStageStarted, touchProject } from "../stage-state";
 
 const discipline = z.enum(["ELECTRONICS", "MECHANICAL", "SOFTWARE", "DESIGN"]);
 
@@ -75,11 +75,11 @@ export const engineerRouter = router({
         actorId: ctx.user.id,
         payload: { componentId: component.id, name: component.name },
       });
-      await markDownstreamStale({
+      await touchProject({
         workspaceId: project.workspaceId,
         projectId,
         branchId,
-        changedStage: "ENGINEER",
+        stage: "ENGINEER",
         actorId: ctx.user.id,
       });
       return component;
@@ -121,11 +121,11 @@ export const engineerRouter = router({
         actorId: ctx.user.id,
         payload: { componentId: id },
       });
-      await markDownstreamStale({
+      await touchProject({
         workspaceId: project.workspaceId,
         projectId: existing.projectId,
         branchId: existing.branchId,
-        changedStage: "ENGINEER",
+        stage: "ENGINEER",
         actorId: ctx.user.id,
       });
       return component;
@@ -150,11 +150,11 @@ export const engineerRouter = router({
         actorId: ctx.user.id,
         payload: { componentId: input.id },
       });
-      await markDownstreamStale({
+      await touchProject({
         workspaceId: project.workspaceId,
         projectId: existing.projectId,
         branchId: existing.branchId,
-        changedStage: "ENGINEER",
+        stage: "ENGINEER",
         actorId: ctx.user.id,
       });
       return { id: input.id };
