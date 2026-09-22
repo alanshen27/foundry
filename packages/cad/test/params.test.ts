@@ -44,6 +44,32 @@ describe("parseCadParams", () => {
   });
 });
 
+describe("parseCadParams with a Zoo file header", () => {
+  it("reads the parameters that follow an @settings annotation", () => {
+    const script = [
+      "// Macro Keyboard",
+      "",
+      "@settings(defaultLengthUnit = mm, kclVersion = 1.0)",
+      "",
+      "keyPitch = 19.05",
+      "caseWidth = 104",
+      "",
+      "shell = startSketchOn(XY)",
+    ].join("\n");
+    expect(parseCadParams(script).map((p) => [p.name, p.value])).toEqual([
+      ["keyPitch", 19.05],
+      ["caseWidth", 104],
+    ]);
+  });
+
+  it("still edits the right literal after the annotation", () => {
+    const script = "@settings(defaultLengthUnit = mm)\nwidth = 60\nshell = startSketchOn(XY)\n";
+    expect(setCadParam(script, "width", 64)).toBe(
+      "@settings(defaultLengthUnit = mm)\nwidth = 64\nshell = startSketchOn(XY)\n",
+    );
+  });
+});
+
 describe("setCadParam", () => {
   it("rewrites a numeric value in place", () => {
     const next = setCadParam(SCRIPT, "width", 75);
