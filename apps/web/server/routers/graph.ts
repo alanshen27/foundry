@@ -229,6 +229,301 @@ export const graphRouter = router({
     }),
 
   /**
+   * Graph writes the copilot has proposed but a human has not yet acted on.
+   *
+   * "Copilots draft and check, but ... stay behind explicit human approval"
+   * is the platform's own claim; this is what makes it true for the graph.
+   * `link_nodes`, `add_tasks` and `add_risks` (server/ai/graph-tools.ts) write
+   * a GraphProposal instead of a ProductNode/ProductEdge directly, and only
+   * `approveProposal` below ever materialises one.
+   */
+  listProposals: protectedProcedure
+    .input(scope.extend({ status: z.enum(["PENDING", "APPROVED", "REJECTED"]).optional() }))
+    .query(async ({ ctx, input }) => {
+      await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
+      const proposals = await prisma.graphProposal.findMany({
+        where: {
+          projectId: input.projectId,
+          branchId: input.branchId,
+          status: input.status,
+        },
+        orderBy: { proposedAt: "desc" },
+      });
+      const userIds = [...new Set(proposals.map((p) => p.proposedById))];
+      const users = userIds.length
+        ? await prisma.user.findMany({
+            where: { id: { in: userIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+      const nameById = new Map(users.map((u) => [u.id, u.name]));
+      return proposals.map((p) => ({ ...p, proposedByName: nameById.get(p.proposedById) ?? null }));
+    }),
+
+  approveProposal: protectedProcedure
+    .input(scope.extend({ proposalId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { project } = await requireProjectCapability(
+        ctx.user.id,
+        input.projectId,
+        "graph.edit",
+      );
+      const proposal = await prisma.graphProposal.findUnique({
+        where: { id: input.proposalId },
+      });
+      if (
+        !proposal ||
+        proposal.projectId !== input.projectId ||
+        proposal.branchId !== input.branchId
+      ) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+      }
+      // Claim it atomically: two reviewers clicking Approve at once must not
+      // both materialise the same task. Only the request that flips PENDING
+      // wins; the status is corrected below if the approval turns into a
+      // rejection.
+      const claimed = await prisma.graphProposal.updateMany({
+        where: { id: proposal.id, status: "PENDING" },
+        data: { status: "APPROVED", decidedById: ctx.user.id, decidedAt: new Date() },
+      });
+      if (claimed.count === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Proposal already decided" });
+      }
+
+      const decide = (
+        patch: Partial<{
+          status: "REJECTED";
+          decisionNote: string;
+          resultNodeId: string;
+          resultEdgeId: string;
+        }>,
+      ) => prisma.graphProposal.update({ where: { id: proposal.id }, data: patch });
+
+      if (proposal.kind === "LINK") {
+        const { from, to, kind, rationale } = proposal.payload as {
+          from: string;
+          to: string;
+          kind: (typeof PRODUCT_EDGE_KINDS)[number];
+          rationale: string;
+        };
+        const [fromNode, toNode] = await Promise.all([
+          prisma.productNode.findUnique({
+            where: {
+              projectId_branchId_refKey: {
+                projectId: input.projectId,
+                branchId: input.branchId,
+                refKey: from,
+              },
+            },
+          }),
+          prisma.productNode.findUnique({
+            where: {
+              projectId_branchId_refKey: {
+                projectId: input.projectId,
+                branchId: input.branchId,
+                refKey: to,
+              },
+            },
+          }),
+        ]);
+        // The graph moved on since this was proposed — the honest outcome is
+        // an automatic rejection with a reason, never a half-real edge.
+        if (!fromNode || !toNode) {
+          await decide({
+            status: "REJECTED",
+            decisionNote: "An endpoint no longer exists in the graph.",
+          });
+          await recordAudit({
+            type: "ProductGraphProposalRejected",
+            workspaceId: project.workspaceId,
+            projectId: input.projectId,
+            branchId: input.branchId,
+            actorId: ctx.user.id,
+            payload: { proposalId: proposal.id, reason: "endpoint-missing" },
+          });
+          return {
+            decided: "REJECTED" as const,
+            reason: "An endpoint no longer exists in the graph.",
+          };
+        }
+
+        const where = { fromId_toId_kind: { fromId: fromNode.id, toId: toNode.id, kind } };
+        const existing = await prisma.productEdge.findUnique({ where, select: { origin: true } });
+        const edge = await prisma.productEdge.upsert({
+          where,
+          create: {
+            projectId: input.projectId,
+            branchId: input.branchId,
+            fromId: fromNode.id,
+            toId: toNode.id,
+            kind,
+            origin: "AGENT",
+            confidence: 1,
+            evidence: rationale,
+            createdById: proposal.proposedById,
+          },
+          // A person already drew this link: their judgement stands. A derived
+          // guess, though, is promoted so the next resync stops deleting it.
+          update:
+            existing?.origin === "USER"
+              ? {}
+              : { origin: "AGENT", confidence: 1, evidence: rationale },
+        });
+        await decide({ resultEdgeId: edge.id });
+        await recordAudit({
+          type: "ProductGraphProposalApproved",
+          workspaceId: project.workspaceId,
+          projectId: input.projectId,
+          branchId: input.branchId,
+          actorId: ctx.user.id,
+          payload: { proposalId: proposal.id, kind: "LINK", from, to, edgeKind: kind },
+        });
+        return { decided: "APPROVED" as const, edgeId: edge.id };
+      }
+
+      // TASK / RISK: the node itself is what was proposed — nothing to
+      // re-validate against, since there is no prior state it could conflict
+      // with. Approving just means "yes, add this to the graph."
+      const nodeKind = proposal.kind; // "TASK" | "RISK"
+      const payload = proposal.payload as {
+        title: string;
+        detail?: string | null;
+        status?: "todo" | "doing" | "done";
+        severity?: "low" | "medium" | "high";
+        dependsOn?: string[];
+      };
+      const refKey = `${nodeKind.toLowerCase()}:${crypto.randomUUID()}`;
+      const node = await prisma.productNode.create({
+        data: {
+          projectId: input.projectId,
+          branchId: input.branchId,
+          kind: nodeKind,
+          refKey,
+          label: payload.title,
+          data:
+            nodeKind === "TASK"
+              ? { status: payload.status ?? "todo", detail: payload.detail ?? null }
+              : { severity: payload.severity ?? "medium", detail: payload.detail ?? null },
+          origin: "AGENT",
+          originDetail: nodeKind === "TASK" ? "agent:add_tasks" : "agent:add_risks",
+          createdById: proposal.proposedById,
+        },
+      });
+
+      // Wire DEPENDS_ON in both directions against tasks already in the graph,
+      // matched by title: this task's own prerequisites, and earlier-approved
+      // tasks that were waiting on this one. Approval order therefore never
+      // loses a dependency.
+      let dependencies = 0;
+      if (nodeKind === "TASK") {
+        const [existingTasks, approvedTaskProposals] = await Promise.all([
+          prisma.productNode.findMany({
+            where: { projectId: input.projectId, branchId: input.branchId, kind: "TASK" },
+            select: { id: true, label: true },
+          }),
+          prisma.graphProposal.findMany({
+            where: {
+              projectId: input.projectId,
+              branchId: input.branchId,
+              kind: "TASK",
+              status: "APPROVED",
+              resultNodeId: { not: null },
+            },
+            select: { payload: true, resultNodeId: true },
+          }),
+        ]);
+        const norm = (title: string) => title.trim().toLowerCase();
+        const byTitle = new Map(existingTasks.map((t) => [norm(t.label), t.id]));
+        const pairs: { fromId: string; toId: string; waiting: string; on: string }[] = [];
+        for (const prerequisite of payload.dependsOn ?? []) {
+          const fromId = byTitle.get(norm(prerequisite));
+          if (fromId && fromId !== node.id) {
+            pairs.push({ fromId, toId: node.id, waiting: payload.title, on: prerequisite });
+          }
+        }
+        for (const p of approvedTaskProposals) {
+          const earlier = p.payload as { title?: string; dependsOn?: string[] };
+          if (p.resultNodeId && earlier.dependsOn?.some((d) => norm(d) === norm(payload.title))) {
+            pairs.push({
+              fromId: node.id,
+              toId: p.resultNodeId,
+              waiting: earlier.title ?? "a task",
+              on: payload.title,
+            });
+          }
+        }
+        for (const { fromId, toId, waiting, on } of pairs) {
+          await prisma.productEdge.upsert({
+            where: { fromId_toId_kind: { fromId, toId, kind: "DEPENDS_ON" } },
+            create: {
+              projectId: input.projectId,
+              branchId: input.branchId,
+              fromId,
+              toId,
+              kind: "DEPENDS_ON",
+              origin: "AGENT",
+              confidence: 1,
+              evidence: `${waiting} waits on ${on}`,
+              createdById: proposal.proposedById,
+            },
+            update: {},
+          });
+          dependencies++;
+        }
+      }
+
+      await decide({ resultNodeId: node.id });
+      await recordAudit({
+        type: "ProductGraphProposalApproved",
+        workspaceId: project.workspaceId,
+        projectId: input.projectId,
+        branchId: input.branchId,
+        actorId: ctx.user.id,
+        payload: { proposalId: proposal.id, kind: nodeKind, title: payload.title, dependencies },
+      });
+      return { decided: "APPROVED" as const, nodeId: node.id };
+    }),
+
+  rejectProposal: protectedProcedure
+    .input(scope.extend({ proposalId: z.string(), rationale: z.string().trim().min(1).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const { project } = await requireProjectCapability(
+        ctx.user.id,
+        input.projectId,
+        "graph.edit",
+      );
+      const proposal = await prisma.graphProposal.findUnique({ where: { id: input.proposalId } });
+      if (
+        !proposal ||
+        proposal.projectId !== input.projectId ||
+        proposal.branchId !== input.branchId
+      ) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+      }
+      const claimed = await prisma.graphProposal.updateMany({
+        where: { id: proposal.id, status: "PENDING" },
+        data: {
+          status: "REJECTED",
+          decidedById: ctx.user.id,
+          decidedAt: new Date(),
+          decisionNote: input.rationale,
+        },
+      });
+      if (claimed.count === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Proposal already decided" });
+      }
+      await recordAudit({
+        type: "ProductGraphProposalRejected",
+        workspaceId: project.workspaceId,
+        projectId: input.projectId,
+        branchId: input.branchId,
+        actorId: ctx.user.id,
+        payload: { proposalId: proposal.id, rationale: input.rationale },
+      });
+      return { ok: true };
+    }),
+
+  /**
    * Tasks and risks, which are the one place the graph is the record rather
    * than an index — nothing else in the schema stores them.
    */
