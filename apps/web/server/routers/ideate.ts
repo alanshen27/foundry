@@ -4,7 +4,7 @@ import { prisma } from "@foundry/db";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";
-import { ensureStageStarted, markDownstreamStale } from "../stage-state";
+import { ensureStageStarted, touchProject } from "../stage-state";
 
 const requirementType = z.enum([
   "FUNCTIONAL",
@@ -70,11 +70,11 @@ export const ideateRouter = router({
       actorId: ctx.user.id,
       payload: { briefId: brief.id },
     });
-    await markDownstreamStale({
+    await touchProject({
       workspaceId: project.workspaceId,
       projectId,
       branchId,
-      changedStage: "IDEATE",
+      stage: "IDEATE",
       actorId: ctx.user.id,
     });
     return brief;
@@ -131,11 +131,11 @@ export const ideateRouter = router({
         actorId: ctx.user.id,
         payload: { requirementId: requirement.id, title: requirement.title },
       });
-      await markDownstreamStale({
+      await touchProject({
         workspaceId: project.workspaceId,
         projectId,
         branchId,
-        changedStage: "IDEATE",
+        stage: "IDEATE",
         actorId: ctx.user.id,
       });
       return requirement;
@@ -175,11 +175,11 @@ export const ideateRouter = router({
         actorId: ctx.user.id,
         payload: { requirementId: id },
       });
-      await markDownstreamStale({
+      await touchProject({
         workspaceId: project.workspaceId,
         projectId: existing.projectId,
         branchId: existing.branchId,
-        changedStage: "IDEATE",
+        stage: "IDEATE",
         actorId: ctx.user.id,
       });
       return requirement;
@@ -204,11 +204,11 @@ export const ideateRouter = router({
         actorId: ctx.user.id,
         payload: { requirementId: input.id },
       });
-      await markDownstreamStale({
+      await touchProject({
         workspaceId: project.workspaceId,
         projectId: existing.projectId,
         branchId: existing.branchId,
-        changedStage: "IDEATE",
+        stage: "IDEATE",
         actorId: ctx.user.id,
       });
       return { id: input.id };

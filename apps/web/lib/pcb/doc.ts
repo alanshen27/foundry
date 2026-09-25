@@ -53,6 +53,13 @@ export type PcbFootprintDef = {
   /** Courtyard / body size drawn on the canvas. */
   bodyWMm: number;
   bodyHMm: number;
+  /**
+   * Seated height above the board surface (Z), from typical datasheet values.
+   * Named apart from PcbBoard.heightMm, which is the outline's Y dimension.
+   * An estimate, not a measurement: the enclosure fit check reports anything
+   * computed from it as ESTIMATED. Omitted means unknown.
+   */
+  seatedHeightMm?: number;
   pads: PcbPadDef[];
 };
 
@@ -229,6 +236,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "resistor 0603 smd",
     bodyWMm: 1.6,
     bodyHMm: 0.8,
+    seatedHeightMm: 0.55,
     pads: [
       { pin: "1", xMm: -0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
       { pin: "2", xMm: 0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
@@ -241,6 +249,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "resistor 0805 smd",
     bodyWMm: 2.0,
     bodyHMm: 1.25,
+    seatedHeightMm: 0.6,
     pads: [
       { pin: "1", xMm: -0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
       { pin: "2", xMm: 0.95, yMm: 0, wMm: 0.9, hMm: 1.2, shape: "rect" },
@@ -253,6 +262,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "capacitor 0603 smd",
     bodyWMm: 1.6,
     bodyHMm: 0.8,
+    seatedHeightMm: 0.9,
     pads: [
       { pin: "1", xMm: -0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
       { pin: "2", xMm: 0.75, yMm: 0, wMm: 0.7, hMm: 0.8, shape: "rect" },
@@ -265,6 +275,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "led 0805 smd diode",
     bodyWMm: 2.0,
     bodyHMm: 1.25,
+    seatedHeightMm: 1.1,
     // Pad 1 is the anode, pad 2 the cathode — Wokwi LED symbols use A/C, so
     // those parts need a pinMap.
     pads: [
@@ -279,6 +290,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "soic 8 ic package",
     bodyWMm: 5.0,
     bodyHMm: 4.0,
+    seatedHeightMm: 1.75,
     // Pins 1-4 run left-to-right along the top row, 5-8 right-to-left along the
     // bottom — the standard counter-clockwise SOIC numbering.
     pads: Array.from({ length: 8 }, (_, i) => {
@@ -301,6 +313,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "qfn 16 3x3 ic",
     bodyWMm: 3.0,
     bodyHMm: 3.0,
+    seatedHeightMm: 1.0,
     // 1-16 run around the package in placement order (top edge left-to-right,
     // then right, bottom, left), with "EP" for the centre exposed pad.
     pads: [
@@ -346,6 +359,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "pin header 2.54 tht connector",
     bodyWMm: 2.54 * 4,
     bodyHMm: 2.54,
+    seatedHeightMm: 8.5,
     pads: Array.from({ length: 4 }, (_, i) => ({
       pin: String(i + 1),
       xMm: -1.5 * 2.54 + i * 2.54,
@@ -363,6 +377,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "usb type-c connector",
     bodyWMm: 9.0,
     bodyHMm: 7.5,
+    seatedHeightMm: 3.3,
     // S1/S2 are the through-hole shield tabs; A1-A12 the signal row.
     pads: [
       { pin: "S1", xMm: -4.2, yMm: 0, wMm: 1.2, hMm: 2.2, shape: "rect", plated: true },
@@ -384,6 +399,7 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     keywords: "mounting hole m3 3.2mm",
     bodyWMm: 6.0,
     bodyHMm: 6.0,
+    seatedHeightMm: 0,
     // Mechanical only — no pin, so it never joins a net.
     pads: [{ pin: "", xMm: 0, yMm: 0, wMm: 3.2, hMm: 3.2, shape: "oval" }],
   },

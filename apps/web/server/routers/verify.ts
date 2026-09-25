@@ -4,7 +4,7 @@ import { prisma } from "@foundry/db";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";
-import { ensureStageStarted, markDownstreamStale, setStageStatus } from "../stage-state";
+import { ensureStageStarted, touchProject, setStageStatus } from "../stage-state";
 import { runFitCheck } from "../fit-check";
 
 const category = z.enum(["VISUAL", "ELECTRICAL", "MECHANICAL", "SOFTWARE", "CROSS_DOMAIN"]);
@@ -112,11 +112,11 @@ export const verifyRouter = router({
           to: "RUNNING",
           actorId: ctx.user.id,
         });
-        await markDownstreamStale({
+        await touchProject({
           workspaceId: project.workspaceId,
           projectId: existing.projectId,
           branchId: existing.branchId,
-          changedStage: "VERIFY",
+          stage: "VERIFY",
           actorId: ctx.user.id,
         });
       }

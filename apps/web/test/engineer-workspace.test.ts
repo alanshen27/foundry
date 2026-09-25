@@ -43,8 +43,16 @@ describe("final-assembly-cache", () => {
 describe("engineer-tabs", () => {
   it("defaults unknown views to the pinned assembly tab", () => {
     expect(tabFromViewParam(undefined)).toEqual(ASSEMBLY_TAB);
-    expect(tabFromViewParam("sourcing")).toEqual(ASSEMBLY_TAB);
     expect(tabFromViewParam("design")).toEqual(ASSEMBLY_TAB);
+    expect(tabFromViewParam("not-a-view")).toEqual(ASSEMBLY_TAB);
+  });
+
+  it("opens the sourcing (BOM) tab from its view param", () => {
+    expect(tabFromViewParam("sourcing")).toEqual({
+      key: "sourcing",
+      kind: "sourcing",
+      label: "Sourcing",
+    });
   });
 
   it("opens model / pcb / schematic / repository from view params", () => {

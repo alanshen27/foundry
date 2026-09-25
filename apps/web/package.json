@@ -30,6 +30,7 @@
     "@foundry/observability": "workspace:*",
     "@foundry/realtime": "workspace:*",
     "@foundry/sites": "workspace:*",
+    "@foundry/sourcing": "workspace:*",
     "@foundry/storage": "workspace:*",
     "@hocuspocus/provider": "^2.15.2",
     "@kittycad/kcl-wasm-lib": "^0.1.168",
