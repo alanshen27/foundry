@@ -85,7 +85,7 @@ export default async function StagePage({
     : "assembly";
 
   return (
-    <div className="h-full">
+    <div className="relative h-full">
       <PipelineKickoffListener hasBrief={Boolean(brief?.prompt || brief?.intendedUse)} />
       <Suspense fallback={<div className="bg-muted/30 h-full" />}>
         <EngineerStage

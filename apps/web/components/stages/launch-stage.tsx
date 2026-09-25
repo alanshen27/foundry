@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +13,7 @@ import { MediaLibrary } from "@/components/media/media-library";
 import { BranchCompareTrigger } from "@/components/graph/branch-compare-panel";
 import { trpc } from "@/lib/trpc";
 import { formatCents } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 export type LaunchView = "releases" | "renders";
 
@@ -40,6 +41,37 @@ type SnapshotSummary = {
   bomCents: number;
 };
 
+/** Releases / Renders are both Launch — an internal switch, not separate top-bar buttons. */
+function LaunchViewSwitch({ view }: { view: LaunchView }) {
+  const router = useRouter();
+  const pathname = usePathname();
+
+  function go(next: LaunchView) {
+    const params = new URLSearchParams();
+    params.set("view", next === "renders" ? "renders" : "launch");
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }
+
+  return (
+    <div className="border-border inline-flex shrink-0 items-center gap-0.5 self-start rounded-none border p-0.5">
+      {(["releases", "renders"] as const).map((v) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => go(v)}
+          aria-pressed={view === v}
+          className={cn(
+            "rounded-none px-2.5 py-1 text-xs font-medium capitalize",
+            view === v ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/50",
+          )}
+        >
+          {v}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function LaunchStage({
   projectId,
   branchId,
@@ -53,6 +85,7 @@ export function LaunchStage({
   if (view === "renders") {
     return (
       <div className="flex flex-col gap-4">
+        <LaunchViewSwitch view="renders" />
         <div>
           <h2 className="text-base font-semibold tracking-tight">Renders</h2>
           <p className="text-muted-foreground mt-1 text-sm">
@@ -134,6 +167,7 @@ function LaunchReleases({
   if (list.isLoading) {
     return (
       <div className="flex flex-col gap-6" aria-busy="true" aria-label="Loading releases">
+        <LaunchViewSwitch view="releases" />
         <Card>
           <CardHeader className="gap-2">
             <Skeleton className="h-5 w-32" />
@@ -174,6 +208,7 @@ function LaunchReleases({
 
   return (
     <div className="flex flex-col gap-6">
+      <LaunchViewSwitch view="releases" />
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
           <div>
