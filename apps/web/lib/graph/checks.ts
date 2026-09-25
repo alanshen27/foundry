@@ -15,6 +15,7 @@
  * fixture can prove a check actually fires rather than merely not crashing.
  */
 
+import { hasSubstituteOf, lifecycleStatusOf, partKeyOf } from "@foundry/sourcing";
 import type { FitFinding, FitInput } from "@/lib/integration/fit-check";
 import { PASSIVE_PART_TYPES } from "./derive";
 import { findCycles } from "./impact";
@@ -380,6 +381,45 @@ export function checkOrphanTargets(input: GraphCheckInput): FitFinding[] {
   ];
 }
 
+/**
+ * 7. A part with no long-term future and nothing lined up to replace it.
+ *
+ * Lifecycle status comes from `@foundry/sourcing`'s deterministic offline
+ * adapter, re-derived here from the same part key (`partNumber ?? id`) rather
+ * than threaded in as live quote data — that keeps this check pure and
+ * synchronous like every other one in this file, with no async pricing call
+ * creeping into `evaluateFit`. Only EOL-with-no-substitute is flagged: NRND
+ * alone is not yet actionable, matching this file's existing bias toward not
+ * nagging over something nobody can do anything about today.
+ */
+export function checkLifecycleRisk(input: GraphCheckInput): FitFinding[] {
+  const nodeByRefKey = new Map(input.graph.nodes.map((n) => [n.refKey, n]));
+  const link = (id: string | undefined) => {
+    const n = id ? nodeByRefKey.get(`component:${id}`) : undefined;
+    return n ? linkOf(n) : null;
+  };
+
+  // Electronics only — the only parts the sourcing panel estimates a lifecycle for.
+  const atRisk = input.components.filter((c) => {
+    if (!c.id || c.discipline !== "ELECTRONICS") return false;
+    const partKey = partKeyOf({ id: c.id, mpn: c.partNumber });
+    return lifecycleStatusOf(partKey) === "EOL" && !hasSubstituteOf(partKey);
+  });
+  if (atRisk.length === 0) return [];
+
+  return [
+    {
+      domain: "CROSS_DOMAIN",
+      severity: "warning",
+      message: `${atRisk.length} component${atRisk.length === 1 ? " is" : "s are"} end-of-life with no substitute on file: ${atRisk.map((c) => c.name).join(", ")}.`,
+      hint: "Line up a second source before this becomes a build blocker. (Lifecycle data is a simulated estimate until a distributor is connected.)",
+      nodes: atRisk
+        .map((c) => link(c.id))
+        .filter((n): n is { refKey: string; label: string } => n !== null),
+    },
+  ];
+}
+
 /** Every graph-backed check. Called from evaluateFit when a graph exists. */
 export function checkGraph(input: FitInput, graph: GraphSnapshot): FitFinding[] {
   const scoped: GraphCheckInput = { ...input, graph };
@@ -390,5 +430,6 @@ export function checkGraph(input: FitInput, graph: GraphSnapshot): FitFinding[] 
     ...checkTaskDependencies(scoped),
     ...checkStaleDownstream(scoped),
     ...checkOrphanTargets(scoped),
+    ...checkLifecycleRisk(scoped),
   ];
 }
