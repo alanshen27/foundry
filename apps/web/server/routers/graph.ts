@@ -4,6 +4,7 @@ import { prisma } from "@foundry/db";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";
+import { diffGraphs } from "@/lib/graph/compare";
 import { impactFrom, provenanceOf } from "@/lib/graph/impact";
 import { AUTHORED_ONLY_EDGE_KINDS, PRODUCT_EDGE_KINDS } from "@/lib/graph/types";
 import { loadGraphSnapshot, syncProductGraph } from "../graph/sync";
@@ -79,6 +80,26 @@ export const graphRouter = router({
           minConfidence: input.minConfidence,
         }),
       };
+    }),
+
+  /**
+   * What changed between two branches of the same project — added, removed
+   * and changed nodes and edges, across every domain the graph indexes.
+   *
+   * Read-only: it does not sync either branch first. Forcing a sync on every
+   * open would spam `syncProductGraph`'s own audit log as a side effect of a
+   * read; the caller (the compare panel) syncs explicitly, the same way the
+   * impact panel already does when a snapshot comes back empty.
+   */
+  compareBranches: protectedProcedure
+    .input(z.object({ projectId: z.string(), branchAId: z.string(), branchBId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
+      const [a, b] = await Promise.all([
+        loadGraphSnapshot(input.projectId, input.branchAId),
+        loadGraphSnapshot(input.projectId, input.branchBId),
+      ]);
+      return diffGraphs(a, b);
     }),
 
   /** Why this artifact exists: what it was created to serve. */

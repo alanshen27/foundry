@@ -14,6 +14,7 @@
  * actually happens.
  */
 
+import type { SourcingQuote } from "@foundry/sourcing";
 import { BomTable } from "@/components/engineer/bom-table";
 import { trpc } from "@/lib/trpc";
 
@@ -34,6 +35,29 @@ export function SourcingPanel({
   const list = trpc.engineer.listComponents.useQuery({ projectId, branchId });
   const components = list.data ?? [];
 
+  // Only electronics get distributor estimates: a lifecycle status or lead
+  // time for a printed enclosure would be invented, not estimated. One request
+  // for the whole set keeps every badge and the section total consistent.
+  const quotable = components.filter((c) => c.discipline === "ELECTRONICS");
+  const quote = trpc.engineer.quoteComponents.useQuery(
+    {
+      projectId,
+      parts: quotable.map((c) => ({
+        id: c.id,
+        name: c.name,
+        partNumber: c.partNumber,
+        quantity: c.quantity,
+      })),
+    },
+    { enabled: quotable.length > 0 },
+  );
+  const quoteData = quote.data;
+  const quotesByComponentId =
+    quoteData?.ok === true
+      ? new Map<string, SourcingQuote>(quotable.map((c, i) => [c.id, quoteData.quotes[i]!]))
+      : undefined;
+  const simulated = quoteData?.ok === true && quoteData.simulated;
+
   return (
     <div className="flex flex-col gap-8">
       <header>
@@ -42,6 +66,12 @@ export function SourcingPanel({
           Every part the product is made of. Open the branch icon on a row to see what depends on it
           before you change one.
         </p>
+        {simulated ? (
+          <p className="text-muted-foreground mt-1 text-xs">
+            Prices marked (est.), lifecycle, lead time and stock are simulated estimates — no
+            distributor is connected yet.
+          </p>
+        ) : null}
       </header>
 
       {DISCIPLINES.map(({ kind, label }) => (
@@ -56,6 +86,8 @@ export function SourcingPanel({
             discipline={kind}
             components={components.filter((c) => c.discipline === kind)}
             isLoading={list.isLoading}
+            quotes={kind === "ELECTRONICS" ? quotesByComponentId : undefined}
+            quotesLoading={kind === "ELECTRONICS" && quote.isLoading}
           />
         </section>
       ))}

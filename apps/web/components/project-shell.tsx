@@ -28,6 +28,8 @@ import {
 } from "@/components/copilot/copilot-provider";
 import { ChatSidebar } from "@/components/copilot/chat-sidebar";
 import { DiscordChat } from "@/components/copilot/discord-chat";
+import { StageRail } from "@/components/stage-rail";
+import { CommandPalette } from "@/components/command-palette";
 export type ShellWorkspace = { id: string; name: string; slug: string };
 
 export type ProjectShellProps = {
@@ -127,6 +129,7 @@ function ShellInner({
   project,
   branchId,
   branchName,
+  stageStatuses,
   user,
   children,
 }: Omit<ProjectShellProps, "initialChatMessages">) {
@@ -141,6 +144,7 @@ function ShellInner({
 
   return (
     <div className="bg-background flex h-screen flex-col">
+      <CommandPalette basePath={base} projectId={project.id} branchId={branchId} />
       <header className="bg-card relative z-20 flex h-11 shrink-0 items-center gap-1.5 border-b px-3">
         <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5">
           <Link
@@ -160,7 +164,7 @@ function ShellInner({
           </span>
           <h1 className="flex h-5 max-w-52 items-center">
             <Link
-              href={`${base}/engineer`}
+              href={`${base}/overview`}
               className="text-foreground hover:text-primary flex h-5 items-center truncate text-[13px] leading-none font-medium"
             >
               {project.name}
@@ -170,6 +174,7 @@ function ShellInner({
             {branchName}
           </span>
         </nav>
+        <StageRail basePath={base} stageStatuses={stageStatuses} />
         <div className="ml-auto flex shrink-0 items-center gap-2">
           <ReleaseChip
             projectId={project.id}

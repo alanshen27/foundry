@@ -171,6 +171,15 @@ const FIXED: { kind: FixedKind; label: string; icon: typeof Boxes }[] = [
 
 const FIXED_KINDS = new Set<EngineerDocKind>(FIXED.map((f) => f.kind));
 
+/**
+ * Real pipeline stages (Ideate/Verify/Launch/Renders) are still FIXED
+ * surfaces for the mount/tab state machine — deep links and the Stage Rail
+ * both route through `?view=`, unchanged — but they're no longer buttons in
+ * this bar now that the Stage Rail (project-shell.tsx) is their home.
+ */
+const STAGE_KINDS = new Set<EngineerDocKind>(["ideate", "verify", "launch", "renders"]);
+const TOP_BAR_FIXED = FIXED.filter(({ kind }) => !STAGE_KINDS.has(kind));
+
 function TabIcon({ kind }: { kind: EngineerDocKind }) {
   if (kind === "assembly") return <Combine className="size-3" strokeWidth={2} />;
   if (kind === "model") return <Boxes className="size-3" strokeWidth={2} />;
@@ -343,7 +352,7 @@ function EngineerDocWorkspace({
     <div className="flex h-full flex-col overflow-hidden">
       <div className="bg-card/60 flex h-9 shrink-0 items-center border-b px-1">
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-          {FIXED.map(({ kind, label, icon: Icon }) => (
+          {TOP_BAR_FIXED.map(({ kind, label, icon: Icon }) => (
             <button
               key={kind}
               type="button"
@@ -549,6 +558,7 @@ function EngineerDocWorkspace({
                     verifyApproved={caps.verifyStatus === "APPROVED"}
                     canEditMedia={caps.canEditMedia}
                     canApproveMedia={caps.canApproveMedia}
+                    canEditGraph={canEdit}
                     view={kind === "renders" ? "renders" : "releases"}
                   />
                 </DocumentPane>

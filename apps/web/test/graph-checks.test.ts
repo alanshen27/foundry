@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import {
   checkComponentSoftware,
+  checkLifecycleRisk,
   checkOrphanTargets,
   checkPowerBudget,
   checkRequirementCoverage,
@@ -465,5 +466,51 @@ describe("the environmental monitor as a whole", () => {
     const findings = checkPowerBudget(scoped);
     expect(findings).toHaveLength(1);
     expect(findings[0]!.message).toContain("incomplete");
+  });
+});
+
+describe("checkLifecycleRisk", () => {
+  // Ids chosen because @foundry/sourcing's deterministic hash puts them in
+  // the scenario named: EOL with no substitute, EOL with a substitute known,
+  // and comfortably ACTIVE. See seeded.ts's lifecycleStatusOf/hasSubstituteOf.
+  const withComponent = (id: string): GraphInput => ({
+    ...EMPTY_INPUT,
+    components: [{ id, name: "Test part", discipline: "ELECTRONICS" }],
+  });
+
+  it("warns on an EOL part with no known substitute, and names it", () => {
+    const findings = checkLifecycleRisk(scope(withComponent("cmp-lifecycle-40")));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain("end-of-life");
+    expect(findings[0]!.nodes).toEqual([
+      expect.objectContaining({ refKey: "component:cmp-lifecycle-40" }),
+    ]);
+  });
+
+  it("stays quiet on an EOL part that has a substitute lined up", () => {
+    expect(checkLifecycleRisk(scope(withComponent("cmp-lifecycle-41")))).toEqual([]);
+  });
+
+  it("stays quiet on an ACTIVE part", () => {
+    expect(checkLifecycleRisk(scope(withComponent("cmp-lifecycle-0")))).toEqual([]);
+  });
+
+  it("keys by partNumber over id when both are present", () => {
+    // cmp-lifecycle-40 is EOL-with-no-substitute; if the check used the id
+    // instead of the MPN it would see "some-other-id" and stay quiet.
+    const input: GraphInput = {
+      ...EMPTY_INPUT,
+      components: [
+        {
+          id: "some-other-id",
+          name: "Test part",
+          discipline: "ELECTRONICS",
+          partNumber: "cmp-lifecycle-40",
+        },
+      ],
+    };
+    const findings = checkLifecycleRisk(scope(input));
+    expect(findings).toHaveLength(1);
   });
 });
