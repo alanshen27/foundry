@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { prisma, type Prisma } from "@foundry/db";
 import { protectedProcedure, router } from "../trpc";
 import { requireProjectCapability } from "../access";
-import { ensureStageStarted, markDownstreamStale } from "../stage-state";
+import { ensureStageStarted, touchProject } from "../stage-state";
 import { AiEditLockConflict, getActiveAiEditLock, withAiEditLockGuard } from "../ai-edit-lock";
 import { recordAudit } from "../audit";
 
@@ -111,11 +111,11 @@ export const designRouter = router({
         stage: "ENGINEER",
         actorId: ctx.user.id,
       });
-      await markDownstreamStale({
+      await touchProject({
         workspaceId: project.workspaceId,
         projectId: input.projectId,
         branchId: input.branchId,
-        changedStage: "ENGINEER",
+        stage: "ENGINEER",
         actorId: ctx.user.id,
       });
       await recordAudit({

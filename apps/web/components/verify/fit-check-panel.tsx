@@ -10,6 +10,7 @@
  * firmware against the schematic, and shows what happened.
  */
 
+import Link from "next/link";
 import { AlertTriangle, CheckCircle2, CircleAlert, Play, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,6 +25,26 @@ const DOMAIN_LABEL: Record<string, string> = {
   MECHANICAL: "Mechanical",
   CROSS_DOMAIN: "Cross-domain",
 };
+
+/** Which workspace tab a refKey's namespace lives on. */
+const VIEW_BY_NAMESPACE: Record<string, string> = {
+  requirement: "ideate",
+  brief: "ideate",
+  component: "sourcing",
+  check: "checks",
+  codefile: "code",
+  circuitpart: "schematic",
+  net: "schematic",
+  pin: "schematic",
+  footprint: "pcb",
+  cadpart: "assembly",
+  cadassembly: "assembly",
+};
+
+function viewHrefFor(refKey: string): string {
+  const namespace = refKey.slice(0, Math.max(refKey.indexOf(":"), 0));
+  return `?view=${VIEW_BY_NAMESPACE[namespace] ?? "checks"}`;
+}
 
 function FindingRow({ finding }: { finding: FitFinding }) {
   const Icon = finding.severity === "error" ? CircleAlert : AlertTriangle;
@@ -43,6 +64,24 @@ function FindingRow({ finding }: { finding: FitFinding }) {
           {finding.message}
         </p>
         {finding.hint ? <p className="text-muted-foreground text-xs">{finding.hint}</p> : null}
+        {/* Graph-backed findings know which artifacts are responsible, so the
+            reader can go straight there instead of hunting for what the
+            message is describing. */}
+        {finding.nodes && finding.nodes.length > 0 ? (
+          <ul className="mt-1 flex flex-wrap gap-1">
+            {finding.nodes.map((node) => (
+              <li key={node.refKey}>
+                <Link
+                  href={viewHrefFor(node.refKey)}
+                  className="bg-muted/60 hover:bg-muted inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] underline-offset-2 hover:underline"
+                  title={node.refKey}
+                >
+                  {node.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
     </li>
   );

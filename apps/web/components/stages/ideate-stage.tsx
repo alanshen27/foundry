@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
 import { trpc } from "@/lib/trpc";
+import { StaleBadge, useStaleNodes } from "@/components/graph/stale-badge";
 import { dollarsToCents, selectClass } from "@/lib/format";
 
 const REQUIREMENT_TYPES = [
@@ -225,6 +226,9 @@ function BriefCard({ projectId, branchId, canEdit }: Props) {
 function RequirementsCard({ projectId, branchId, canEdit }: Props) {
   const router = useRouter();
   const list = trpc.ideate.listRequirements.useQuery({ projectId, branchId });
+  // Changing a component three tabs away lands here as a badge, with no
+  // navigating and nothing to remember.
+  const stale = useStaleNodes(projectId, branchId);
   const utils = trpc.useUtils();
   const invalidate = () => {
     router.refresh();
@@ -342,7 +346,10 @@ function RequirementsCard({ projectId, branchId, canEdit }: Props) {
             {requirements.map((r) => (
               <li key={r.id} className="flex items-start justify-between gap-3 py-3">
                 <div className="min-w-0">
-                  <p className="font-medium">{r.title}</p>
+                  <p className="flex flex-wrap items-center gap-1.5 font-medium">
+                    {r.title}
+                    <StaleBadge node={stale.byRefKey.get(`requirement:${r.id}`)} />
+                  </p>
                   {r.description ? (
                     <p className="text-muted-foreground text-sm">{r.description}</p>
                   ) : null}

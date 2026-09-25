@@ -1,4 +1,7 @@
 import { DefaultChatTransport, type ChatTransport, type UIMessage, type UIMessageChunk } from "ai";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("copilot");
 
 export type AiPingTip = { id: string; text: string };
 
@@ -104,10 +107,9 @@ export class BackgroundChatTransport<
     // Reconnect is best-effort (page load / tab return). Don't surface server
     // misconfig as a chat error — that would flash on every navigation.
     if (!response.ok) {
-      console.warn(
-        "Copilot stream reconnect failed:",
-        await readApiError(response, `HTTP ${response.status}`),
-      );
+      log.warn("stream reconnect failed", {
+        reason: await readApiError(response, `HTTP ${response.status}`),
+      });
       return null;
     }
     if (!response.body) return null;

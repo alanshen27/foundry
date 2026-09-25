@@ -5,7 +5,8 @@ import type { Capability } from "@foundry/domain";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";
-import { ensureStageStarted, markDownstreamStale } from "../stage-state";
+import { ensureStageStarted, touchProject } from "../stage-state";
+import { getSourcing } from "../sourcing";
 
 const discipline = z.enum(["ELECTRONICS", "MECHANICAL", "SOFTWARE", "DESIGN"]);
 
@@ -31,6 +32,44 @@ export const engineerRouter = router({
         where: { projectId: input.projectId, branchId: input.branchId },
         orderBy: [{ discipline: "asc" }, { createdAt: "asc" }],
       });
+    }),
+
+  /**
+   * Price, lifecycle status, lead time and stock for a set of BOM lines.
+   *
+   * A thin wrapper: all the actual logic lives in `@foundry/sourcing`, so
+   * this stays a one-line call to whichever adapter `getSourcing()` picks —
+   * the deterministic offline one today, a real distributor's API later.
+   */
+  quoteComponents: protectedProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        parts: z
+          .array(
+            z.object({
+              id: z.string(),
+              name: z.string(),
+              partNumber: z.string().nullish(),
+              quantity: z.number(),
+            }),
+          )
+          .max(500),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
+      const { port, simulated } = getSourcing();
+      const result = await port.quote(
+        input.parts.map((p) => ({
+          id: p.id,
+          name: p.name,
+          mpn: p.partNumber,
+          quantity: p.quantity,
+        })),
+      );
+      if (!result.ok) return { ok: false as const, error: result.error };
+      return { ok: true as const, quotes: result.data, simulated };
     }),
 
   createComponent: protectedProcedure
@@ -75,11 +114,11 @@ export const engineerRouter = router({
         actorId: ctx.user.id,
         payload: { componentId: component.id, name: component.name },
       });
-      await markDownstreamStale({
+      await touchProject({
         workspaceId: project.workspaceId,
         projectId,
         branchId,
-        changedStage: "ENGINEER",
+        stage: "ENGINEER",
         actorId: ctx.user.id,
       });
       return component;
@@ -121,11 +160,11 @@ export const engineerRouter = router({
         actorId: ctx.user.id,
         payload: { componentId: id },
       });
-      await markDownstreamStale({
+      await touchProject({
         workspaceId: project.workspaceId,
         projectId: existing.projectId,
         branchId: existing.branchId,
-        changedStage: "ENGINEER",
+        stage: "ENGINEER",
         actorId: ctx.user.id,
       });
       return component;
@@ -150,11 +189,11 @@ export const engineerRouter = router({
         actorId: ctx.user.id,
         payload: { componentId: input.id },
       });
-      await markDownstreamStale({
+      await touchProject({
         workspaceId: project.workspaceId,
         projectId: existing.projectId,
         branchId: existing.branchId,
-        changedStage: "ENGINEER",
+        stage: "ENGINEER",
         actorId: ctx.user.id,
       });
       return { id: input.id };

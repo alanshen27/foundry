@@ -16,6 +16,17 @@ import {
 } from "@/server/chat-run/should-respond";
 import { stampLatestUserAuthor } from "@/lib/copilot/chat-message-meta";
 import { validateResumableUIMessages } from "@/lib/copilot/messages";
+import {
+  describeWindow,
+  policies,
+  rateLimit,
+  rateLimitAll,
+  tooManyRequests,
+} from "@/server/rate-limit";
+import { checkWorkspaceBudget } from "@/server/ai-usage";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("api:chat");
 
 const bodySchema = z.object({
   projectId: z.string(),
@@ -36,8 +47,11 @@ export async function POST(request: Request) {
   }
   const { projectId, branchId } = parsed.data;
 
+  let workspaceId: string;
   try {
-    await requireProjectCapability(user.id, projectId, "agent.invoke");
+    ({
+      project: { workspaceId },
+    } = await requireProjectCapability(user.id, projectId, "agent.invoke"));
   } catch {
     return NextResponse.json({ error: "Missing capability: agent.invoke" }, { status: 403 });
   }
@@ -78,7 +92,11 @@ export async function POST(request: Request) {
     // No @AI → never start a run. Optionally drop a casual "ping @AI" tip.
     if (!invokeAi) {
       let tip: { id: string; text: string } | undefined;
-      if (await shouldSuggestAiPing(userText)) {
+      // The triage is a model call on every plain message, so it is limited
+      // too — but over the limit it is simply skipped, since a missing nudge
+      // costs the user nothing.
+      const triage = await rateLimit(policies().aiTriage, user.id);
+      if (triage.allowed && (await shouldSuggestAiPing(userText))) {
         const userId = lastUserMessageId(messages) ?? `anon-${Date.now()}`;
         const tipMessage = buildAiPingTip(userId);
         await saveNewMessages({ projectId, branchId, channelId }, [tipMessage]);
@@ -96,6 +114,30 @@ export async function POST(request: Request) {
           error: "AI is not configured. Set OPENAI_API_KEY in the root .env to enable the copilot.",
         },
         { status: 503 },
+      );
+    }
+
+    // Limits come after the message is saved (the text survives a 429) and
+    // before the run exists (a refused turn spends nothing).
+    const limits = policies();
+    const limited = await rateLimitAll([
+      { policy: limits.aiRunBurst, identifier: user.id },
+      { policy: limits.aiRunHourly, identifier: user.id },
+    ]);
+    if (!limited.allowed) {
+      const seconds = Math.max(1, Math.ceil(limited.retryAfterMs / 1000));
+      const window = limited.policy ? describeWindow(limited.policy.windowMs) : "period";
+      return tooManyRequests(
+        limited,
+        `You're starting copilot runs faster than the limit allows (${limited.limit} per ${window}). Your message is saved; try again in ${seconds < 60 ? `${seconds}s` : `${Math.ceil(seconds / 60)} min`}.`,
+        { persisted: true },
+      );
+    }
+    const budget = await checkWorkspaceBudget(workspaceId);
+    if (!budget.allowed) {
+      return NextResponse.json(
+        { error: budget.message, persisted: true, usage: budget.usage },
+        { status: 429 },
       );
     }
 
@@ -126,7 +168,7 @@ export async function POST(request: Request) {
       const { enqueueChatRun } = await import("@/server/chat-run/queue");
       await enqueueChatRun(run.id);
     } catch (err) {
-      console.error("enqueueChatRun failed:", err);
+      log.error("enqueue failed", { runId: run.id, projectId, err });
       await prisma.chatRun.update({
         where: { id: run.id },
         data: {
@@ -146,7 +188,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ runId: run.id, channelId, invoked: true }, { status: 202 });
   } catch (err) {
-    console.error("POST /api/ai/chat failed:", err);
+    log.error("chat request failed", { projectId, err });
     return NextResponse.json(
       {
         error:
