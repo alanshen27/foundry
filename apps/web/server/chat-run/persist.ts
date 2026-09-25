@@ -14,6 +14,9 @@ import {
   type ChatHistoryRow,
   type ChatReactionSummary,
 } from "@/lib/copilot/chat-message-meta";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("chat-run");
 
 /**
  * How many messages a client loads. Reads take the newest N: with an
@@ -320,7 +323,7 @@ export async function rebuildUiMessagesFromRunEvents(
       last = message;
     }
   } catch (err) {
-    console.warn(`[chat-run] rebuild from events failed run=${runId}`, err);
+    log.error("rebuild from events failed", { runId, err });
     return originalMessages;
   }
 

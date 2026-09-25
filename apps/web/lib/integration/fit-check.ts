@@ -26,6 +26,9 @@ import { Simulator } from "@/lib/sim/engine";
 import { buildModelIndex, findMcuPart } from "@/lib/sim/models";
 import { runSketch } from "@/lib/sim/sketch";
 import type { Drive } from "@/lib/sim/net";
+import type { GraphSnapshot } from "@/lib/graph/types";
+import { checkGraph } from "@/lib/graph/checks";
+import { checkEnclosureFit } from "./enclosure-fit";
 
 export type FitDomain = "ELECTRICAL" | "SOFTWARE" | "MECHANICAL" | "CROSS_DOMAIN";
 export type FitSeverity = "error" | "warning" | "info";
@@ -36,6 +39,12 @@ export type FitFinding = {
   message: string;
   /** What to do about it, when the fix is not obvious from the message. */
   hint?: string;
+  /**
+   * Graph nodes responsible for this finding, so the panel can link straight
+   * to the artifact instead of describing where to look. Only set by the
+   * graph-backed checks.
+   */
+  nodes?: { refKey: string; label: string }[];
 };
 
 /** Outcome of exercising the firmware against the schematic. */
@@ -67,17 +76,52 @@ export type FitReport = {
   counts: { errors: number; warnings: number };
 };
 
+/**
+ * Everything the fit check and the graph deriver read about a project.
+ *
+ * The `id` fields are what a ProductNode addresses by `refKey`, so they are
+ * required to build a graph but optional here — every field added for the
+ * graph is optional, and `evaluateFit` behaves exactly as before without them.
+ */
 export type FitInput = {
   circuit: CircuitDoc | null;
   pcb: PcbSet | null;
   /** Code files with contents; the firmware is picked from them. */
-  codeFiles: { path: string; content: string }[];
+  codeFiles: { id?: string; path: string; content: string }[];
   /** BOM entries from Engineer > Sourcing. */
-  components: { name: string; discipline: string; refDes?: string | null }[];
+  components: {
+    id?: string;
+    name: string;
+    discipline: string;
+    refDes?: string | null;
+    quantity?: number;
+    /** Typical continuous draw in mA. Null/undefined = unknown, not zero. */
+    currentDrawMa?: number | null;
+    peakCurrentMa?: number | null;
+    nominalVoltageV?: number | null;
+    /** Set on a source. This IS the source predicate. */
+    capacityMah?: number | null;
+    /** Manufacturer part number — the sourcing panel's pricing lookup key. */
+    partNumber?: string | null;
+  }[];
   /** CAD components (parts, assembly, docs). */
-  cad: { path: string; name: string; kind: string }[];
-  requirements: { title: string; priority: string }[];
-  validationChecks: { title: string }[];
+  cad: { path: string; name: string; kind: string; content?: string }[];
+  requirements: {
+    id?: string;
+    title: string;
+    priority: string;
+    type?: string;
+    minValue?: number | null;
+    maxValue?: number | null;
+    unit?: string | null;
+    verificationMethod?: string | null;
+  }[];
+  validationChecks: { id?: string; title: string; targetPath?: string | null }[];
+  /**
+   * The product graph, when it has been built. Absent means the graph-backed
+   * checks are skipped entirely rather than reporting false findings.
+   */
+  graph?: GraphSnapshot;
 };
 
 /** Virtual time the smoke run covers. Long enough for a 1 Hz blink to toggle. */
@@ -307,7 +351,7 @@ function checkFirmware(
       findings.push({
         domain: "CROSS_DOMAIN",
         severity: "warning",
-        message: `Wired pin${idle.length === 1 ? "" : "s"} ${idle.join(", ")} are never used by the firmware.`,
+        message: `Wired pin${idle.length === 1 ? "" : "s"} ${idle.join(", ")} ${idle.length === 1 ? "is" : "are"} never used by the firmware.`,
       });
     }
   }
@@ -376,13 +420,20 @@ function checkCoverage(input: FitInput, findings: FitFinding[]) {
     });
   }
 
-  const musts = input.requirements.filter((r) => r.priority === "MUST");
-  if (musts.length > 0 && input.validationChecks.length === 0) {
-    findings.push({
-      domain: "CROSS_DOMAIN",
-      severity: "warning",
-      message: `${musts.length} MUST requirements have no validation check.`,
-    });
+  // Requirement-to-check coverage is reported by checkRequirementCoverage in
+  // lib/graph/checks.ts, which names the specific uncovered requirements and
+  // links to them. This coarse count only fires when there are no checks at
+  // all, so it is kept solely for projects with no graph built yet — emitting
+  // both would put two near-duplicate findings in the panel.
+  if (!input.graph) {
+    const musts = input.requirements.filter((r) => r.priority === "MUST");
+    if (musts.length > 0 && input.validationChecks.length === 0) {
+      findings.push({
+        domain: "CROSS_DOMAIN",
+        severity: "warning",
+        message: `${musts.length} MUST requirements have no validation check.`,
+      });
+    }
   }
 }
 
@@ -400,11 +451,15 @@ export function evaluateFit(input: FitInput): FitReport {
       severity: "error",
       message: "No schematic, so nothing can be checked against it.",
     });
+    // Whether the board fits the box does not depend on the schematic.
+    findings.push(...checkEnclosureFit({ pcb: input.pcb, cad: input.cad }));
+    const errors = findings.filter((f) => f.severity === "error").length;
+    const warnings = findings.filter((f) => f.severity === "warning").length;
     return {
       ok: false,
       findings,
       simulation: { ran: false, reason: "No schematic." },
-      counts: { errors: 1, warnings: 0 },
+      counts: { errors, warnings },
     };
   }
 
@@ -418,7 +473,9 @@ export function evaluateFit(input: FitInput): FitReport {
   checkFirmware(circuit, simulation, findings);
 
   checkMechanical(input, findings);
+  findings.push(...checkEnclosureFit({ pcb: input.pcb, cad: input.cad }));
   checkCoverage(input, findings);
+  if (input.graph) findings.push(...checkGraph(input, input.graph));
 
   const errors = findings.filter((f) => f.severity === "error").length;
   const warnings = findings.filter((f) => f.severity === "warning").length;

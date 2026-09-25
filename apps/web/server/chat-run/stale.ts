@@ -5,6 +5,9 @@ import { type UIMessage } from "ai";
 import { persistFailedRunFromEvents } from "./persist";
 import { validateResumableUIMessages } from "./sanitize-messages";
 import { publishRunFinished } from "./publish";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("chat-run");
 
 /** PENDING with no worker pickup — usually Redis/worker down. */
 const PENDING_STALE_MS = 45_000;
@@ -127,7 +130,7 @@ async function persistAndBroadcastExpired(expired: ExpiredRun[]): Promise<void> 
           error: run.error,
         });
       } catch (err) {
-        console.error(`[chat-run] failed to persist stale run ${run.id}`, err);
+        log.error("failed to persist stale run", { runId: run.id, err });
       }
       await publishRunFinished(run.id, run.channelId, "error", run.error);
     }),

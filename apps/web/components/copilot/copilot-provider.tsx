@@ -43,6 +43,9 @@ import {
   pruneEmptyAssistantMessages,
 } from "@/lib/copilot/messages";
 import { trpc } from "@/lib/trpc";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("copilot");
 
 export type ChatChannel = {
   id: string;
@@ -251,101 +254,137 @@ function ChatEngine({
   );
 
   const persistFailureStampRef = useRef<(reason?: string) => void>(() => undefined);
+  /**
+   * The @AI send that may need one automatic retry after a stale workspace
+   * lock. useChat catches transport errors and reports them through onError —
+   * `sendMessage()` never rejects — so the retry has to be driven from there,
+   * and needs to know which send it belongs to.
+   */
+  const lockRetryRef = useRef<{ epoch: number; retried: boolean } | null>(null);
+  /** True between a lock refusal and its retry, so onFinish does not clean up. */
+  const lockRetryingRef = useRef(false);
+  const cancelMutationRef = useRef(cancelMutation);
+  cancelMutationRef.current = cancelMutation;
+  const regenerateRef = useRef<() => Promise<void>>(async () => undefined);
   const syncTranscriptFromServerRef = useRef<() => void>(() => undefined);
 
   const cadProgressRef = useRef(new CadProgressStore());
 
-  const { messages, sendMessage, status, error, stop, resumeStream, setMessages } = useChat({
-    id: channelId,
-    transport,
-    messages: seedRef.current,
-    onData: (chunk) => {
-      const progress = readCadProgress(chunk);
-      if (progress) {
-        cadProgressRef.current.set(progress);
-        // A "saved" event means geometry just landed in the workspace mid-run:
-        // refetch so open viewports render it without waiting for the tool to
-        // finish. refreshProjectData is debounced, so bursts coalesce.
-        if (progress.phase === "saved") refreshProjectData();
-      }
-    },
-    // Manual resume only (see effect below). SDK auto-resume + our send SSE
-    // both attach to the same run and the UI flashes as chunks replay twice.
-    resume: false,
-    onFinish: ({ isError }) => {
-      cadProgressRef.current.clearAll();
-      if (connectionDropRef.current) {
-        // Stream socket died mid-run. Keep busy state — the activeRun poll
-        // reattaches or reloads once we're back online.
-        if (isError) return;
-        // A resumed stream completed normally: fall through to cleanup.
-        connectionDropRef.current = false;
-      }
-      const epoch = sendEpochRef.current;
-      selfRunRef.current = false;
-      setLocalBusy(false);
-      if (epoch === sendEpochRef.current) ownedRunIdRef.current = null;
-      void utils.chat.activeRun.invalidate({ projectId, channelId });
-      const tip = pendingPingTipRef.current;
-      pendingPingTipRef.current = null;
-      if (statusRef.current === "error") {
-        persistFailureStampRef.current(error?.message);
-      } else {
-        setMessages((prev) => {
-          const next = pruneEmptyAssistantMessages(prev);
-          if (!tip || next.some((message) => message.id === tip.id)) return next;
-          return [
-            ...next,
-            {
-              id: tip.id,
-              role: "assistant" as const,
-              parts: [{ type: "text" as const, text: tip.text }],
-            },
-          ];
-        });
-      }
-      refreshProjectData();
-    },
-    onError: (err) => {
-      const reason = err instanceof Error ? err.message : String(err);
-      // The SSE connection dropped (laptop sleep, wifi blip, deploy) after the
-      // run was already enqueued (we have its runId). The worker is still
-      // executing it — do NOT cancel the run and do NOT stamp the transcript
-      // as failed. Release stream ownership so the resume effect can reattach
-      // once the activeRun poll comes back.
-      if (isConnectionError(err) && ownedRunIdRef.current) {
-        console.warn("[copilot] stream connection lost; run continues in background:", reason);
-        connectionDropRef.current = true;
-        selfRunRef.current = false;
-        resumedRunIdRef.current = null;
-        ownedRunIdRef.current = null;
-        pendingPingTipRef.current = null;
-        void utils.chat.activeRun.invalidate({ projectId, channelId });
-        return;
-      }
-      pendingPingTipRef.current = null;
-      // Lock rejection is handled in send() (clear branch + retry). Do not
-      // cancel here — a concurrent retry may already own a new runId.
-      if (/workspace is locked/i.test(reason)) {
+  const { messages, sendMessage, regenerate, status, error, stop, resumeStream, setMessages } =
+    useChat({
+      id: channelId,
+      transport,
+      messages: seedRef.current,
+      onData: (chunk) => {
+        const progress = readCadProgress(chunk);
+        if (progress) {
+          cadProgressRef.current.set(progress);
+          // A "saved" event means geometry just landed in the workspace mid-run:
+          // refetch so open viewports render it without waiting for the tool to
+          // finish. refreshProjectData is debounced, so bursts coalesce.
+          if (progress.phase === "saved") refreshProjectData();
+        }
+      },
+      // Manual resume only (see effect below). SDK auto-resume + our send SSE
+      // both attach to the same run and the UI flashes as chunks replay twice.
+      resume: false,
+      onFinish: ({ isError }) => {
+        // A lock refusal about to be retried is not the end of the turn.
+        if (lockRetryingRef.current) return;
+        cadProgressRef.current.clearAll();
+        if (connectionDropRef.current) {
+          // Stream socket died mid-run. Keep busy state — the activeRun poll
+          // reattaches or reloads once we're back online.
+          if (isError) return;
+          // A resumed stream completed normally: fall through to cleanup.
+          connectionDropRef.current = false;
+        }
+        const epoch = sendEpochRef.current;
         selfRunRef.current = false;
         setLocalBusy(false);
+        if (epoch === sendEpochRef.current) ownedRunIdRef.current = null;
         void utils.chat.activeRun.invalidate({ projectId, channelId });
-        return;
-      }
-      const epoch = sendEpochRef.current;
-      selfRunRef.current = false;
-      setLocalBusy(false);
-      persistFailureStampRef.current(reason);
-      // Only the run that failed — never wipe a newer send's ChatRun.
-      releaseOwnedRun(epoch);
-    },
-  });
+        const tip = pendingPingTipRef.current;
+        pendingPingTipRef.current = null;
+        if (statusRef.current === "error") {
+          persistFailureStampRef.current(error?.message);
+        } else {
+          setMessages((prev) => {
+            const next = pruneEmptyAssistantMessages(prev);
+            if (!tip || next.some((message) => message.id === tip.id)) return next;
+            return [
+              ...next,
+              {
+                id: tip.id,
+                role: "assistant" as const,
+                parts: [{ type: "text" as const, text: tip.text }],
+              },
+            ];
+          });
+        }
+        refreshProjectData();
+      },
+      onError: (err) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        // The SSE connection dropped (laptop sleep, wifi blip, deploy) after the
+        // run was already enqueued (we have its runId). The worker is still
+        // executing it — do NOT cancel the run and do NOT stamp the transcript
+        // as failed. Release stream ownership so the resume effect can reattach
+        // once the activeRun poll comes back.
+        if (isConnectionError(err) && ownedRunIdRef.current) {
+          log.warn("stream connection lost; run continues in background", { reason });
+          connectionDropRef.current = true;
+          selfRunRef.current = false;
+          resumedRunIdRef.current = null;
+          ownedRunIdRef.current = null;
+          pendingPingTipRef.current = null;
+          void utils.chat.activeRun.invalidate({ projectId, channelId });
+          return;
+        }
+        pendingPingTipRef.current = null;
+        // Another agent run holds the branch. Usually that lock is stale (a run
+        // killed without releasing it), so clear it and resend once. Never
+        // cancel our own run here — a concurrent retry may already own a runId.
+        if (/workspace is locked/i.test(reason)) {
+          const pending = lockRetryRef.current;
+          if (pending && !pending.retried && pending.epoch === sendEpochRef.current) {
+            pending.retried = true;
+            lockRetryingRef.current = true;
+            void cancelMutationRef.current
+              .mutateAsync({ projectId, branchId })
+              .catch(() => undefined)
+              .then(async () => {
+                lockRetryingRef.current = false;
+                if (pending.epoch !== sendEpochRef.current) return;
+                // regenerate() resends the conversation including the user's
+                // turn; sendMessage() would append a duplicate of it.
+                await regenerateRef.current();
+              });
+            return;
+          }
+          selfRunRef.current = false;
+          setLocalBusy(false);
+          lockRetryRef.current = null;
+          persistFailureStampRef.current(reason);
+          void utils.chat.activeRun.invalidate({ projectId, channelId });
+          return;
+        }
+        const epoch = sendEpochRef.current;
+        selfRunRef.current = false;
+        setLocalBusy(false);
+        persistFailureStampRef.current(reason);
+        // Only the run that failed — never wipe a newer send's ChatRun.
+        releaseOwnedRun(epoch);
+      },
+    });
 
   /**
    * On failure, re-read history from the server (user turns are saved at POST)
    * and merge with whatever the client still holds so a flaky stream/useChat
    * rollback cannot erase messages the user already sent.
    */
+  regenerateRef.current = () => regenerate();
+
   const persistFailureStamp = useCallback(
     (reason?: string) => {
       void (async () => {
@@ -387,7 +426,7 @@ function ChatEngine({
           const rows = await utils.client.chat.messages.query({ projectId, channelId });
           server = rowsToMessages(rows as ChatHistoryRow[]);
         } catch (err) {
-          console.error("failed to reload chat history after error", err);
+          log.error("failed to reload chat history after error", { err });
         }
         const merged = markFailedAssistantMessages(
           mergeTranscriptPreferringUserTurns(server, local),
@@ -398,7 +437,7 @@ function ChatEngine({
         pendingUserTextRef.current = null;
         void persistMutation
           .mutateAsync({ projectId, branchId, channelId, messages: merged, error: reason })
-          .catch((err) => console.error("failed to persist chat transcript", err));
+          .catch((err) => log.error("failed to persist chat transcript", { err }));
       })();
     },
     [setMessages, persistMutation, projectId, branchId, channelId, utils, shell.viewer],
@@ -426,7 +465,7 @@ function ChatEngine({
         setMessages(merged);
         writeLocalTranscript(channelId, merged);
       } catch (err) {
-        console.error("failed to reload chat history after reconnect", err);
+        log.error("failed to reload chat history after reconnect", { err });
         setMessages((prev) => pruneEmptyAssistantMessages(prev));
       }
     })();
@@ -660,6 +699,7 @@ function ChatEngine({
         setLocalBusy(true);
         busyRef.current = true;
       }
+      lockRetryRef.current = wantsAi ? { epoch, retried: false } : null;
 
       const fail = (reason: string) => {
         if (epoch !== sendEpochRef.current) return;
@@ -681,28 +721,11 @@ function ChatEngine({
             }
           }
         })
-        .catch(async (err) => {
+        // useChat reports request failures through onError and resolves this
+        // promise anyway (the stale-lock retry lives there). This only catches
+        // a failure thrown before the request is made.
+        .catch((err) => {
           const reason = err instanceof Error ? err.message : "request failed";
-          if (wantsAi && /workspace is locked/i.test(reason)) {
-            try {
-              // Clear the dead lock, then start a fresh epoch for the retry so a
-              // late cancel from the failed attempt can't touch the new run.
-              await cancelMutation.mutateAsync({ projectId, branchId });
-              if (epoch !== sendEpochRef.current) return;
-              const retryEpoch = ++sendEpochRef.current;
-              ownedRunIdRef.current = null;
-              selfRunRef.current = true;
-              setLocalBusy(true);
-              busyRef.current = true;
-              await sendMessage({ text: trimmed, metadata });
-              if (retryEpoch !== sendEpochRef.current) return;
-              pendingUserTextRef.current = null;
-              return;
-            } catch (retryErr) {
-              fail(retryErr instanceof Error ? retryErr.message : reason);
-              return;
-            }
-          }
           if (wantsAi) fail(reason);
           else {
             if (epoch === sendEpochRef.current) {
@@ -891,7 +914,7 @@ export function CopilotProvider({
         })
         // Stay put rather than opening a channel whose history failed to load:
         // an empty transcript is indistinguishable from lost history.
-        .catch((err) => console.error("failed to load channel history", err));
+        .catch((err) => log.error("failed to load channel history", { err }));
     },
     [activeChannelId, projectId, utils],
   );

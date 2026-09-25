@@ -1,6 +1,9 @@
 import { prisma } from "@foundry/db";
 import { canTransitionStage, STAGES, type Stage, type StageStatus } from "@foundry/domain";
 import { recordAudit } from "./audit";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("graph");
 
 /**
  * Transition a stage's status if the move is legal, recording a
@@ -109,4 +112,70 @@ export async function markDownstreamStale(params: {
     if (ok) flagged.push(state.stage as Stage);
   }
   return flagged;
+}
+
+/**
+ * The single hook every edit to project content goes through.
+ *
+ * It bundles the three things that must happen after any mutation — the stage
+ * starts, downstream stages that were approved go stale, and the product graph
+ * catches up — so that adding a thirty-first AI tool cannot accidentally ship
+ * without graph maintenance. There is deliberately no `update_graph` tool for
+ * the model to call: a maintenance step the model has to remember is a
+ * maintenance step that gets skipped, and then the impact panel is wrong in
+ * front of whoever is watching.
+ *
+ * Note that stage staleness and node staleness are different things and both
+ * are kept. `markDownstreamStale` says "the Verify stage no longer reflects
+ * reality"; the graph says "this specific requirement needs another look".
+ */
+export async function touchProject(params: {
+  workspaceId: string;
+  projectId: string;
+  branchId: string;
+  stage: Stage;
+  actorId: string;
+  actorType?: "USER" | "AGENT" | "SYSTEM";
+  /**
+   * Skips the graph resync. The copilot sets this on every tool and flushes
+   * once when the turn ends, because a single chat run can touch a dozen
+   * artifacts and re-deriving after each one would add seconds to the reply
+   * for a result nobody sees until the end.
+   */
+  deferGraph?: boolean;
+}): Promise<void> {
+  await ensureStageStarted(params);
+  await markDownstreamStale({ ...params, changedStage: params.stage });
+  if (params.deferGraph) return;
+  await syncGraphQuietly(params);
+}
+
+/**
+ * Resyncs the graph, swallowing failures.
+ *
+ * The graph is an index over content that has already been saved. If deriving
+ * it throws — a malformed CAD import, a schematic the netlist cannot walk —
+ * the user's edit still succeeded, and failing their save to report a stale
+ * index would be the wrong trade. The error is logged and the next sync picks
+ * it up.
+ */
+async function syncGraphQuietly(params: {
+  workspaceId: string;
+  projectId: string;
+  branchId: string;
+  actorId: string;
+  actorType?: "USER" | "AGENT" | "SYSTEM";
+}): Promise<void> {
+  try {
+    const { syncProductGraph } = await import("./graph/sync");
+    await syncProductGraph(params);
+  } catch (error) {
+    // The user's save already succeeded, so this does not fail the request —
+    // but a graph that silently stops syncing is a bug worth being told about.
+    log.error("graph sync failed", {
+      projectId: params.projectId,
+      branchId: params.branchId,
+      err: error,
+    });
+  }
 }

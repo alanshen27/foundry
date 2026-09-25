@@ -2,6 +2,9 @@ import "server-only";
 import { Queue } from "bullmq";
 import type IORedis from "ioredis";
 import { getRedisConnection } from "../chat-run/queue";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("queue");
 
 export const MEDIA_JOB_QUEUE_NAME = "media-jobs";
 
@@ -31,7 +34,7 @@ export function getMediaJobQueue(): Queue {
       },
     });
     queue.on("error", (err) => {
-      console.error("[redis:queue:media]", err instanceof Error ? err.message : err);
+      log.error("media queue error", { err });
     });
   }
   return queue;
@@ -40,7 +43,7 @@ export function getMediaJobQueue(): Queue {
 export async function enqueueMediaJob(jobId: string): Promise<"queued" | "exists"> {
   try {
     await getMediaJobQueue().add("execute", { jobId }, { jobId, attempts: 1 });
-    console.log(`[redis:queue] enqueued media job ${jobId}`);
+    log.info("enqueued media job", { jobId });
     return "queued";
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

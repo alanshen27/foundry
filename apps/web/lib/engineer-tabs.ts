@@ -10,6 +10,7 @@ export type EngineerDocKind =
   | "schematic"
   | "pcb"
   | "code"
+  | "sourcing"
   | "checks"
   | "ideate"
   | "verify"
@@ -54,6 +55,8 @@ export function labelForKind(kind: EngineerDocKind): string {
       return "PCB";
     case "code":
       return "Repository";
+    case "sourcing":
+      return "Sourcing";
     case "checks":
       return "Checks";
     case "ideate":
@@ -89,10 +92,13 @@ export function tabFromViewParam(view: string | undefined, partId?: string | nul
   if (view === "checks") {
     return { key: "checks", kind: "checks", label: "Checks" };
   }
+  if (view === "sourcing") {
+    return { key: "sourcing", kind: "sourcing", label: "Sourcing" };
+  }
   if (view === "ideate" || view === "verify" || view === "launch" || view === "renders") {
     return { key: view, kind: view, label: labelForKind(view) };
   }
-  // sourcing / design / missing → home
+  // design / missing → home
   return ASSEMBLY_TAB;
 }
 

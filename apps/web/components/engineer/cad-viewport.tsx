@@ -45,6 +45,9 @@ import {
 } from "@/lib/cad/viewport-input";
 import { safeCadError } from "@/lib/cad/safe-error";
 import { cn } from "@/lib/utils";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("cad-viewport");
 
 export type CadView = "orbit" | "iso" | "front" | "top" | "right" | "back" | "left" | "bottom";
 
@@ -600,8 +603,8 @@ export function CadViewport({
     try {
       await sendCmd(rtc, cmd);
       return true;
-    } catch {
-      console.warn("A CAD viewport command could not be completed.");
+    } catch (err) {
+      log.warn("a CAD viewport command could not be completed", { err });
       return false;
     }
   }, []);

@@ -6,9 +6,13 @@ import {
   streamText,
   type ModelMessage,
   type UIMessage,
+  type ToolSet,
 } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { buildProjectTools, withToolLogging } from "@/server/ai/tools";
+import { buildGraphTools } from "@/server/ai/graph-tools";
+import { addStepUsage, emptyUsage, recordRunUsage } from "@/server/ai-usage";
+import { createLogger } from "@foundry/observability";
 import { appOrigin } from "@/server/app-origin";
 import { COPILOT_SYSTEM_PROMPT } from "./prompt";
 import {
@@ -27,6 +31,8 @@ import {
   stripProviderExecutedToolParts,
   validateResumableUIMessages,
 } from "./sanitize-messages";
+
+const log = createLogger("chat-run");
 
 function isMissingToolResultsError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -72,7 +78,7 @@ function isDuplicateProviderItemError(err: unknown): boolean {
 async function toModelMessages(
   uiMessages: UIMessage[],
 
-  tools: any,
+  tools: ToolSet,
 ): Promise<{ ui: UIMessage[]; model: ModelMessage[] }> {
   const sanitized = sanitizeUiMessagesForModel(uiMessages);
   try {
@@ -85,10 +91,7 @@ async function toModelMessages(
     return { ui: sanitized, model };
   } catch (err) {
     if (!isMissingToolResultsError(err) && !isInvalidPromptError(err)) throw err;
-    console.warn(
-      "[chat-run] tool history poisoned; retrying without tool parts",
-      err instanceof Error ? err.message : err,
-    );
+    log.warn("tool history poisoned; retrying without tool parts", { err });
     const stripped = stripAllToolParts(sanitized);
     const model = pairToolCallsWithResults(
       await convertToModelMessages(stripped, {
@@ -126,10 +129,10 @@ async function failDeadRunningAttempt(
     data: { status: "ERROR", error, finishedAt: new Date() },
   });
   if (takeover.count === 0) {
-    console.warn(`[chat-run ${run.id}] skip execute — live on another worker or terminal`);
+    log.warn("skip execute: live on another worker or already terminal", { runId: run.id });
     return;
   }
-  console.warn(`[chat-run ${run.id}] dead RUNNING attempt — failed cleanly (no re-run)`);
+  log.warn("dead RUNNING attempt failed cleanly (not re-run)", { runId: run.id });
   let inputMessages: UIMessage[] = [];
   try {
     inputMessages = await validateResumableUIMessages(run.inputMessages as unknown[]);
@@ -137,7 +140,7 @@ async function failDeadRunningAttempt(
     // Unparseable history — persist from events alone.
   }
   await persistFailedRunFromEvents({ runId: run.id, scope, inputMessages, error }).catch((err) =>
-    console.error(`[chat-run ${run.id}] takeover persist failed`, err),
+    log.error("takeover persist failed", { runId: run.id, err }),
   );
   await publishRunFinished(run.id, run.channelId, "error", error);
 }
@@ -148,6 +151,9 @@ export async function executeChatRun(runId: string): Promise<void> {
   if (!run || run.status === "DONE" || run.status === "ERROR" || run.status === "CANCELLED") return;
 
   const channelId = run.channelId;
+  const runLog = log.child({ runId, projectId: run.projectId });
+  // Captured because `finalize` is a closure and does not see the null check.
+  const actorId = run.actorId;
   const scope: ChannelScope = {
     projectId: run.projectId,
     branchId: run.branchId,
@@ -193,10 +199,15 @@ export async function executeChatRun(runId: string): Promise<void> {
     const at = ++seq;
     progressWrites = progressWrites
       .then(() => publishRunChunk(runId, channelId, at, chunk))
-      .catch((err) => console.warn(`[chat-run ${runId}] cad progress publish failed`, err));
+      .catch((err) => runLog.warn("cad progress publish failed", { err }));
   });
 
-  const tools: any = withToolLogging(
+  // Set by any tool that changes project content; flushed once in finalize.
+  const graphDirty = { current: false };
+  // Summed per step so a failed or cancelled run still records what it spent.
+  let usage = emptyUsage();
+
+  const tools = withToolLogging(
     {
       ...buildProjectTools({
         userId: run.actorId,
@@ -205,6 +216,12 @@ export async function executeChatRun(runId: string): Promise<void> {
         origin: appOrigin(),
         onCadProgress: cadProgress.emit,
         onCadProgressEnd: cadProgress.end,
+        graphDirty,
+      }),
+      ...buildGraphTools({
+        userId: run.actorId,
+        projectId: run.projectId,
+        branchId: run.branchId,
       }),
       web_search: openai.tools.webSearch({}),
     },
@@ -260,6 +277,34 @@ export async function executeChatRun(runId: string): Promise<void> {
     if (finalized) return;
     finalized = true;
 
+    await recordRunUsage(runId, env.AI_MODEL, usage);
+
+    // One graph resync per turn, however many artifacts the model touched.
+    // Runs even on error or cancel: whatever was written before the failure is
+    // still written, and a graph that lags the database is worse than one
+    // rebuilt from a half-finished turn.
+    if (graphDirty.current) {
+      try {
+        const { syncProductGraph } = await import("@/server/graph/sync");
+        // ChatRun carries no workspaceId, and the audit envelope requires one.
+        const project = await prisma.project.findUnique({
+          where: { id: scope.projectId },
+          select: { workspaceId: true },
+        });
+        if (project) {
+          await syncProductGraph({
+            projectId: scope.projectId,
+            branchId: scope.branchId,
+            workspaceId: project.workspaceId,
+            actorId,
+            actorType: "AGENT",
+          });
+        }
+      } catch (err) {
+        runLog.error("graph sync failed", { err });
+      }
+    }
+
     let messages = latestMessages;
     // If the stream died before onEnd, rebuild whatever chunks we already
     // published so the user still has the assistant turn after refresh.
@@ -268,7 +313,7 @@ export async function executeChatRun(runId: string): Promise<void> {
         const { rebuildUiMessagesFromRunEvents } = await import("./persist");
         messages = await rebuildUiMessagesFromRunEvents(runId, rawMessages);
       } catch (err) {
-        console.error(`[chat-run ${runId}] rebuild before finalize failed`, err);
+        runLog.error("rebuild before finalize failed", { err });
       }
     }
 
@@ -291,7 +336,7 @@ export async function executeChatRun(runId: string): Promise<void> {
     }
 
     await persistRunMessages(scope, messages).catch((err) => {
-      console.error(`[chat-run ${runId}] failed to persist messages`, err);
+      runLog.error("failed to persist messages", { err });
     });
 
     // Guarded: if cancel/stale/takeover already terminalized this run, that
@@ -331,31 +376,34 @@ export async function executeChatRun(runId: string): Promise<void> {
         // renders → fixes) can legitimately need ~20 steps; a low cap makes
         // the run stop mid-build with partial output.
         stopWhen: stepCountIs(24),
-        onStepFinish: ({ toolCalls, toolResults, finishReason }) => {
-          if (toolCalls.length === 0 && toolResults.length === 0) {
-            console.log(`[chat-run ${runId}] step finish reason=${finishReason} (no tools)`);
-            return;
-          }
-          console.log(
-            `[chat-run ${runId}] step finish reason=${finishReason} tools=${toolCalls
-              .map((c) => c.toolName)
-              .join(",")}`,
-          );
+        ...(env.AI_MAX_OUTPUT_TOKENS ? { maxOutputTokens: env.AI_MAX_OUTPUT_TOKENS } : {}),
+        onStepFinish: ({ toolCalls, toolResults, finishReason, usage: stepUsage }) => {
+          usage = addStepUsage(usage, stepUsage);
+          runLog.info("step finished", {
+            finishReason,
+            step: usage.stepCount,
+            tokens: stepUsage?.totalTokens,
+            tools: toolCalls.map((c) => c.toolName),
+          });
+          // Tool arguments and results can carry prompt text and project
+          // content, so they stay at debug, which production does not emit.
           for (const call of toolCalls) {
-            console.log(
-              `[chat-run ${runId}] tool-call ${call.toolName}`,
-              typeof call.input === "string"
-                ? call.input.slice(0, 200)
-                : JSON.stringify(call.input)?.slice(0, 200),
-            );
+            runLog.debug("tool call", {
+              tool: call.toolName,
+              input:
+                typeof call.input === "string"
+                  ? call.input.slice(0, 200)
+                  : JSON.stringify(call.input)?.slice(0, 200),
+            });
           }
           for (const tr of toolResults) {
-            console.log(
-              `[chat-run ${runId}] tool-result ${tr.toolName}`,
-              typeof tr.output === "string"
-                ? tr.output.slice(0, 200)
-                : JSON.stringify(tr.output)?.slice(0, 200),
-            );
+            runLog.debug("tool result", {
+              tool: tr.toolName,
+              output:
+                typeof tr.output === "string"
+                  ? tr.output.slice(0, 200)
+                  : JSON.stringify(tr.output)?.slice(0, 200),
+            });
           }
         },
       });
@@ -386,7 +434,7 @@ export async function executeChatRun(runId: string): Promise<void> {
             sawStreamMessages = true;
           })
           .catch((err) => {
-            console.warn(`[chat-run ${runId}] stream checkpoint failed`, err);
+            runLog.warn("stream checkpoint failed", { err });
           })
           .finally(() => {
             checkpointing = null;
@@ -429,13 +477,13 @@ export async function executeChatRun(runId: string): Promise<void> {
       const recoverable =
         missingItem || duplicateItem || isMissingToolResultsError(err) || isInvalidPromptError(err);
       if (!recoverable || abort.signal.aborted) throw err;
-      console.warn(
+      runLog.warn(
         duplicateItem
-          ? "[chat-run] duplicate provider item id; retrying without provider-executed tool parts"
+          ? "duplicate provider item id; retrying without provider-executed tool parts"
           : missingItem
-            ? "[chat-run] stale provider item reference; retrying without provider-executed tool parts"
-            : "[chat-run] prompt/tool history error during stream; retrying without tool parts",
-        err instanceof Error ? err.message : err,
+            ? "stale provider item reference; retrying without provider-executed tool parts"
+            : "prompt/tool history error during stream; retrying without tool parts",
+        { err },
       );
       // Reasoning / itemIds are already stripped in sanitize. A missing or
       // duplicate item id after that is almost always a provider-executed tool
@@ -486,7 +534,7 @@ export async function executeChatRun(runId: string): Promise<void> {
         scope,
         inputMessages: rawMessages,
         error: "run ended without finalize",
-      }).catch((err) => console.error(`[chat-run ${runId}] last-resort persist failed`, err));
+      }).catch((err) => runLog.error("last-resort persist failed", { err }));
     }
     cancelSub.leave();
   }

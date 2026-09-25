@@ -22,7 +22,9 @@ export default tseslint.config(
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
-      "@typescript-eslint/no-explicit-any": "off",
+      // The codebase is at two deliberate uses. Warn so a third is a visible
+      // choice in review rather than something that slips in unnoticed.
+      "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/consistent-type-imports": ["warn", { fixStyle: "inline-type-imports" }],
     },
   },

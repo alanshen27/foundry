@@ -6,6 +6,7 @@ import { SignalPageHeader } from "@/components/signal-page-header";
 import { ThemeSettingsPanel } from "@/components/theme-picker";
 import { UserAvatar } from "@/components/user-avatar";
 import { getCurrentUser } from "@/server/session";
+import { workspaceUsage } from "@/server/ai-usage";
 import { InviteMemberForm } from "./invite-member-form";
 
 export default async function WorkspaceSettingsPage({
@@ -48,6 +49,8 @@ export default async function WorkspaceSettingsPage({
 
   const myRole = workspace.memberships.find((m) => m.userId === user.id)?.role;
   const canManage = myRole === "OWNER" || myRole === "ADMIN";
+  const usage = await workspaceUsage(workspace.id);
+  const budgetShare = usage.budget !== null ? Math.min(1, usage.totalTokens / usage.budget) : null;
 
   return (
     <HomeShell
@@ -68,6 +71,50 @@ export default async function WorkspaceSettingsPage({
         glyphSeed={`${workspace.id}-settings`}
         className="mb-8"
       />
+
+      <section className="mb-10">
+        <h2 className="text-muted-foreground mb-3 font-mono text-[11px] font-medium tracking-[0.1em] uppercase">
+          Copilot usage · last {usage.windowHours}h
+        </h2>
+        <Card className="gap-3 rounded-none p-4">
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+            <p className="text-2xl font-semibold tabular-nums">
+              {usage.totalTokens.toLocaleString("en-US")}
+              <span className="text-muted-foreground ml-1.5 text-sm font-normal">tokens</span>
+            </p>
+            <p className="text-muted-foreground text-sm tabular-nums">
+              {usage.runs} run{usage.runs === 1 ? "" : "s"}
+            </p>
+          </div>
+          {usage.budget !== null && budgetShare !== null ? (
+            <div className="flex flex-col gap-1.5">
+              <div
+                className="bg-muted h-1.5 w-full overflow-hidden"
+                role="meter"
+                aria-label="Share of daily copilot budget used"
+                aria-valuemin={0}
+                aria-valuemax={usage.budget}
+                aria-valuenow={usage.totalTokens}
+              >
+                <div
+                  className={budgetShare >= 1 ? "bg-destructive h-full" : "bg-primary h-full"}
+                  style={{ width: `${Math.round(budgetShare * 100)}%` }}
+                />
+              </div>
+              <p className="text-muted-foreground text-xs">
+                {budgetShare >= 1
+                  ? "Budget reached — new copilot runs are paused until older runs age out of the window."
+                  : `${Math.round(budgetShare * 100)}% of the ${usage.budget.toLocaleString("en-US")}-token daily budget.`}
+              </p>
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-xs">
+              No daily budget is set, so usage is recorded but not capped. Set
+              AI_WORKSPACE_DAILY_TOKEN_BUDGET to cap it.
+            </p>
+          )}
+        </Card>
+      </section>
 
       <section className="mb-10">
         <h2 className="text-muted-foreground mb-3 font-mono text-[11px] font-medium tracking-[0.1em] uppercase">

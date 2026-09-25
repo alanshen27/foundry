@@ -1,4 +1,7 @@
 import { isToolUIPart, validateUIMessages, type ModelMessage, type UIMessage } from "ai";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("chat");
 
 /** Terminal tool states that include a result the model can consume. */
 const COMPLETE_TOOL_STATES = new Set(["output-available", "output-error", "output-denied"]);
@@ -154,10 +157,7 @@ export async function validateResumableUIMessages(messages: unknown[]): Promise<
   try {
     return await validateUIMessages({ messages: repaired });
   } catch (err) {
-    console.warn(
-      "[chat] transcript failed validation; dropping unusable messages",
-      err instanceof Error ? err.message : err,
-    );
+    log.warn("transcript failed validation; dropping unusable messages", { err });
   }
   const kept: UIMessage[] = [];
   for (const message of repaired) {

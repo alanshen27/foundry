@@ -20,7 +20,15 @@ export function parseCadParams(script: string): CadParam[] {
   let offset = 0;
   for (const line of script.split("\n")) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("//")) {
+    // Annotations like `@settings(defaultLengthUnit = mm, kclVersion = 1.0)`
+    // head almost every Zoo-generated file. Treating one as the first modeling
+    // statement ended the parameter block before it began, so real Zoo models
+    // showed no parameters at all.
+    if (
+      !trimmed ||
+      trimmed.startsWith("//") ||
+      /^@[A-Za-z_]\w*\(.*\)\s*(?:\/\/.*)?$/.test(trimmed)
+    ) {
       offset += line.length + 1;
       continue;
     }

@@ -86,6 +86,59 @@ root, which build commands do not have. If a launch ever fails with
 executable, the native image is short a system library and the service needs
 to move to a Docker runtime built on `mcr.microsoft.com/playwright`.
 
+## Schema changes are not applied by the deploy
+
+`render.yaml` builds with `db generate` and `next build` — it runs **no DDL**.
+A deploy that ships new Prisma models boots fine and then fails with `P2021`
+(table does not exist) on the first query that touches them.
+
+Schema changes now ship as Prisma migrations in
+`packages/db/prisma/migrations/`. Apply them against the session-pooler URL
+**before** the web and worker services pick up the new code:
+
+```bash
+DIRECT_URL="postgresql://…:5432/postgres" pnpm db:migrate:deploy
+```
+
+`migrate deploy` only runs migrations that have not been applied and never
+resets or prompts. Never run `prisma migrate dev` or `migrate reset` against
+production — those are the commands that offer to drop the database.
+
+### One-time: baseline production
+
+Production was built with `db push`, so it has no migration history yet and
+`migrate deploy` would try to recreate tables that already exist. Once, before
+the first `migrate deploy`:
+
+```bash
+# Production already matches 0_init (everything up to the product graph).
+DIRECT_URL="…" pnpm --filter @foundry/db exec dotenv -e ../../.env -- \
+  prisma migrate resolve --applied 0_init
+
+# Check what is still pending — expect exactly the product graph migration.
+DIRECT_URL="…" pnpm db:migrate:status
+
+# Apply it.
+DIRECT_URL="…" pnpm db:migrate:deploy
+```
+
+If someone already ran `db:push` with the product graph schema, mark that
+migration applied too (`migrate resolve --applied 20260916000000_product_graph`)
+instead of deploying it, then confirm with `pnpm db:migrate:check`, which
+exits non-zero if the database and `schema.prisma` disagree.
+
+Once production is baselined, `pnpm db:migrate:deploy` can move into the
+Render build or a pre-deploy command. Do not add it there before the baseline:
+it would fail every deploy until then.
+
+The Product Graph (`ProductNode`, `ProductEdge`, and four nullable power
+columns on `Component`) is one such change. Existing projects need no
+backfill: a branch's graph is built the first time its content is edited or
+its impact panel is opened.
+
+Locally, `pnpm db:push` and `pnpm db:seed` read `.env.local` before `.env`, so
+a `.env.local` pointing at a local Postgres keeps those commands off production.
+
 ## After deploy
 
 - Supabase Auth → URL configuration: Site URL = `APP_ORIGIN`; add

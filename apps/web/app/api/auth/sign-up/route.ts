@@ -12,6 +12,7 @@ import {
 import { authCallbackUrl } from "@/server/auth-redirect";
 import { createWorkspaceForOwner, defaultWorkspaceName } from "@/server/create-workspace";
 import { upsertSupabaseUser } from "@/server/session";
+import { clientIp, policies, rateLimitAll, tooManyRequests } from "@/server/rate-limit";
 
 const bodySchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -27,6 +28,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 });
   }
   const { name, email, password } = parsed.data;
+
+  const limited = await rateLimitAll([
+    { policy: policies().signUpIp, identifier: clientIp(request) },
+  ]);
+  if (!limited.allowed) {
+    return tooManyRequests(limited, "Too many accounts created from here. Try again later.");
+  }
 
   if (env.AUTH_MODE === "local") {
     if (!env.AUTH_SECRET) {

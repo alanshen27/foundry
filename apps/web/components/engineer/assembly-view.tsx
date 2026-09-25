@@ -16,6 +16,9 @@ import { normalizePcbDoc } from "@/lib/pcb/doc";
 import { formatCents } from "@/lib/format";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("assembly");
 
 export type AssemblyOpenTarget =
   "pcb" | "schematic" | { editor: "model"; componentId?: string; label?: string };
@@ -127,13 +130,15 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
 
   useEffect(() => {
     if (!product || !viewport) {
-      console.warn("[Assembly] no assembly/product.kcl to render");
+      log.debug("no assembly/product.kcl to render");
       return;
     }
     // The assembled source is a build artefact, not what the editor shows, so
     // it stays available while developing — but printing every project's
     // geometry into a user's console is noise.
     if (process.env.NODE_ENV === "production") return;
+    // Deliberately raw console: a collapsible devtools group of the generated
+    // source is the point here, and it never runs in production.
     console.groupCollapsed(`[Assembly] product assembly · ${product.path}`);
     console.log(viewport.script);
     if (viewport.projectFiles) {

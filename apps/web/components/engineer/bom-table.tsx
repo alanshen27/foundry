@@ -1,12 +1,17 @@
 "use client";
 
-import { ExternalLink, Package } from "lucide-react";
+import { ExternalLink, GitBranch, Package } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
+import type { LifecycleStatus, SourcingQuote } from "@foundry/sourcing";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/empty-state";
+import { ImpactPanel } from "@/components/graph/impact-panel";
+import { StaleBadge, useStaleNodes } from "@/components/graph/stale-badge";
+import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { dollarsToCents, formatCents } from "@/lib/format";
 
@@ -23,6 +28,20 @@ export type BomComponent = {
   unitCostCents: number | null;
   sourceUrl: string | null;
   imageUrl: string | null;
+};
+
+const LIFECYCLE_STYLE: Record<LifecycleStatus, string> = {
+  ACTIVE: "border-transparent text-muted-foreground",
+  NRND: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  EOL: "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400",
+  UNKNOWN: "border-transparent text-muted-foreground/60",
+};
+
+const LIFECYCLE_LABEL: Record<LifecycleStatus, string> = {
+  ACTIVE: "Active",
+  NRND: "NRND",
+  EOL: "EOL",
+  UNKNOWN: "—",
 };
 
 function sourceHost(url: string): string {
@@ -109,6 +128,8 @@ export function BomTable({
   discipline,
   components,
   isLoading = false,
+  quotes,
+  quotesLoading = false,
 }: {
   projectId: string;
   branchId: string;
@@ -116,6 +137,9 @@ export function BomTable({
   discipline: Discipline;
   components: BomComponent[];
   isLoading?: boolean;
+  /** Keyed by component id. Absent when this section has no estimates. */
+  quotes?: Map<string, SourcingQuote>;
+  quotesLoading?: boolean;
 }) {
   const router = useRouter();
   const utils = trpc.useUtils();
@@ -125,6 +149,11 @@ export function BomTable({
   };
   const create = trpc.engineer.createComponent.useMutation({ onSuccess: invalidate });
   const remove = trpc.engineer.deleteComponent.useMutation({ onSuccess: invalidate });
+
+  // The BOM is where a component actually gets swapped, so it is where the
+  // question "what does that break?" is worth asking.
+  const stale = useStaleNodes(projectId, branchId);
+  const [impactFor, setImpactFor] = useState<BomComponent | null>(null);
 
   const [name, setName] = useState("");
   const [partNumber, setPartNumber] = useState("");
@@ -235,82 +264,194 @@ export function BomTable({
             : "Components will appear here once added."}
         </EmptyState>
       ) : (
-        <table className="w-full text-sm">
-          <thead className="text-muted-foreground text-left text-xs uppercase">
-            <tr className="border-b">
-              <th className="py-2 pr-2 font-medium" colSpan={2}>
-                Part
-              </th>
-              <th className="py-2 font-medium">Part #</th>
-              <th className="py-2 font-medium">Source</th>
-              <th className="py-2 text-right font-medium">Qty</th>
-              <th className="py-2 text-right font-medium">Unit</th>
-              <th className="py-2 text-right font-medium">Ext.</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {components.map((c) => (
-              <tr key={c.id} className="border-border/60 border-b">
-                <td className="py-2.5 pr-2 align-middle">
-                  <ComponentPreview name={c.name} imageUrl={c.imageUrl} sourceUrl={c.sourceUrl} />
-                </td>
-                <td className="py-2.5 align-middle">
-                  <div className="flex flex-col gap-0.5">
-                    <span className="font-medium">
-                      {c.refDes ? (
-                        <span className="text-muted-foreground mr-1.5 font-mono text-xs font-normal">
-                          {c.refDes}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[880px] text-sm">
+            <thead className="text-muted-foreground text-left text-xs uppercase">
+              <tr className="border-b">
+                <th className="py-2 pr-2 font-medium" colSpan={2}>
+                  Part
+                </th>
+                <th className="w-24 py-2 pr-3 font-medium">Part #</th>
+                <th className="w-24 py-2 pr-3 font-medium">Source</th>
+                <th className="w-14 py-2 pr-3 text-right font-medium">Qty</th>
+                <th className="w-20 py-2 pr-3 text-right font-medium">Unit</th>
+                <th className="w-20 py-2 pr-3 text-right font-medium">Ext.</th>
+                <th className="w-24 py-2 pr-3 font-medium">Lifecycle</th>
+                <th className="w-28 py-2 pr-3 text-right font-medium">Lead · Stock</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {components.map((c) => {
+                const quote = quotes?.get(c.id);
+                const estimated = c.unitCostCents == null && quote?.unitPriceCents != null;
+                const effectiveUnitCents = c.unitCostCents ?? quote?.unitPriceCents ?? null;
+                return (
+                  <tr key={c.id} className="border-border/60 border-b">
+                    <td className="py-2.5 pr-2 align-middle">
+                      <ComponentPreview
+                        name={c.name}
+                        imageUrl={c.imageUrl}
+                        sourceUrl={c.sourceUrl}
+                      />
+                    </td>
+                    <td className="py-2.5 align-middle">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="flex flex-wrap items-center gap-1.5 font-medium">
+                          {c.refDes ? (
+                            <span className="text-muted-foreground font-mono text-xs font-normal">
+                              {c.refDes}
+                            </span>
+                          ) : null}
+                          {c.name}
+                          <StaleBadge node={stale.byRefKey.get(`component:${c.id}`)} />
+                        </span>
+                        {c.manufacturer ? (
+                          <span className="text-muted-foreground text-xs">{c.manufacturer}</span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="text-muted-foreground py-2.5 align-middle font-mono text-xs">
+                      {c.partNumber ?? "—"}
+                    </td>
+                    <td className="py-2.5 align-middle">
+                      {c.sourceUrl ? (
+                        <a
+                          href={c.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-foreground inline-flex max-w-36 items-center gap-1 truncate underline-offset-2 hover:underline"
+                          title={c.sourceUrl}
+                        >
+                          <ExternalLink className="size-3 shrink-0 opacity-60" aria-hidden />
+                          <span className="truncate text-xs">{sourceHost(c.sourceUrl)}</span>
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 text-right align-middle">{c.quantity}</td>
+                    <td className="py-2.5 text-right align-middle">
+                      {formatCents(effectiveUnitCents)}
+                      {estimated ? (
+                        <span
+                          className="text-muted-foreground ml-1 text-[10px]"
+                          title="No cost entered — simulated distributor estimate"
+                        >
+                          (est.)
                         </span>
                       ) : null}
-                      {c.name}
-                    </span>
-                    {c.manufacturer ? (
-                      <span className="text-muted-foreground text-xs">{c.manufacturer}</span>
-                    ) : null}
-                  </div>
+                    </td>
+                    <td className="py-2.5 text-right align-middle">
+                      {formatCents((effectiveUnitCents ?? 0) * c.quantity)}
+                    </td>
+                    <td className="py-2.5 align-middle">
+                      {quote ? (
+                        <span
+                          className={cn(
+                            "inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+                            LIFECYCLE_STYLE[quote.lifecycleStatus],
+                          )}
+                        >
+                          {LIFECYCLE_LABEL[quote.lifecycleStatus]}
+                        </span>
+                      ) : quotesLoading ? (
+                        <Skeleton className="h-4 w-12" />
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="text-muted-foreground py-2.5 text-right align-middle text-xs">
+                      {quote
+                        ? `${quote.leadTimeDays ?? "—"} d · ${quote.stockQty ?? "—"}`
+                        : quotesLoading
+                          ? "…"
+                          : "—"}
+                    </td>
+                    <td className="py-2.5 text-right align-middle">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => setImpactFor(c)}
+                          title={`What depends on ${c.name}?`}
+                          aria-label={`What depends on ${c.name}?`}
+                        >
+                          <GitBranch className="size-3.5" aria-hidden />
+                        </Button>
+                        {canEdit ? (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => remove.mutate({ id: c.id })}
+                            disabled={remove.isPending}
+                          >
+                            Delete
+                          </Button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-border/60 border-t font-medium">
+                <td className="py-2 pr-2" colSpan={6}>
+                  Section total
                 </td>
-                <td className="text-muted-foreground py-2.5 align-middle font-mono text-xs">
-                  {c.partNumber ?? "—"}
-                </td>
-                <td className="py-2.5 align-middle">
-                  {c.sourceUrl ? (
-                    <a
-                      href={c.sourceUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-foreground inline-flex max-w-36 items-center gap-1 truncate underline-offset-2 hover:underline"
-                      title={c.sourceUrl}
-                    >
-                      <ExternalLink className="size-3 shrink-0 opacity-60" aria-hidden />
-                      <span className="truncate text-xs">{sourceHost(c.sourceUrl)}</span>
-                    </a>
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
+                <td className="py-2 text-right">
+                  {formatCents(
+                    components.reduce((sum, c) => {
+                      const unit = c.unitCostCents ?? quotes?.get(c.id)?.unitPriceCents ?? 0;
+                      return sum + unit * c.quantity;
+                    }, 0),
                   )}
-                </td>
-                <td className="py-2.5 text-right align-middle">{c.quantity}</td>
-                <td className="py-2.5 text-right align-middle">{formatCents(c.unitCostCents)}</td>
-                <td className="py-2.5 text-right align-middle">
-                  {formatCents((c.unitCostCents ?? 0) * c.quantity)}
-                </td>
-                <td className="py-2.5 text-right align-middle">
-                  {canEdit ? (
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => remove.mutate({ id: c.id })}
-                      disabled={remove.isPending}
-                    >
-                      Delete
-                    </Button>
+                  {components.some(
+                    (c) => c.unitCostCents == null && quotes?.get(c.id)?.unitPriceCents != null,
+                  ) ? (
+                    <span className="text-muted-foreground ml-1 text-[10px] font-normal">
+                      (est.)
+                    </span>
                   ) : null}
                 </td>
+                <td colSpan={3} />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </tfoot>
+          </table>
+        </div>
       )}
+
+      {/* Portalled: the workspace renders each tab in an absolutely positioned
+          z-10 layer, and a fixed overlay inside that stacking context cannot
+          rise above the z-20 header — its close button ends up underneath. */}
+      {impactFor && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-50 flex justify-end bg-black/20"
+              role="dialog"
+              aria-modal
+            >
+              <button
+                type="button"
+                className="flex-1 cursor-default"
+                aria-label="Close impact panel"
+                onClick={() => setImpactFor(null)}
+              />
+              <ImpactPanel
+                projectId={projectId}
+                branchId={branchId}
+                refKey={`component:${impactFor.id}`}
+                title={
+                  impactFor.refDes ? `${impactFor.refDes} · ${impactFor.name}` : impactFor.name
+                }
+                canEdit={canEdit}
+                onClose={() => setImpactFor(null)}
+              />
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

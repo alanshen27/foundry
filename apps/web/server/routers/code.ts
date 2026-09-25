@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@foundry/db";
 import { protectedProcedure, router } from "../trpc";
 import { requireProjectCapability } from "../access";
-import { ensureStageStarted, markDownstreamStale } from "../stage-state";
+import { ensureStageStarted, touchProject } from "../stage-state";
 
 const pathSchema = z
   .string()
@@ -113,11 +113,11 @@ export const codeRouter = router({
         where: { id: input.id },
         data: { content: input.content, updatedById: ctx.user.id },
       });
-      await markDownstreamStale({
+      await touchProject({
         workspaceId: project.workspaceId,
         projectId: file.projectId,
         branchId: file.branchId,
-        changedStage: "ENGINEER",
+        stage: "ENGINEER",
         actorId: ctx.user.id,
       });
       return { id: updated.id, updatedAt: updated.updatedAt };

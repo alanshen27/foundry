@@ -3,6 +3,9 @@ import type { CadPort, CadProjectIterateOptions, CadResult } from "./port";
 import { ZooMcpClient } from "./mcp";
 import { isPlausibleZooOpId } from "./op-id";
 import { zookeeperPrompt } from "./zookeeper";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("zoo");
 
 export { isPlausibleZooOpId } from "./op-id";
 
@@ -76,11 +79,11 @@ async function tryFetchCompleted(
     }
     const done = completedResult(op, id);
     if (done?.ok) {
-      console.log(`[zoo] id=${id} completed on final fetch kclChars=${done.data.kcl.length}`);
+      log.info("completed on final fetch", { zooOpId: id, kclChars: done.data.kcl.length });
     }
     return done;
   } catch (err) {
-    console.warn(`[zoo] final fetch failed id=${id}:`, asError(err));
+    log.warn("final fetch failed", { zooOpId: id, reason: asError(err) });
     return null;
   }
 }
@@ -94,12 +97,12 @@ async function pollTextToCad(
   id: string,
   signal?: AbortSignal,
 ): Promise<CadResult<{ kcl: string; id: string }>> {
-  console.log(`[zoo] polling text-to-CAD part id=${id} (up to ~${(MAX_POLLS * POLL_MS) / 1000}s)`);
+  log.info("polling text-to-CAD part", { zooOpId: id, maxSeconds: (MAX_POLLS * POLL_MS) / 1000 });
   for (let i = 0; i < MAX_POLLS; i++) {
     if (signal?.aborted) {
       const rescued = await tryFetchCompleted(client, id);
       if (rescued) return rescued;
-      console.warn(`[zoo] poll cancelled id=${id} after ${i * POLL_MS}ms`);
+      log.warn("poll cancelled", { zooOpId: id, ms: i * POLL_MS });
       return {
         ok: false,
         error: `CAD generation cancelled (zooOpId=${id}). Call text_to_cad again with zooOpId to resume once Zoo finishes.`,
@@ -110,32 +113,34 @@ async function pollTextToCad(
     try {
       op = await ml.get_text_to_cad_part_for_user({ client, id });
     } catch (err) {
-      console.warn(`[zoo] get_text_to_cad_part_for_user failed id=${id}:`, asError(err));
+      log.warn("get_text_to_cad_part_for_user failed", { zooOpId: id, reason: asError(err) });
       return { ok: false, error: `${asError(err)} (zooOpId=${id})` };
     }
 
     if (op.status === "failed") {
-      console.warn(`[zoo] id=${id} failed:`, op.error ?? "unknown");
+      log.warn("operation failed", { zooOpId: id, reason: op.error ?? "unknown" });
       return { ok: false, error: `${op.error ?? "Zoo CAD operation failed"} (zooOpId=${id})` };
     }
     const done = completedResult(op, id);
     if (done) {
       if (done.ok) {
-        console.log(
-          `[zoo] id=${id} completed kclChars=${done.data.kcl.length} after ~${(i + 1) * POLL_MS}ms`,
-        );
+        log.info("completed", {
+          zooOpId: id,
+          kclChars: done.data.kcl.length,
+          ms: (i + 1) * POLL_MS,
+        });
       }
       return done;
     }
 
     if (i > 0 && i % 8 === 0) {
-      console.log(`[zoo] still waiting id=${id} status=${op.status} ~${(i * POLL_MS) / 1000}s`);
+      log.info("still waiting", { zooOpId: id, status: op.status, seconds: (i * POLL_MS) / 1000 });
     }
     await sleep(POLL_MS, signal);
   }
   const rescued = await tryFetchCompleted(client, id);
   if (rescued) return rescued;
-  console.warn(`[zoo] id=${id} timed out after ~${(MAX_POLLS * POLL_MS) / 1000}s`);
+  log.warn("timed out", { zooOpId: id, seconds: (MAX_POLLS * POLL_MS) / 1000 });
   return {
     ok: false,
     error: `Zoo CAD operation timed out after ~10 minutes (zooOpId=${id}). Pass zooOpId to text_to_cad to resume, or simplify the prompt.`,
@@ -209,13 +214,13 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
         // Legacy resume: older runs used REST async ops. Still poll those.
         const resumeId = options?.existingOpId?.trim();
         if (resumeId && isPlausibleZooOpId(resumeId)) {
-          console.log(`[zoo] resuming legacy text-to-CAD id=${resumeId}`);
+          log.info("resuming legacy text-to-CAD", { zooOpId: resumeId });
           const resumed = await pollTextToCad(client, resumeId, options?.signal);
           if (resumed.ok) return resumed;
           if (!isNotFoundError(resumed.error)) return resumed;
-          console.warn(`[zoo] resume id=${resumeId} not found — starting Zookeeper turn`);
+          log.warn("resume target not found; starting a Zookeeper turn", { zooOpId: resumeId });
         } else if (resumeId && !isPlausibleZooOpId(resumeId)) {
-          console.warn(`[zoo] ignoring implausible zooOpId=${resumeId}`);
+          log.warn("ignoring implausible zooOpId", { zooOpId: resumeId });
         }
 
         const zk = await zookeeperPrompt({
@@ -319,9 +324,10 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
 
         const currentFiles = Object.fromEntries(entries);
         const focusPath = options?.focusPath?.trim();
-        console.log(
-          `[zoo] zookeeper multi-file files=${entries.length} focus=${focusPath ?? "(all)"}`,
-        );
+        log.info("zookeeper multi-file turn", {
+          files: entries.length,
+          focus: focusPath ?? "(all)",
+        });
 
         const forcedTools = options?.forcedTools?.length
           ? options.forcedTools

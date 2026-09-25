@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createLogger } from "@foundry/observability";
 
 const serverEnvSchema = z
   .object({
@@ -21,8 +22,9 @@ const serverEnvSchema = z
         try {
           const host = new URL(trimmed).hostname;
           if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
-            console.warn(
-              `[config] Ignoring NEXT_PUBLIC_COLLAB_URL=${trimmed} on Render — set wss://<foundry-collab-host>`,
+            createLogger("config").warn(
+              "ignoring a localhost NEXT_PUBLIC_COLLAB_URL on Render; set wss://<foundry-collab-host>",
+              { value: trimmed },
             );
             return undefined;
           }
@@ -49,7 +51,33 @@ const serverEnvSchema = z
     AI_MODEL: z.string().default("gpt-5.6"),
     // Cheap model for "should the copilot reply?" triage on messages without @AI.
     AI_LIGHT_MODEL: z.string().default("gpt-4.1-nano"),
+    // Copilot turns one user may start per rolling hour. The main cost dial:
+    // one turn can run two dozen model steps and several Zoo generations.
+    AI_RUNS_PER_HOUR: z.preprocess((value) => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    }, z.coerce.number().int().positive().default(30)),
+    // Tokens a workspace may spend on the copilot per rolling 24h. Unset means
+    // metered but unlimited; usage is recorded on every run either way.
+    AI_WORKSPACE_DAILY_TOKEN_BUDGET: z.preprocess((value) => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    }, z.coerce.number().int().positive().optional()),
+    // Per-step output ceiling passed to the model. Unset = provider default.
+    AI_MAX_OUTPUT_TOKENS: z.preprocess((value) => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    }, z.coerce.number().int().positive().optional()),
     APP_ORIGIN: z.string().url().optional(),
+    // Error tracking. Unset = errors are logged but not sent anywhere.
+    SENTRY_DSN: z.preprocess((value) => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    }, z.string().url().optional()),
     // Zoo / KittyCAD engine + text-to-CAD (required for mechanical MODEL3D)
     ZOO_API_TOKEN: z.preprocess((value) => {
       if (typeof value !== "string") return undefined;

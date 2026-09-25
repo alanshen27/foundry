@@ -2,8 +2,12 @@ import { config } from "dotenv";
 import { join } from "node:path";
 import type { NextConfig } from "next";
 
-// Load the monorepo-root .env so a single env file serves every package.
-// dotenv never overrides variables already set (CI, inline overrides win).
+// Load the monorepo-root env so a single file serves every package.
+// dotenv never overrides variables already set (CI, inline overrides win), so
+// .env.local goes first: it is the local-dev override, and without it a bare
+// `next dev` (e.g. one Playwright starts itself) ran against whatever .env
+// holds, which is the production database.
+config({ path: join(__dirname, "..", "..", ".env.local") });
 config({ path: join(__dirname, "..", "..", ".env") });
 
 // monaco-editor >=0.55 package exports remap `monaco-editor/esm/vs/*` to a
@@ -40,7 +44,8 @@ const nextConfig: NextConfig = {
   // `ws` must stay external too: bundling breaks its optional `bufferutil`
   // require, so `bufferUtil.mask` is undefined and every client frame throws
   // — Zoo's ML socket connects and then never receives the prompt.
-  serverExternalPackages: ["@kittycad/lib", "bullmq", "ioredis", "ws"],
+  // @sentry/node relies on OpenTelemetry module patching, which bundling breaks.
+  serverExternalPackages: ["@kittycad/lib", "bullmq", "ioredis", "ws", "@sentry/node"],
   webpack: (config, { isServer }) => {
     config.resolve.alias = {
       ...config.resolve.alias,

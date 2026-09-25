@@ -16,6 +16,7 @@ import {
   FolderGit2,
   Images,
   Lightbulb,
+  Package,
   Plus,
   Rocket,
   ShieldCheck,
@@ -64,6 +65,11 @@ const PcbCanvas = dynamic(
     ssr: false,
     loading: () => <DotMatrixLoader className="absolute inset-0" label="Loading PCB" />,
   },
+);
+
+const SourcingPanel = dynamic(
+  () => import("@/components/engineer/sourcing-panel").then((m) => m.SourcingPanel),
+  { ssr: false, loading: () => <DotMatrixLoader label="Loading sourcing" /> },
 );
 
 const ChecksPanel = dynamic(
@@ -154,6 +160,7 @@ type FixedKind = Exclude<EngineerDocKind, "model" | "schematic">;
 const FIXED: { kind: FixedKind; label: string; icon: typeof Boxes }[] = [
   { kind: "assembly", label: "Assembly", icon: Combine },
   { kind: "pcb", label: "PCB", icon: CircuitBoard },
+  { kind: "sourcing", label: "Sourcing", icon: Package },
   { kind: "checks", label: "Checks", icon: ShieldCheck },
   { kind: "code", label: "Repository", icon: FolderGit2 },
   { kind: "ideate", label: "Ideate", icon: Lightbulb },
@@ -164,10 +171,20 @@ const FIXED: { kind: FixedKind; label: string; icon: typeof Boxes }[] = [
 
 const FIXED_KINDS = new Set<EngineerDocKind>(FIXED.map((f) => f.kind));
 
+/**
+ * Real pipeline stages (Ideate/Verify/Launch/Renders) are still FIXED
+ * surfaces for the mount/tab state machine — deep links and the Stage Rail
+ * both route through `?view=`, unchanged — but they're no longer buttons in
+ * this bar now that the Stage Rail (project-shell.tsx) is their home.
+ */
+const STAGE_KINDS = new Set<EngineerDocKind>(["ideate", "verify", "launch", "renders"]);
+const TOP_BAR_FIXED = FIXED.filter(({ kind }) => !STAGE_KINDS.has(kind));
+
 function TabIcon({ kind }: { kind: EngineerDocKind }) {
   if (kind === "assembly") return <Combine className="size-3" strokeWidth={2} />;
   if (kind === "model") return <Boxes className="size-3" strokeWidth={2} />;
   if (kind === "pcb") return <CircuitBoard className="size-3" strokeWidth={2} />;
+  if (kind === "sourcing") return <Package className="size-3" strokeWidth={2} />;
   if (kind === "checks") return <ShieldCheck className="size-3" strokeWidth={2} />;
   if (kind === "code") return <FolderGit2 className="size-3" strokeWidth={2} />;
   if (kind === "ideate") return <Lightbulb className="size-3" strokeWidth={2} />;
@@ -335,7 +352,7 @@ function EngineerDocWorkspace({
     <div className="flex h-full flex-col overflow-hidden">
       <div className="bg-card/60 flex h-9 shrink-0 items-center border-b px-1">
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-          {FIXED.map(({ kind, label, icon: Icon }) => (
+          {TOP_BAR_FIXED.map(({ kind, label, icon: Icon }) => (
             <button
               key={kind}
               type="button"
@@ -501,6 +518,11 @@ function EngineerDocWorkspace({
               {kind === "pcb" ? (
                 <PcbCanvas projectId={projectId} branchId={branchId} canEdit={canEdit} />
               ) : null}
+              {kind === "sourcing" ? (
+                <DocumentPane>
+                  <SourcingPanel projectId={projectId} branchId={branchId} canEdit={canEdit} />
+                </DocumentPane>
+              ) : null}
               {kind === "checks" ? <ChecksPanel projectId={projectId} branchId={branchId} /> : null}
               {kind === "code" ? (
                 <div className="relative h-full overflow-hidden">
@@ -536,6 +558,7 @@ function EngineerDocWorkspace({
                     verifyApproved={caps.verifyStatus === "APPROVED"}
                     canEditMedia={caps.canEditMedia}
                     canApproveMedia={caps.canApproveMedia}
+                    canEditGraph={canEdit}
                     view={kind === "renders" ? "renders" : "releases"}
                   />
                 </DocumentPane>

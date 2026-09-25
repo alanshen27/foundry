@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to the same branch makes the in-flight run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -47,9 +52,17 @@ jobs:
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm db:push
+      # Build the database from the migration history, not from schema.prisma:
+      # this is what proves the migrations production will run actually work.
+      - run: pnpm db:migrate:deploy
+      # Fails if schema.prisma changed without a migration to match.
+      - name: Check migrations match schema.prisma
+        run: pnpm db:migrate:check
       - run: pnpm db:seed
       - run: pnpm test
+      # The dev-server e2e below cannot catch a broken production build
+      # (RSC boundaries, server-only imports, the kcl wasm prebuild).
+      - run: pnpm build
       - name: Install Playwright browsers
         run: pnpm --filter @foundry/web exec playwright install --with-deps chromium
       - run: pnpm e2e

@@ -12,5 +12,7 @@ export default defineConfig({
   },
   test: {
     include: ["test/**/*.{test,spec}.{ts,tsx}"],
+    // Component tests opt into jsdom per file; everything else stays in node.
+    setupFiles: ["./test/setup.ts"],
   },
 });
