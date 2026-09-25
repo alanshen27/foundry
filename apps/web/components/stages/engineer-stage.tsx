@@ -549,6 +549,7 @@ function EngineerDocWorkspace({
                     verifyApproved={caps.verifyStatus === "APPROVED"}
                     canEditMedia={caps.canEditMedia}
                     canApproveMedia={caps.canApproveMedia}
+                    canEditGraph={canEdit}
                     view={kind === "renders" ? "renders" : "releases"}
                   />
                 </DocumentPane>

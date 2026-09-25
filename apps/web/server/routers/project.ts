@@ -5,7 +5,7 @@ import { prisma, type Prisma } from "@foundry/db";
 import { slugify, STAGES } from "@foundry/domain";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
-import { requireWorkspaceCapability } from "../access";
+import { requireProjectCapability, requireWorkspaceCapability } from "../access";
 import { previewModelDoc, projectThumbnailKey } from "@/lib/project-preview";
 import { screenshotRenderPage } from "../ai/render";
 import { appOrigin } from "../app-origin";
@@ -203,6 +203,18 @@ export const projectRouter = router({
       });
 
       return { ok: true as const, ...updated };
+    }),
+
+  /** Every branch of a project, newest first — the picker for Branch Compare. */
+  listBranches: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
+      return prisma.projectBranch.findMany({
+        where: { projectId: input.projectId },
+        select: { id: true, name: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+      });
     }),
 
   createBranch: protectedProcedure

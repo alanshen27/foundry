@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
 import { MediaLibrary } from "@/components/media/media-library";
+import { BranchCompareTrigger } from "@/components/graph/branch-compare-panel";
 import { trpc } from "@/lib/trpc";
 import { formatCents } from "@/lib/format";
 
@@ -24,6 +25,8 @@ type Props = {
   canEditMedia: boolean;
   /** site.publish — approve media for storefront use. */
   canApproveMedia: boolean;
+  /** Whether this viewer can trigger a graph rebuild while comparing branches. */
+  canEditGraph: boolean;
   view?: LaunchView;
 };
 
@@ -44,6 +47,7 @@ export function LaunchStage({
   verifyApproved,
   canEditMedia,
   canApproveMedia,
+  canEditGraph,
   view = "releases",
 }: Props) {
   if (view === "renders") {
@@ -67,6 +71,7 @@ export function LaunchStage({
       branchId={branchId}
       canCreate={canCreate}
       verifyApproved={verifyApproved}
+      canEditGraph={canEditGraph}
     />
   );
 }
@@ -76,11 +81,13 @@ function LaunchReleases({
   branchId,
   canCreate,
   verifyApproved,
+  canEditGraph,
 }: {
   projectId: string;
   branchId: string;
   canCreate: boolean;
   verifyApproved: boolean;
+  canEditGraph: boolean;
 }) {
   const router = useRouter();
   const list = trpc.launch.listReleases.useQuery({ projectId, branchId });
@@ -168,12 +175,15 @@ function LaunchReleases({
   return (
     <div className="flex flex-col gap-6">
       <Card>
-        <CardHeader>
-          <CardTitle>Cut a release</CardTitle>
-          <p className="text-muted-foreground text-sm">
-            A release freezes an immutable snapshot of the brief, requirements, BOM, repositories,
-            and validation results. Snapshots are never modified after creation.
-          </p>
+        <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+          <div>
+            <CardTitle>Cut a release</CardTitle>
+            <p className="text-muted-foreground text-sm">
+              A release freezes an immutable snapshot of the brief, requirements, BOM, repositories,
+              and validation results. Snapshots are never modified after creation.
+            </p>
+          </div>
+          <BranchCompareTrigger projectId={projectId} branchId={branchId} canEdit={canEditGraph} />
         </CardHeader>
         <CardContent>
           {!verifyApproved ? (
