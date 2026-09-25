@@ -72,55 +72,66 @@ export async function syncProductGraph(params: {
   const idByRefKey = new Map<string, string>(existing.map((n) => [n.refKey, n.id]));
 
   await prisma.$transaction(async (tx) => {
-    for (const node of derived.nodes) {
-      const prior = existingByRefKey.get(node.refKey);
+    // Upserts are independent per node (each keyed by its own refKey), so
+    // they're pipelined with Promise.all instead of awaited one at a time —
+    // for a project with hundreds of nodes this turns hundreds of sequential
+    // round-trips inside one held transaction into one batch of concurrent
+    // ones. idByRefKey is populated from the results afterward, since the
+    // edges loop below depends on every node's id being known first.
+    const nodeResults = await Promise.all(
+      derived.nodes.map(async (node) => {
+        const prior = existingByRefKey.get(node.refKey);
 
-      // The artifact changed since it was flagged, so somebody has looked at
-      // it. Dropping the flag here is what stops the checks panel nagging
-      // about work that is already done.
-      const revised =
-        prior?.staleAt != null &&
-        prior.staleContentHash != null &&
-        node.contentHash != null &&
-        prior.staleContentHash !== node.contentHash;
-      if (revised) refreshed++;
+        // The artifact changed since it was flagged, so somebody has looked at
+        // it. Dropping the flag here is what stops the checks panel nagging
+        // about work that is already done.
+        const revised =
+          prior?.staleAt != null &&
+          prior.staleContentHash != null &&
+          node.contentHash != null &&
+          prior.staleContentHash !== node.contentHash;
 
-      const upserted = await tx.productNode.upsert({
-        where: { projectId_branchId_refKey: { projectId, branchId, refKey: node.refKey } },
-        create: {
-          projectId,
-          branchId,
-          kind: node.kind,
-          refKey: node.refKey,
-          refId: node.refId ?? null,
-          label: node.label,
-          data: (node.data ?? {}) as Prisma.InputJsonValue,
-          origin: node.origin,
-          originDetail: node.originDetail ?? null,
-          contentHash: node.contentHash ?? null,
-        },
-        // Deliberately does not touch origin, staleAt or reviewedAt: a node
-        // that a person promoted or flagged keeps that state.
-        update: {
-          kind: node.kind,
-          refId: node.refId ?? null,
-          label: node.label,
-          contentHash: node.contentHash ?? null,
-          ...(revised
-            ? {
-                staleAt: null,
-                staleReason: null,
-                staleFromId: null,
-                staleDepth: null,
-                staleConfidence: null,
-                staleContentHash: null,
-              }
-            : {}),
-        },
-        select: { id: true },
-      });
-      if (!prior) added++;
-      idByRefKey.set(node.refKey, upserted.id);
+        const upserted = await tx.productNode.upsert({
+          where: { projectId_branchId_refKey: { projectId, branchId, refKey: node.refKey } },
+          create: {
+            projectId,
+            branchId,
+            kind: node.kind,
+            refKey: node.refKey,
+            refId: node.refId ?? null,
+            label: node.label,
+            data: (node.data ?? {}) as Prisma.InputJsonValue,
+            origin: node.origin,
+            originDetail: node.originDetail ?? null,
+            contentHash: node.contentHash ?? null,
+          },
+          // Deliberately does not touch origin, staleAt or reviewedAt: a node
+          // that a person promoted or flagged keeps that state.
+          update: {
+            kind: node.kind,
+            refId: node.refId ?? null,
+            label: node.label,
+            contentHash: node.contentHash ?? null,
+            ...(revised
+              ? {
+                  staleAt: null,
+                  staleReason: null,
+                  staleFromId: null,
+                  staleDepth: null,
+                  staleConfidence: null,
+                  staleContentHash: null,
+                }
+              : {}),
+          },
+          select: { id: true },
+        });
+        return { refKey: node.refKey, id: upserted.id, isNew: !prior, revised };
+      }),
+    );
+    for (const result of nodeResults) {
+      if (result.isNew) added++;
+      if (result.revised) refreshed++;
+      idByRefKey.set(result.refKey, result.id);
     }
 
     // Derived nodes the project no longer implies. Their edges cascade.
@@ -130,36 +141,40 @@ export async function syncProductGraph(params: {
     }
 
     // Edges. Authored ones are never in this set and are never deleted below.
-    const keptEdgeIds: string[] = [];
-    for (const edge of derived.edges) {
-      const fromId = idByRefKey.get(edge.from);
-      const toId = idByRefKey.get(edge.to);
-      // An edge whose endpoint did not survive derivation has nothing to
-      // attach to. Skipping is correct: the next sync re-creates it if the
-      // endpoint comes back.
-      if (!fromId || !toId) continue;
-      const upserted = await tx.productEdge.upsert({
-        where: { fromId_toId_kind: { fromId, toId, kind: edge.kind } },
-        create: {
-          projectId,
-          branchId,
-          fromId,
-          toId,
-          kind: edge.kind,
-          origin: "DERIVED",
-          rule: edge.rule ?? null,
-          confidence: edge.confidence,
-          evidence: edge.evidence ?? null,
-        },
-        update: {
-          rule: edge.rule ?? null,
-          confidence: edge.confidence,
-          evidence: edge.evidence ?? null,
-        },
-        select: { id: true },
-      });
-      keptEdgeIds.push(upserted.id);
-    }
+    // Same pipelining as the nodes loop above — each edge upsert is
+    // independent once endpoint ids are known.
+    const edgeResults = await Promise.all(
+      derived.edges.map(async (edge) => {
+        const fromId = idByRefKey.get(edge.from);
+        const toId = idByRefKey.get(edge.to);
+        // An edge whose endpoint did not survive derivation has nothing to
+        // attach to. Skipping is correct: the next sync re-creates it if the
+        // endpoint comes back.
+        if (!fromId || !toId) return null;
+        const upserted = await tx.productEdge.upsert({
+          where: { fromId_toId_kind: { fromId, toId, kind: edge.kind } },
+          create: {
+            projectId,
+            branchId,
+            fromId,
+            toId,
+            kind: edge.kind,
+            origin: "DERIVED",
+            rule: edge.rule ?? null,
+            confidence: edge.confidence,
+            evidence: edge.evidence ?? null,
+          },
+          update: {
+            rule: edge.rule ?? null,
+            confidence: edge.confidence,
+            evidence: edge.evidence ?? null,
+          },
+          select: { id: true },
+        });
+        return upserted.id;
+      }),
+    );
+    const keptEdgeIds = edgeResults.filter((id): id is string => id !== null);
 
     await tx.productEdge.deleteMany({
       where: { projectId, branchId, origin: "DERIVED", id: { notIn: keptEdgeIds } },

@@ -48,7 +48,21 @@ async function trpcFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 }
 
 export function TRPCProvider({ children }: { children: ReactNode }) {
-  const [queryClient] = useState(() => new QueryClient());
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            // Most panels remount on every tab switch (Engineer's document
+            // tabs, Overview, etc.) — without this, that's a full refetch of
+            // data that just loaded a moment ago. A call site that needs
+            // fresher data (e.g. stale-badge.tsx's 15s) already overrides this.
+            staleTime: 30_000,
+            gcTime: 5 * 60_000,
+          },
+        },
+      }),
+  );
   const [trpcClient] = useState(() =>
     trpc.createClient({
       links: [
