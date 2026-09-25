@@ -60,6 +60,7 @@ import {
 } from "@/lib/copilot/chat-message-meta";
 import { Markdown } from "./markdown";
 import { ChannelSwitcher } from "./channel-switcher";
+import { ProposalInboxTrigger } from "@/components/graph/proposal-inbox";
 import {
   MessageActionBar,
   MessageEditForm,
@@ -210,6 +211,36 @@ const TOOL_META: Record<
     done: "Fit check complete",
     failed: "Fit check failed",
     icon: ClipboardCheck,
+  },
+  analyze_impact: {
+    doing: "Tracing what this affects",
+    done: "Traced the downstream impact",
+    failed: "Impact analysis failed",
+    icon: GitBranch,
+  },
+  explain_provenance: {
+    doing: "Tracing where this came from",
+    done: "Traced the provenance",
+    failed: "Provenance lookup failed",
+    icon: GitBranch,
+  },
+  link_nodes: {
+    doing: "Proposing a link",
+    done: "Proposed a link — pending review",
+    failed: "Link proposal failed",
+    icon: GitBranch,
+  },
+  add_tasks: {
+    doing: "Proposing tasks",
+    done: "Proposed tasks — pending review",
+    failed: "Failed to propose tasks",
+    icon: ListChecks,
+  },
+  add_risks: {
+    doing: "Proposing risks",
+    done: "Proposed risks — pending review",
+    failed: "Failed to propose risks",
+    icon: ListChecks,
   },
   add_part_to_assembly: {
     doing: "Building product preview",
@@ -842,6 +873,8 @@ export function ChatSidebar() {
     editMessage,
     deleteMessage,
     toggleReaction,
+    projectId,
+    branchId,
   } = useCopilot();
   const [input, setInput] = useState("");
   const [caret, setCaret] = useState(0);
@@ -984,6 +1017,7 @@ export function ChatSidebar() {
       />
       <div className="relative z-10 flex h-9 shrink-0 items-center gap-2 border-b px-2.5">
         <ChannelSwitcher />
+        <ProposalInboxTrigger projectId={projectId} branchId={branchId} />
         <Button
           type="button"
           variant="ghost"

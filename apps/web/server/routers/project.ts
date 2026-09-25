@@ -5,7 +5,7 @@ import { prisma, type Prisma } from "@foundry/db";
 import { slugify, STAGES } from "@foundry/domain";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
-import { requireWorkspaceCapability } from "../access";
+import { requireProjectCapability, requireWorkspaceCapability } from "../access";
 import { previewModelDoc, projectThumbnailKey } from "@/lib/project-preview";
 import { screenshotRenderPage } from "../ai/render";
 import { appOrigin } from "../app-origin";
@@ -203,6 +203,43 @@ export const projectRouter = router({
       });
 
       return { ok: true as const, ...updated };
+    }),
+
+  /** Every branch of a project, newest first — the picker for Branch Compare. */
+  listBranches: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
+      return prisma.projectBranch.findMany({
+        where: { projectId: input.projectId },
+        select: { id: true, name: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+      });
+    }),
+
+  /** Last N audit events for a project, for the Overview page's activity feed. */
+  recentActivity: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
+      const events = await prisma.auditEvent.findMany({
+        where: { projectId: input.projectId },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        select: { id: true, type: true, actorId: true, actorType: true, createdAt: true },
+      });
+      const actorIds = [...new Set(events.map((e) => e.actorId))];
+      const actors = actorIds.length
+        ? await prisma.user.findMany({
+            where: { id: { in: actorIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+      const nameById = new Map(actors.map((a) => [a.id, a.name]));
+      return events.map((e) => ({
+        ...e,
+        actorName: nameById.get(e.actorId) ?? (e.actorType === "AGENT" ? "Copilot" : "Someone"),
+      }));
     }),
 
   createBranch: protectedProcedure

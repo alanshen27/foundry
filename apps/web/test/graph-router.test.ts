@@ -109,6 +109,10 @@ describe("read procedures need only project.read", () => {
     ["staleNodes", () => caller().staleNodes(scope)],
     ["impact", () => caller().impact({ ...scope, refKey: "component:c1" })],
     ["provenance", () => caller().provenance({ ...scope, refKey: "component:c1" })],
+    [
+      "compareBranches",
+      () => caller().compareBranches({ projectId: "proj1", branchAId: "b1", branchBId: "b2" }),
+    ],
   ])("%s", async (_name, call) => {
     await call();
     expect(capabilityUsed()).toBe("project.read");

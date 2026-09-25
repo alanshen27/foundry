@@ -1,6 +1,9 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import { getServerEnv } from "@foundry/config";
+import { createLogger } from "@foundry/observability";
+
+const log = createLogger("queue");
 
 function redisHost(url: string): string {
   try {
@@ -45,10 +48,11 @@ export function getRedisConnection() {
             })
             .join(" | ")
         : err.message || String(err);
-    console.error(`[redis] error host=${host} → ${detail}`);
+    // Reconnects flap; a warning, not an incident. BullMQ surfaces real failures.
+    log.warn("redis error", { host, detail });
   });
   connection.on("connect", () => {
-    console.log(`[redis] connected host=${host}`);
+    log.info("redis connected", { host });
   });
   return connection;
 }
@@ -72,12 +76,16 @@ export function getChatRunQueue() {
       defaultJobOptions: {
         removeOnComplete: 100,
         removeOnFail: 200,
-        attempts: 3,
-        backoff: { type: "exponential", delay: 2000 },
+        // One attempt by default. A retried copilot job re-enters a run that
+        // has already spent model steps and Zoo generations, so a retry is a
+        // second bill for the same turn. enqueueChatRun also sets this per
+        // job; the default is here so a future job type on this queue does not
+        // silently inherit three attempts.
+        attempts: 1,
       },
     });
     queue.on("error", (err) => {
-      console.error("[redis:queue:bull]", err.message || err);
+      log.error("chat queue error", { err });
     });
   }
   return queue;
@@ -97,13 +105,13 @@ export async function enqueueChatRun(runId: string): Promise<"queued" | "exists"
         attempts: 1,
       },
     );
-    console.log(`[redis:queue] enqueued run ${runId}`);
+    log.info("enqueued run", { runId });
     return "queued";
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // BullMQ rejects duplicate jobIds — treat as already queued.
     if (/already exists/i.test(message)) {
-      console.log(`[redis:queue] run ${runId} already queued`);
+      log.info("run already queued", { runId });
       return "exists";
     }
     throw err;
