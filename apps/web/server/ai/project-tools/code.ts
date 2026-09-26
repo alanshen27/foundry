@@ -4,6 +4,8 @@
 
 import { z } from "zod";
 import { prisma } from "@foundry/db";
+import { writeCodeWithCollaboration, deleteCodeWithCollaboration } from "../../collab-write";
+import { recordAudit } from "../../audit";
 import { type ToolContext, type ToolKit, guard, touchStage } from "./shared";
 
 /** Firmware and software files in the project repository. */
@@ -31,7 +33,13 @@ export function buildCodeTools(ctx: ToolContext, _kit: ToolKit) {
             where: { repoId_path: { repoId: repo.id, path } },
           });
           if (!existing) return { ok: true, deleted: 0 };
-          await prisma.codeFile.delete({ where: { id: existing.id } });
+          await deleteCodeWithCollaboration({
+            fileId: existing.id,
+            projectId,
+            branchId,
+            userId: ctx.userId,
+            runId: ctx.runId,
+          });
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
           return { ok: true, deleted: 1, path, staleStages: staled };
         }),
@@ -78,17 +86,23 @@ export function buildCodeTools(ctx: ToolContext, _kit: ToolKit) {
               createdById: ctx.userId,
             },
           });
-          await prisma.codeFile.upsert({
-            where: { repoId_path: { repoId: repo.id, path } },
-            create: {
-              projectId,
-              branchId,
-              repoId: repo.id,
-              path,
-              content,
-              updatedById: ctx.userId,
-            },
-            update: { content, updatedById: ctx.userId },
+          await writeCodeWithCollaboration({
+            projectId,
+            branchId,
+            userId: ctx.userId,
+            runId: ctx.runId,
+            repoId: repo.id,
+            path,
+            content,
+          });
+          await recordAudit({
+            type: "CollaborationDocumentUpdated",
+            workspaceId,
+            projectId,
+            branchId,
+            actorId: ctx.userId,
+            actorType: "AGENT",
+            payload: { repoId: repo.id, path, source: "write_code_file" },
           });
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
           return { ok: true, repo: repo.role, path, bytes: content.length, staleStages: staled };

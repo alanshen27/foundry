@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { CadViewport, type CadView } from "@/components/engineer/cad-viewport";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { CadViewport, type CadView, type CadMeshAsset } from "@/components/engineer/cad-viewport";
 
 function markReady() {
   document.body.dataset.renderReady = "1";
@@ -13,52 +13,62 @@ function markNotReady() {
 
 /** Fixed-camera model view for headless screenshots (copilot vision loop). */
 export function ModelRenderInner({
+  engine,
   script,
   view,
-  engineToken,
-  engineBaseUrl,
+  projectId,
+  renderToken,
+  meshAssets,
   projectFiles,
   entryPath,
   tight,
 }: {
+  engine?: "build123d" | "zoo";
   script: string;
   view: CadView;
-  engineToken: string;
-  engineBaseUrl?: string;
+  projectId?: string;
+  renderToken?: string;
+  meshAssets?: CadMeshAsset[];
   projectFiles?: Record<string, string>;
   entryPath?: string;
   tight?: boolean;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const onReady = useCallback(() => markReady(), []);
+  const fallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onReady = useCallback(() => {
+    if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
+    markReady();
+  }, []);
   const onError = useCallback((message: string | null) => {
     setError(message);
     // Errors still count as "ready" so the screenshot captures the error overlay
     // instead of timing out — but only after the viewport reported the failure.
-    if (message) markReady();
+    if (message) {
+      if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
+      markReady();
+    } else markNotReady();
   }, []);
 
   useEffect(() => {
     markNotReady();
-    // Safety: never block the screenshot worker forever (Zoo cold start + KCL).
-    const t = setTimeout(markReady, 120_000);
-    return () => clearTimeout(t);
-  }, [script, entryPath, view]);
-
-  if (!engineToken) {
-    markReady();
-    return (
-      <div className="text-destructive flex h-full items-center justify-center p-8 text-sm">
-        ZOO_API_TOKEN is not configured on the server.
-      </div>
-    );
-  }
+    // Show a visible failure if a stalled decoder never reports a result.
+    fallbackTimer.current = setTimeout(() => {
+      setError("The model preview timed out. Retry the render.");
+      markReady();
+    }, 155_000);
+    return () => {
+      if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
+    };
+  }, [engine, script, entryPath, view]);
 
   return (
     <div className="absolute inset-0">
       <CadViewport
+        engine={engine}
         script={script}
-        engine={{ token: engineToken, baseUrl: engineBaseUrl }}
+        projectId={projectId}
+        renderToken={renderToken}
+        meshAssets={meshAssets}
         view={view}
         chrome={false}
         headless

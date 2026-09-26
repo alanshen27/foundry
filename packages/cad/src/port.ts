@@ -1,6 +1,6 @@
 /**
  * CadPort: the only CAD/geometry surface app code may use.
- * Implementation: Zoo (KittyCAD) GPU B-Rep engine + ML text-to-CAD.
+ * Implementation: Astra KCL generation + Zoo (KittyCAD) GPU B-Rep geometry.
  */
 
 /** Part / assembly KCL, or markdown assembly instructions. */
@@ -9,6 +9,8 @@ export type CadComponentKind = "part" | "assembly" | "instructions";
 /** Native, neutral, mesh, drawing, and electronics project resources. */
 export type CadAssetFormat =
   | "kcl"
+  | "py"
+  | "brep"
   | "stl"
   | "step"
   | "stp"
@@ -77,6 +79,31 @@ export type CadComponent = {
   kind: CadComponentKind;
   /** KCL for part/assembly; markdown for instructions. */
   content: string;
+  /** Provenance of a generated board part; fingerprints never authorize writes. */
+  source?: {
+    kind: "pcb";
+    boardId: string;
+    sourceHash: string;
+    generatedHash: string;
+  };
+};
+
+/** Explicit, unsolved placement in CAD millimetres. Rotation is global X, then Y, then Z. */
+export type CadAssemblyInstance = {
+  id: string;
+  componentId: string;
+  translationMm: { x: number; y: number; z: number };
+  rotationDeg: { x: number; y: number; z: number };
+  visible: boolean;
+  /** Locks interactive placement; it is not a solved mate or engineering approval. */
+  fixed: boolean;
+};
+
+export type CadLinkedAssembly = {
+  version: 1;
+  instances: CadAssemblyInstance[];
+  sourceHash: string;
+  generatedHash: string;
 };
 
 /**
@@ -85,11 +112,13 @@ export type CadComponent = {
  */
 export type CadDoc = {
   version: 5;
-  engine: "zoo";
+  engine: "zoo" | "build123d";
   activeId: string;
   components: CadComponent[];
   /** Imported resources. Engine-readable geometry may be referenced by KCL. */
   assets?: CadAsset[];
+  /** Present only after an explicit linked-assembly build. */
+  assembly?: CadLinkedAssembly;
   /** Executable KCL for the active part/assembly (compat mirror). */
   script: string;
 };
@@ -98,34 +127,36 @@ export type CadResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
 export type CadGenOptions = {
   projectName?: string;
-  /** Cancel Zoo polling early (chat stop / run cancel). */
+  /** Cancel generation early (chat stop / run cancel). */
   signal?: AbortSignal;
   /**
-   * Hard ceiling for the whole turn. Zoo generations run for minutes, so a
+   * Hard ceiling for the whole turn. Generations can run for minutes, so a
    * caller holding a request open needs its own bound rather than the
    * adapter's default.
    */
   timeoutMs?: number;
   /**
-   * Narration of a long generation (model reasoning, reconnects). Lets a
-   * caller show what Zoo is doing instead of an unbounded spinner.
+   * Progress of a long generation. Lets a caller show the current phase
+   * instead of an unbounded spinner.
    */
   onProgress?: (note: string) => void;
+  /** Incomplete, unvalidated source for live display only. Never execute or save a draft. */
+  onDraft?: (file: { path: string; content: string }) => void;
   /**
-   * Resume or fetch an existing Zoo text-to-CAD operation instead of creating
-   * a new one (e.g. after timeout, worker restart, or cancel once Zoo finished).
+   * @deprecated Legacy Zoo operation resume only. Astra rejects this option;
+   * issue a new generation with a prompt instead.
    */
   existingOpId?: string;
 };
 
-/** Options for Zoo multi-file Text-to-CAD iteration (reuse existing project files). */
+/** Options for multi-file KCL iteration (reuse existing project files). */
 export type CadProjectIterateOptions = CadGenOptions & {
   /**
-   * Relative Zoo path to focus edits on (e.g. `assembly/product.kcl`).
-   * Sent as a whole-file source_range so parts stay stable.
+   * Relative project path to focus edits on (e.g. `assembly/product.kcl`).
+   * Other files remain read-only references for Astra.
    */
   focusPath?: string;
-  /** Override Zookeeper tools (default: edit_kcl_code). Use text_to_cad for preview assemblies. */
+  /** @deprecated Legacy Zookeeper tool selection; ignored by Astra. */
   forcedTools?: Array<"edit_kcl_code" | "text_to_cad">;
 };
 
@@ -136,6 +167,8 @@ export type CadBoundingBox = {
 };
 
 export type CadKclInput = {
+  /** Cancel geometry execution or export when the caller stops waiting. */
+  signal?: AbortSignal;
   /** Inline KCL source (single file). */
   code?: string;
   /** Absolute path to a .kcl file or project directory with main.kcl. */
@@ -143,10 +176,10 @@ export type CadKclInput = {
 };
 
 export interface CadPort {
-  /** Generate parametric KCL from a natural-language prompt (Zoo ML). */
+  /** Generate parametric KCL from a natural-language prompt. */
   textToCad(prompt: string, opts?: CadGenOptions): Promise<CadResult<{ kcl: string; id: string }>>;
   /**
-   * Generate KCL from a prompt, keeping every file Zoo returns.
+   * Generate KCL from a prompt, keeping every returned file.
    *
    * Assembly prompts come back as a multi-file project (`main.kcl` importing
    * per-component files), so `textToCad`'s single-file result is unusable for
@@ -156,15 +189,14 @@ export interface CadPort {
     prompt: string,
     opts?: CadGenOptions,
   ): Promise<CadResult<{ files: Record<string, string>; id: string }>>;
-  /** Edit existing KCL with a natural-language prompt (Zoo ML). */
+  /** Edit existing KCL with a natural-language prompt. */
   iterateCad(
     kcl: string,
     prompt: string,
     opts?: CadGenOptions,
   ): Promise<CadResult<{ kcl: string; id: string }>>;
   /**
-   * Iterate a multi-file KCL project with Zoo ML, keeping prior components as
-   * file attachments (`POST /ml/text-to-cad/multi-file/iteration`).
+   * Iterate a multi-file KCL project, keeping prior components as references.
    * Returns the full project outputs map (path → KCL).
    */
   iterateCadProject(
@@ -178,4 +210,6 @@ export interface CadPort {
   boundingBoxKcl(input: CadKclInput & { unit?: string }): Promise<CadResult<CadBoundingBox>>;
   /** Zoo MCP: front/right/top/iso collage JPEG of executed KCL. */
   multiviewSnapshotKcl(input: CadKclInput): Promise<CadResult<{ jpeg: Buffer }>>;
+  /** Zoo MCP: execute KCL and export geometry for the Three.js viewport. */
+  exportGlb(input: CadKclInput): Promise<CadResult<{ glb: Buffer }>>;
 }

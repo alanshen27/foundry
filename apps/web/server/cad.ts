@@ -1,19 +1,21 @@
 import "server-only";
 import { getServerEnv } from "@foundry/config";
-import { createZooCadAdapter, type CadPort } from "@foundry/cad/server";
+import { createPythonCadAdapter, type CadPort } from "@foundry/cad/server";
 
-let instance: CadPort | undefined;
+let python: ReturnType<typeof createPythonCadAdapter> | undefined;
 
-/** Zoo CAD port — ML text-to-CAD / KCL iteration / Zoo MCP. Requires ZOO_API_TOKEN. */
-export function getCad(): CadPort {
-  if (instance) return instance;
-  const env = getServerEnv();
-  const token = env.ZOO_API_TOKEN?.trim();
-  if (!token) {
-    throw new Error("ZOO_API_TOKEN is not configured. Add it to the root .env (see .env.example).");
+/** Generation uses Astra; solid evaluation runs locally through build123d/OCCT. */
+export function getPythonCad() {
+  if (!python) {
+    const env = getServerEnv();
+    python = createPythonCadAdapter({ apiKey: env.OPENAI_API_KEY, model: env.CAD_MODEL });
   }
-  instance = createZooCadAdapter({ token });
-  return instance;
+  return python;
 }
 
-export { getZooEngineToken } from "./zoo-token";
+/** Legacy entry points fail closed. An old token cannot enable paid Zoo calls. */
+export function getCad(): CadPort {
+  throw new Error(
+    "Zoo is disabled. Convert this KCL part to Python/build123d to build it locally.",
+  );
+}

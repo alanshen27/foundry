@@ -23,7 +23,7 @@ Each project follows four connected stages:
 The application also includes workspace membership, project folders, shared
 project navigation, account profiles, invitations, capability-based access,
 audit events, project chat, replies and reactions, background AI jobs, and
-multiplayer code editing.
+multiplayer engineering editing.
 
 ## Implemented capabilities
 
@@ -37,17 +37,19 @@ multiplayer code editing.
 
 ### Engineering workspaces
 
-- Assembly and part-oriented product workspace
-- KCL mechanical CAD with Zoo/KittyCAD generation and viewport integration
+- Opens existing projects directly in the assembly viewport; a compact workflow strip opens an optional side inspector
+- Native Python mechanical CAD with Astra generation, local build123d/OpenCascade solids, and a Three.js viewport
 - CAD preview assembly, entity labels, hover selection, and rendered previews
-- Schematic and PCB workspaces with circuit rendering
+- Explicit schematic part/pin → PCB footprint/pad links, layout-preserving synchronization, and mapping-aware DRC
+- All-board PCB → CAD synchronization with declared outlines/drills and linked assemblies with editable instance poses
 - Monaco code editor, repository file workspace, autosave, and project files
-- Yjs/Hocuspocus multiplayer code collaboration with a single-player fallback
+- Durable Yjs/Hocuspocus collaboration for code, schematic, PCB, CAD, assembly metadata, and design notes; API/AI writes use the same shared document
+- Streamed AI source drafts shown while generating; only completed, validated tool results update saved designs
 
 ### Verification and release
 
 - Validation checks, status tracking, evidence, and waivers
-- Approval gates and release records
+- Approval gates and release records; engineering edits invalidate prior checks and approvals, including live edits
 - Capability checks and audit events for protected mutations
 
 ### Launch, media, and commerce
@@ -68,6 +70,8 @@ multiplayer code editing.
 - Supabase presence and Hocuspocus collaboration services
 - Render deployment blueprint for web, worker, and collaboration services
 
+See [Connected engineering](docs/runbooks/connected-engineering.md) for workflow, limits, and the required additive collaboration migration.
+
 ## Architecture
 
 FOUNDRY is a pnpm/Turborepo TypeScript monorepo:
@@ -77,7 +81,7 @@ FOUNDRY is a pnpm/Turborepo TypeScript monorepo:
 - **Authentication and storage:** Supabase behind typed ports
 - **Background work:** BullMQ and Redis
 - **Realtime collaboration:** Supabase Realtime plus Yjs/Hocuspocus
-- **Mechanical CAD:** Zoo/KittyCAD and KCL
+- **Mechanical CAD:** GPT-6 Astra for Python generation, build123d/OpenCascade for geometry, Three.js for rendering
 - **AI:** OpenAI-backed copilot and media generation
 - **Storefronts:** v0 Platform API
 - **Commerce:** Shopify Storefront API
@@ -95,7 +99,7 @@ their output must not be presented as verified production data.
 - pnpm 9
 - PostgreSQL, either through the local Docker service or a hosted Supabase project
 - Redis for background chat and media jobs
-- `uv`/`uvx` when using the Zoo MCP assembly tools
+- macOS with `uv` for the sandboxed Python CAD worker (Python 3.12/build123d 0.9.1)
 
 ### Start the application
 
@@ -161,11 +165,25 @@ use **File → Open Folder…** and select the directory containing this
 | AI copilot                     | OpenAI credentials, `AI_MODEL`, `AI_LIGHT_MODEL`              |
 | Background jobs                | `REDIS_URL`                                                   |
 | Realtime presence              | `NEXT_PUBLIC_REALTIME_MODE`                                   |
-| Collaborative code             | `NEXT_PUBLIC_COLLAB_URL`                                      |
-| Mechanical CAD                 | `ZOO_API_TOKEN`                                               |
+| Collaborative engineering      | `NEXT_PUBLIC_COLLAB_URL`                                      |
+| Mechanical CAD                 | `OPENAI_API_KEY`, `CAD_MODEL`; local macOS + `uv`             |
 | Media video                    | `MEDIA_VIDEO_MODEL`                                           |
 | Storefront generation          | `V0_API_KEY`                                                  |
 | Public callbacks and rendering | `APP_ORIGIN`                                                  |
+
+CAD generation uses the OpenAI Responses API with `CAD_MODEL=gpt-6-astra` by default.
+Set `OPENAI_API_KEY` to an account with access to the model. Astra writes editable
+Python/build123d files; a sandboxed local Python worker evaluates exact OpenCascade
+solids and exports STEP plus STL. Three.js displays the STL and caches recent parts.
+Geometry operations do not require OpenAI credentials. Zoo calls are disabled even
+if an old token is configured. Existing KCL source is preserved and requires explicit
+conversion or regeneration before native editing; imported STL/GLB still opens directly.
+
+The local execution sandbox currently requires macOS. Other hosts fail closed;
+a hosted Linux deployment needs a separately isolated CAD worker before it can build
+Python models. Kernel validity does not establish manufacturability or assembly fit.
+See the [native CAD runbook](docs/runbooks/native-python-cad.md) for setup, supported
+imports, migration behavior, cache limits, and validation.
 
 Shopify credentials are configured per site rather than as shared environment
 variables because each workspace may sell through a different store.
@@ -195,7 +213,7 @@ variables because each workspace may sell through a different store.
 - `packages/storage` — object-storage port and Supabase adapter
 - `packages/realtime` — presence port and adapters
 - `packages/collaboration` — Yjs document and persistence helpers
-- `packages/cad` — CAD port and Zoo/KittyCAD adapters
+- `packages/cad` — native Python CAD, Astra generation, and sandboxed OpenCascade execution
 - `packages/media` — image/video generation port and adapters
 - `packages/sites` — storefront builder port and v0 adapter
 - `packages/commerce` — commerce port and Shopify adapter

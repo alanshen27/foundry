@@ -8,6 +8,7 @@ import {
   type PresenceMember,
 } from "@foundry/realtime";
 import { UserAvatar } from "@/components/user-avatar";
+import { useWorkspaceUiPreview } from "@/components/dev/workspace-ui-preview";
 
 const REALTIME_MODE = process.env.NEXT_PUBLIC_REALTIME_MODE ?? "off";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -22,14 +23,15 @@ export function PresenceBar({
   channel: string;
   self: { userId: string; name: string; avatarUrl?: string | null };
 }) {
+  const preview = useWorkspaceUiPreview();
   const [members, setMembers] = useState<Member[]>([]);
 
   const realtime = useMemo(() => {
-    if (REALTIME_MODE === "supabase" && SUPABASE_URL && SUPABASE_ANON_KEY) {
+    if (!preview && REALTIME_MODE === "supabase" && SUPABASE_URL && SUPABASE_ANON_KEY) {
       return createSupabaseRealtimeAdapter({ url: SUPABASE_URL, anonKey: SUPABASE_ANON_KEY });
     }
     return createOffRealtimeAdapter();
-  }, []);
+  }, [preview]);
 
   useEffect(() => {
     const handle = realtime.joinPresence(

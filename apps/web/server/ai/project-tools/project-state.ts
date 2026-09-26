@@ -411,11 +411,15 @@ export function buildProjectStateTools(ctx: ToolContext, _kit: ToolKit) {
         url: z.string().url().max(2000).describe("Product or distributor page URL"),
         limit: z.number().int().min(1).max(12).default(6),
       }),
-      execute: async ({ url, limit }: { url: string; limit?: number }) =>
+      execute: async (
+        { url, limit }: { url: string; limit?: number },
+        { abortSignal }: { abortSignal?: AbortSignal } = {},
+      ) =>
         guard(ctx, "project.read", async () => {
           try {
             const { images, via, problem } = await extractProductImages(url, {
               limit: limit ?? 6,
+              signal: abortSignal,
             });
             const hint = images[0]
               ? `Use images[0].url as imageUrl on add_components (${images[0].source}).`

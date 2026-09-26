@@ -8,12 +8,11 @@
 @source "../../../packages/ui/src";
 
 /*
-  Neo-industrial / Nothing-inspired system: off-white, black, signal orange,
-  sharp corners (no soft SaaS radius), mono labels, Swiss grid rhythm.
+  Shared with the home page: warm paper, ink, signal orange, square corners
+  and precise rules. Monospaced labels identify the workspace chrome.
 */
 
 :root {
-  /* Sharp industrial corners — no soft SaaS radius mix. */
   --radius: 0rem;
   --background: #f4f2ec;
   --foreground: #0c0c0c;
@@ -227,16 +226,16 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
-  --radius-sm: 0;
-  --radius-md: 0;
-  --radius-lg: 0;
-  --radius-xl: 0;
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius);
+  --radius-xl: var(--radius);
   --font-heading: var(--font-mono);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
-  --radius-2xl: 0;
-  --radius-3xl: 0;
-  --radius-4xl: 0;
+  --radius-2xl: var(--radius);
+  --radius-3xl: var(--radius);
+  --radius-4xl: var(--radius);
 }
 
 @layer base {
@@ -249,46 +248,25 @@
   html {
     @apply font-sans;
   }
-  /* Kill soft radii globally. Circles (avatars / switches) keep .rounded-full. */
-  :where(
-    .rounded,
-    .rounded-xs,
-    .rounded-sm,
-    .rounded-md,
-    .rounded-lg,
-    .rounded-xl,
-    .rounded-2xl,
-    .rounded-3xl,
-    .rounded-4xl,
-    .rounded-t,
-    .rounded-b,
-    .rounded-l,
-    .rounded-r,
-    .rounded-t-sm,
-    .rounded-b-sm,
-    .rounded-t-md,
-    .rounded-b-md,
-    .rounded-t-lg,
-    .rounded-b-lg,
-    .rounded-t-xl,
-    .rounded-b-xl
-  ) {
-    border-radius: 0;
-  }
 }
 
-/* Lucide icons → signal orange (unlayered so it wins over muted text utilities).
-   Filled primary / destructive surfaces keep readable contrast. */
-svg.lucide {
-  color: var(--primary);
+/* Icons inherit their control's semantic color. Reserve signal orange for
+   selected controls and actions rather than tinting every icon in the app. */
+
+/* Keep the inspector clear of the optional expanded command ribbon. */
+[data-cad-workspace]:has(#cad-tool-ribbon) [data-cad-inspector] {
+  top: 12rem;
 }
-.bg-primary svg.lucide,
-.text-primary-foreground svg.lucide {
-  color: var(--primary-foreground);
-}
-.text-destructive svg.lucide,
-.bg-destructive svg.lucide {
-  color: var(--destructive);
+
+/* Static dot matrix for quiet workspace surfaces; no animation or canvas work. */
+.workspace-dot-field {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--foreground) 8%, transparent) 0.6px,
+    transparent 0.7px
+  );
+  background-size: 16px 16px;
+  background-position: 8px 8px;
 }
 
 /* Static page-level dot field (auth fallback when canvas is unavailable). */

@@ -20,10 +20,11 @@ import {
   polylineSegments,
   segmentPadDistance,
   segmentSegmentDistance,
+  boardPads,
   type PadInstance,
 } from "@/lib/pcb/geometry";
 import { buildCopperGraph, padKey, type CopperGraph } from "@/lib/pcb/routing";
-import { netsByPad, type Ratsnest } from "@/lib/pcb/netlist";
+import { netsByPad, resolvePad, type Ratsnest } from "@/lib/pcb/netlist";
 
 export type DrcSeverity = "error" | "warning";
 
@@ -40,7 +41,12 @@ export type DrcViolation = {
     | "dangling-track"
     | "courtyard-overlap"
     | "zone-no-net"
-    | "zone-off-board";
+    | "zone-off-board"
+    | "unlinked-parts"
+    | "unmapped-pins"
+    | "dangling-footprint"
+    | "pin-map-conflict"
+    | "missing-drill";
   severity: DrcSeverity;
   message: string;
   /** Where to point the camera, in board millimetres. */
@@ -442,15 +448,14 @@ function footprintBody(fp: PcbFootprint): { w: number; h: number } | null {
  * pass the same one the canvas renders so the counts agree.
  */
 export function runDrc(doc: PcbDoc, ratsnest: Ratsnest, copper?: CopperGraph): DrcResult {
-  const graph = copper ?? buildCopperGraph(doc);
-
   // Re-key the schematic's pad->net map onto the copper graph's pad keys.
   const byPadId = netsByPad(ratsnest.nets, doc);
   const padNets = new Map<string, string>();
-  for (const pad of graph.pads) {
+  for (const pad of copper?.pads ?? boardPads(doc.footprints)) {
     const net = byPadId.get(`${pad.footprintId}:${pad.pin}`);
     if (net) padNets.set(padKey(pad.footprintId, pad.pin), net);
   }
+  const graph = copper ?? buildCopperGraph(doc, padNets);
 
   const violations: DrcViolation[] = [
     ...checkShorts(graph, padNets),
@@ -461,6 +466,55 @@ export function runDrc(doc: PcbDoc, ratsnest: Ratsnest, copper?: CopperGraph): D
     ...checkCourtyards(doc),
     ...checkZones(doc),
   ];
+
+  for (const part of ratsnest.issues.unlinkedParts) {
+    violations.push({
+      rule: "unlinked-parts",
+      severity: "error",
+      message: `${part.label} has wired pins but no linked footprint.`,
+    });
+  }
+  for (const pin of ratsnest.issues.unmappedPins) {
+    violations.push({
+      rule: "unmapped-pins",
+      severity: "error",
+      message: `${pin.refDes}: schematic pin ${pin.pin} has no physical pad mapping.`,
+    });
+  }
+  for (const footprint of ratsnest.issues.danglingFootprints) {
+    violations.push({
+      rule: "dangling-footprint",
+      severity: "error",
+      message: `${footprint.refDes} has a missing or duplicate schematic link (${footprint.partId}).`,
+    });
+  }
+  for (const footprint of doc.footprints) {
+    if (footprintDef(footprint.libraryId)?.pads.some((pad) => pad.plated && !pad.drillMm)) {
+      violations.push({
+        rule: "missing-drill",
+        severity: "error",
+        message: `${footprint.refDes}: plated hole diameters are not specified for ${footprint.libraryId}.`,
+      });
+    }
+  }
+  const padOwners = new Map<string, number>();
+  ratsnest.nets.forEach((net, netIndex) => {
+    for (const node of net.nodes) {
+      const fp = doc.footprints.find((footprint) => footprint.partId === node.partId);
+      const pad = fp && resolvePad(fp, node.pin);
+      if (!fp || !pad) continue;
+      const key = padKey(fp.id, pad.pin);
+      const previous = padOwners.get(key);
+      if (previous !== undefined && previous !== netIndex) {
+        violations.push({
+          rule: "pin-map-conflict",
+          severity: "error",
+          message: `${fp.refDes}.${pad.pin} maps to more than one schematic net. Check the pin mapping.`,
+        });
+      }
+      padOwners.set(key, netIndex);
+    }
+  });
 
   if (ratsnest.airwires.length > 0) {
     violations.push({

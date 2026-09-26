@@ -1,5 +1,5 @@
 /**
- * Live progress for long CAD tools (Zoo generation runs for minutes).
+ * Live progress for long CAD tools (Astra generation runs for minutes).
  *
  * Travels as a *transient* AI SDK data chunk on the normal run stream: the SDK
  * hands transient chunks to `onData` and never adds them to `message.parts`,
@@ -20,20 +20,20 @@ export const CAD_PROGRESS_PHASES = [
 export type CadProgressPhase = (typeof CAD_PROGRESS_PHASES)[number];
 
 export const CAD_PHASE_LABEL: Record<CadProgressPhase, string> = {
-  generate: "Generating on Zoo",
-  assemble: "Assembling on Zoo",
-  execute: "Executing KCL in the engine",
+  generate: "Generating with Astra",
+  assemble: "Assembling with Astra",
+  execute: "Building geometry",
   snapshot: "Rendering views",
   saved: "Saved to workspace",
 };
 
-/** Longest note we forward — Zoo narration can be a whole paragraph. */
+/** Longest note we forward — Astra progress can be a whole paragraph. */
 export const CAD_PROGRESS_NOTE_MAX = 300;
 
 export const cadProgressSchema = z.object({
   toolCallId: z.string().min(1),
   phase: z.enum(CAD_PROGRESS_PHASES),
-  /** Latest narration from Zoo (model reasoning, tool use, reconnects). */
+  /** Latest progress from Astra and the geometry engine. */
   note: z.string().max(CAD_PROGRESS_NOTE_MAX).optional(),
   /** Epoch ms the tool started, so the client can tick elapsed on its own. */
   startedAt: z.number().int().positive(),
@@ -89,7 +89,7 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, "0")}s`;
 }
 
-/** Collapse Zoo narration to a single line that fits a tool row. */
+/** Collapse Astra progress to a single line that fits a tool row. */
 export function trimNote(note: string): string {
   const flat = note.replace(/\s+/g, " ").trim();
   if (flat.length <= CAD_PROGRESS_NOTE_MAX) return flat;

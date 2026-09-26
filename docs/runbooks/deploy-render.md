@@ -28,6 +28,14 @@ every service). There are no per-service env vars beyond that link.
 5. Create the private Supabase Storage bucket named `artifacts`.
 6. Configure custom auth email (see `docs/runbooks/auth-email.md`).
 
+For CAD generation, configure `OPENAI_API_KEY` with access to GPT-6 Astra. The
+blueprint sets `CAD_MODEL=gpt-6-astra` for both the web and chat worker services.
+Zoo is disabled; no token is needed. Native Python evaluation currently requires
+the restricted macOS worker. The Render/Linux services cannot evaluate new CAD
+until a separately isolated worker is implemented. Keep the hosted queue consumer
+paused while the local Mac owns that queue; do not run generated Python directly
+on a hosted web process. See `native-python-cad.md` for the runtime boundary.
+
 ## Services
 
 | Service               | Role                                |
@@ -147,3 +155,13 @@ a `.env.local` pointing at a local Postgres keeps those commands off production.
   in production.
 - Point DNS / custom domain at `foundry-web` if desired, then update Supabase
   Site URL and `NEXT_PUBLIC_COLLAB_URL` accordingly.
+
+## Durable engineering collaboration rollout
+
+Apply `packages/db/prisma/changes/20260911-collaboration.sql` before deploying this
+version of the web, worker and Hocuspocus services. It creates one additive table;
+existing source documents seed durable Yjs state lazily. This is required even
+when `NEXT_PUBLIC_COLLAB_URL` is unset because server and AI saves preserve that
+state for later reconnects. Deploy all three services together, using the same
+PostgreSQL database, Redis instance, and `AUTH_SECRET`; use `wss://` for the public
+collaboration URL. Existing engineering data is not rewritten by the SQL.

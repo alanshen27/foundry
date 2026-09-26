@@ -1,6 +1,6 @@
 /**
- * CAD document helpers for Zoo KCL models. Geometry evaluation runs in the
- * Zoo engine (browser WebRTC via @kittycad/lib, or ML APIs server-side).
+ * Collaborative CAD sources. Python/build123d evaluates on the server;
+ * Three.js displays the resulting mesh. Legacy KCL sources remain preserved.
  */
 export {
   DEFAULT_KCL as DEFAULT_SCRIPT,
@@ -10,6 +10,9 @@ export {
   cadDoc,
   normalizeCadDoc,
   getActiveComponent,
+  isCadStarterComponent,
+  selectCadComponentId,
+  pickCadAssemblyPreview,
   listComponentsByKind,
   setActiveComponent,
   assemblyDropTargetId,
@@ -36,6 +39,11 @@ export {
   meshPartProxyKcl,
   insertPartIntoAssembly,
   buildKclProject,
+  buildPythonProject,
+  isPythonCadComponent,
+  pythonCadDoc,
+  upsertPythonPart,
+  upsertPythonParts,
   addCadAsset,
   importMeshAsPart,
   type CadAssetImportMode,

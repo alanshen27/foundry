@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import type { Stage } from "@foundry/domain";
 import { AnimatedSignalGlyph } from "@/components/animated-signal-glyph";
 import { FoundryMark } from "@/components/foundry-mark";
@@ -7,7 +8,7 @@ import { InteractiveDotField } from "@/components/interactive-dot-field";
 import { STAGE_THEME } from "@/lib/stage-theme";
 import { cn } from "@/lib/utils";
 import { getCurrentUser } from "@/server/session";
-import { resolveWorkspaceHomePath } from "@/server/workspace-home";
+import { resolveViewportHomePath } from "@/server/workspace-home";
 
 const PHASES: { stage: Stage; verb: string; label: string; blurb: string; code: string }[] = [
   {
@@ -60,7 +61,10 @@ const SIGNALS = [
 
 export default async function HomePage() {
   const user = await getCurrentUser();
-  if (user) redirect(await resolveWorkspaceHomePath(user.id));
+  if (user)
+    redirect(
+      await resolveViewportHomePath(user.id, (await cookies()).get("foundry-last-project")?.value),
+    );
 
   return (
     <main className="relative flex min-h-screen flex-col">

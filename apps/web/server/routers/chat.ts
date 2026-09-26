@@ -1,16 +1,22 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { prisma, type Prisma } from "@foundry/db";
+import { COLLABORATION_TRANSACTION_OPTIONS } from "@foundry/collaboration";
 import { protectedProcedure, router } from "../trpc";
 import { requireProjectCapability } from "../access";
 import { recordAudit } from "../audit";
+import { acquireBranchEditMutex } from "../ai-edit-lock";
 import {
   DEFAULT_CATEGORY_NAME,
   DEFAULT_CHANNEL_NAME,
   ensureDefaultCategory,
   ensureDefaultChannel,
 } from "../chat";
-import { loadChannelHistory, persistRunMessages } from "../chat-run/persist";
+import {
+  loadChannelHistory,
+  persistCancelledRunFromEvents,
+  persistRunMessages,
+} from "../chat-run/persist";
 import { publishRunFinished } from "../chat-run/publish";
 import { expireStaleChatRuns } from "../chat-run/stale";
 import { markFailedAssistantMessages, validateResumableUIMessages } from "@/lib/copilot/messages";
@@ -333,7 +339,11 @@ export const chatRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await requireProjectCapability(ctx.user.id, input.projectId, "agent.invoke");
+      const { project } = await requireProjectCapability(
+        ctx.user.id,
+        input.projectId,
+        "agent.invoke",
+      );
 
       const where: {
         projectId: string;
@@ -355,15 +365,47 @@ export const chatRouter = router({
 
       const active = await prisma.chatRun.findMany({
         where,
-        select: { id: true, channelId: true },
+        select: { id: true, branchId: true, channelId: true, inputMessages: true },
       });
       if (active.length === 0) return { ok: true };
-      await prisma.chatRun.updateMany({
-        where: { id: { in: active.map((run) => run.id) } },
-        data: { status: "CANCELLED", finishedAt: new Date(), error: "cancelled" },
-      });
       await Promise.all(
-        active.map((run) => publishRunFinished(run.id, run.channelId, "cancelled")),
+        active.map(async (run) => {
+          const cancelled = await prisma.$transaction(async (tx) => {
+            // Let any write already holding this branch's lease settle before
+            // Stop returns. Future writes will see the cancelled lease.
+            await acquireBranchEditMutex(tx, input.projectId, run.branchId);
+            return tx.chatRun.updateMany({
+              where: {
+                id: run.id,
+                projectId: input.projectId,
+                status: { in: ["PENDING", "RUNNING"] },
+              },
+              data: { status: "CANCELLED", finishedAt: new Date(), error: "cancelled" },
+            });
+          }, COLLABORATION_TRANSACTION_OPTIONS);
+          // The worker may have finished after the initial query. Never relabel
+          // completed work or publish a stop for a run we did not cancel.
+          if (cancelled.count === 0) return;
+          const inputMessages = await validateUIMessages({
+            messages: Array.isArray(run.inputMessages) ? run.inputMessages : [],
+          });
+          await persistCancelledRunFromEvents({
+            runId: run.id,
+            scope: { projectId: input.projectId, branchId: run.branchId, channelId: run.channelId },
+            inputMessages,
+          });
+          // Clients reload history when they receive this signal, so save the
+          // interrupted tool states before announcing cancellation.
+          await publishRunFinished(run.id, run.channelId, "cancelled");
+          await recordAudit({
+            type: "ChatRunCancelled",
+            workspaceId: project.workspaceId,
+            projectId: input.projectId,
+            branchId: run.branchId,
+            actorId: ctx.user.id,
+            payload: { runId: run.id, channelId: run.channelId },
+          });
+        }),
       );
       return { ok: true };
     }),

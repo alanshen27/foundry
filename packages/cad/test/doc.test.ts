@@ -1,3 +1,4 @@
+import { PYTHON_PART_STARTER } from "../src/python-project";
 import { describe, expect, it } from "vitest";
 import { isPlausibleZooOpId } from "../src/zoo";
 import {
@@ -53,7 +54,7 @@ describe("normalizeCadDoc", () => {
   });
 
   it("defaults when empty", () => {
-    expect(normalizeCadDoc(null).script).toBe(DEFAULT_KCL);
+    expect(normalizeCadDoc(null).script).toBe(PYTHON_PART_STARTER);
     expect(normalizeCadDoc(null).components.length).toBeGreaterThanOrEqual(3);
   });
 

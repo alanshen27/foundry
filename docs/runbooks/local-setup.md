@@ -37,8 +37,48 @@
 Production deploy + branded confirmation email: see `deploy-render.md` and
 `auth-email.md`.
 
+## Mechanical CAD
+
+Set `OPENAI_API_KEY` for Astra Python generation (`CAD_MODEL=gpt-6-astra`).
+Install `uv` on the Mac running the web app and chat worker, and put it on their PATH.
+Prewarm the pinned runtime with:
+
+```sh
+uv run --no-project --python 3.12 --with build123d==0.9.1 --with ocpsvg==0.5.0 python -c "import build123d"
+```
+
+Geometry is evaluated inside a macOS sandbox, with exact STEP and viewport STL
+exports. Zoo is disabled and no token is required. Other operating systems fail
+closed until a restricted CAD worker is deployed. Missing OpenAI credentials disable
+AI generation but do not disable native source editing and geometry evaluation.
+See [native Python CAD](native-python-cad.md) for migration and execution limits.
+
+## Connected engineering and collaboration
+
+Before updating an existing database, apply the additive SQL in
+`packages/db/prisma/changes/20260911-collaboration.sql` through your normal
+database deployment process. New local databases get this table with `pnpm db:push`.
+The table is required even if `NEXT_PUBLIC_COLLAB_URL` is unset. Web, chat worker,
+and Hocuspocus must use the same database, Redis instance, and `AUTH_SECRET`.
+Set `NEXT_PUBLIC_COLLAB_URL=ws://localhost:1234` for live editing.
+See [the workflow runbook](connected-engineering.md) for behavior and checks.
+
 ## Troubleshooting
 
+- Local chat uses the BullMQ queue `chat-runs`. If local and hosted services
+  share Redis and Postgres, a hosted worker can take a localhost request. Keep
+  every connected worker on the same code version. Separate both Redis and
+  Postgres for independent development environments: changing only the queue
+  is insufficient because orphan recovery scans the shared database.
+- Worker startup logs and BullMQ's `processedBy` field include
+  `foundry-chat-stream-v3-local-<pid>` or `foundry-chat-stream-v3-render-<pid>`.
+  Use that identity to confirm which worker handled a run. Restarting an old
+  hosted deployment does not update its code; deploy the fixed version first.
+- Stream updates are persisted in short ordered batches for SSE replay. CAD draft
+  snapshots may be coalesced while queued; tool results and source deltas remain
+  ordered. Per-token Supabase broadcasts are not used. Collaborative SQL/Yjs saves
+  share a finite 60-second transaction budget to include branch-lock contention
+  and hosted-database round trips.
 - "Invalid environment configuration" on boot: the zod validator in
   `packages/config` prints exactly which variable is missing.
 - Prisma cannot reach the DB: check `docker ps` and that port 5432 is free.

@@ -63,50 +63,30 @@ async function expireStaleRuns(
     db.chatRun.findMany({ where: runningWhere, select }),
   ]);
 
-  const expired: ExpiredRun[] = [
-    ...pendingRows.map((r) => ({
-      id: r.id,
-      channelId: r.channelId,
-      projectId: r.projectId,
-      branchId: r.branchId,
-      inputMessages: r.inputMessages,
+  const candidates = [
+    ...pendingRows.map((run) => ({
+      run,
+      where: pendingWhere,
       error: "Timed out waiting for worker (check Redis / chat worker)",
     })),
-    ...runningRows.map((r) => ({
-      id: r.id,
-      channelId: r.channelId,
-      projectId: r.projectId,
-      branchId: r.branchId,
-      inputMessages: r.inputMessages,
+    ...runningRows.map((run) => ({
+      run,
+      where: runningWhere,
       error: "Timed out (stale run)",
     })),
   ];
-  if (expired.length === 0) return [];
-
-  await Promise.all([
-    pendingRows.length
-      ? db.chatRun.updateMany({
-          where: { id: { in: pendingRows.map((r) => r.id) } },
-          data: {
-            status: "ERROR",
-            error: "Timed out waiting for worker (check Redis / chat worker)",
-            finishedAt: new Date(),
-          },
-        })
-      : Promise.resolve(),
-    runningRows.length
-      ? db.chatRun.updateMany({
-          where: { id: { in: runningRows.map((r) => r.id) } },
-          data: {
-            status: "ERROR",
-            error: "Timed out (stale run)",
-            finishedAt: new Date(),
-          },
-        })
-      : Promise.resolve(),
-  ]);
-
-  return expired;
+  const transitions = await Promise.all(
+    candidates.map(async ({ run, where, error }): Promise<ExpiredRun | null> => {
+      const result = await db.chatRun.updateMany({
+        // Cancellation, completion, a worker claim, or a fresh heartbeat may
+        // have won since the read. Recheck the same stale predicate atomically.
+        where: { ...where, id: run.id },
+        data: { status: "ERROR", error, finishedAt: new Date() },
+      });
+      return result.count > 0 ? { ...run, error } : null;
+    }),
+  );
+  return transitions.filter((run): run is ExpiredRun => run !== null);
 }
 
 async function persistAndBroadcastExpired(expired: ExpiredRun[]): Promise<void> {

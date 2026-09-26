@@ -4,8 +4,15 @@ import { prisma } from "@foundry/db";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";
-import { ensureStageStarted, touchProject, setStageStatus } from "../stage-state";
+import {
+  ensureStageStarted,
+  invalidateStageApproval,
+  markDownstreamStale,
+  setStageStatus,
+  touchProject,
+} from "../stage-state";
 import { runFitCheck } from "../fit-check";
+import { BLOCKING_CHECK_STATUSES } from "@/lib/verify-checks";
 
 const category = z.enum(["VISUAL", "ELECTRICAL", "MECHANICAL", "SOFTWARE", "CROSS_DOMAIN"]);
 const status = z.enum(["PENDING", "PASS", "FAIL", "WARNING", "SKIPPED", "SIMULATED", "ERROR"]);
@@ -13,8 +20,16 @@ const severity = z.enum(["INFO", "MINOR", "MAJOR", "CRITICAL"]);
 /** Repo-relative file/part path the check is about; null = project-wide. */
 const targetPath = z.string().trim().min(1).max(300);
 
-/** A check is satisfied for gating if it passed (or was waived/skipped). */
-const BLOCKING_STATUSES = new Set(["PENDING", "FAIL", "ERROR"]);
+async function invalidateVerification(params: {
+  workspaceId: string;
+  projectId: string;
+  branchId: string;
+  actorId: string;
+}): Promise<boolean> {
+  const invalidated = await invalidateStageApproval({ ...params, stage: "VERIFY" });
+  await markDownstreamStale({ ...params, changedStage: "VERIFY" });
+  return invalidated;
+}
 
 export const verifyRouter = router({
   /**
@@ -61,6 +76,12 @@ export const verifyRouter = router({
       const check = await prisma.validationCheck.create({
         data: { projectId, branchId, createdById: ctx.user.id, ...fields },
       });
+      await invalidateVerification({
+        workspaceId: project.workspaceId,
+        projectId,
+        branchId,
+        actorId: ctx.user.id,
+      });
       await ensureStageStarted({
         workspaceId: project.workspaceId,
         projectId,
@@ -102,8 +123,14 @@ export const verifyRouter = router({
       );
       const { id, ...fields } = input;
       const check = await prisma.validationCheck.update({ where: { id }, data: fields });
-      // Editing results after an approval invalidates the gate.
-      if (input.status && input.status !== existing.status) {
+      // Any check edit changes the approved snapshot, including evidence or scope.
+      const invalidated = await invalidateVerification({
+        workspaceId: project.workspaceId,
+        projectId: existing.projectId,
+        branchId: existing.branchId,
+        actorId: ctx.user.id,
+      });
+      if (!invalidated && input.status && input.status !== existing.status) {
         await setStageStatus({
           workspaceId: project.workspaceId,
           projectId: existing.projectId,
@@ -162,6 +189,12 @@ export const verifyRouter = router({
           approvedAt: input.waived ? new Date() : null,
         },
       });
+      await invalidateVerification({
+        workspaceId: project.workspaceId,
+        projectId: existing.projectId,
+        branchId: existing.branchId,
+        actorId: ctx.user.id,
+      });
       await recordAudit({
         type: "ValidationCheckWaived",
         workspaceId: project.workspaceId,
@@ -184,6 +217,12 @@ export const verifyRouter = router({
         "verification.run",
       );
       await prisma.validationCheck.delete({ where: { id: input.id } });
+      await invalidateVerification({
+        workspaceId: project.workspaceId,
+        projectId: existing.projectId,
+        branchId: existing.branchId,
+        actorId: ctx.user.id,
+      });
       await recordAudit({
         type: "ValidationCheckDeleted",
         workspaceId: project.workspaceId,
@@ -212,7 +251,7 @@ export const verifyRouter = router({
           message: "Add at least one validation check before approving",
         });
       }
-      const blocking = checks.filter((c) => !c.waived && BLOCKING_STATUSES.has(c.status));
+      const blocking = checks.filter((c) => !c.waived && BLOCKING_CHECK_STATUSES.has(c.status));
       if (blocking.length > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",

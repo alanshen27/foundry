@@ -195,6 +195,7 @@ export function createZooCadAdapter(opts: ZooCadAdapterOptions): CadPort {
 
   return {
     executeKcl: (input) => mcp.executeKcl(input),
+    exportGlb: (input) => mcp.exportGlb(input),
     boundingBoxKcl: (input) => mcp.boundingBoxKcl(input),
     multiviewSnapshotKcl: (input) => mcp.multiviewSnapshotKcl(input),
 

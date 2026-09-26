@@ -217,11 +217,14 @@ export function CodeWorkspace({
     {
       enabled: Boolean(activeFileId),
       staleTime: 30 * 60 * 1000,
+      refetchInterval: 30 * 60 * 1000,
+      retry: false,
       refetchOnWindowFocus: false,
     },
   );
   const collabSession = collabQuery.data ?? null;
   const collabEnabled = collabSession !== null;
+  const collabResolved = collabQuery.data !== undefined;
 
   const saveFile = trpc.code.saveFile.useMutation();
   const createFile = trpc.code.createFile.useMutation({
@@ -244,6 +247,7 @@ export function CodeWorkspace({
 
   const [content, setContent] = useState("");
   const dirtyRef = useRef(false);
+  const baseContentRef = useRef("");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load file content when the active tab changes / server data arrives.
@@ -252,6 +256,7 @@ export function CodeWorkspace({
     if (collabEnabled) return;
     if (fileQuery.data && fileQuery.data.id === activeFileId && !dirtyRef.current) {
       setContent(fileQuery.data.content);
+      baseContentRef.current = fileQuery.data.content;
     }
   }, [fileQuery.data, activeFileId, collabEnabled]);
 
@@ -273,14 +278,22 @@ export function CodeWorkspace({
   }
 
   function onChange(value: string | undefined) {
-    if (collabEnabled || !canEdit || activeFileId == null) return;
+    if (!collabResolved || collabEnabled || !canEdit || activeFileId == null) return;
     const v = value ?? "";
     setContent(v);
     dirtyRef.current = true;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     const fileId = activeFileId;
     saveTimer.current = setTimeout(() => {
-      saveFile.mutate({ id: fileId, content: v }, { onSuccess: () => (dirtyRef.current = false) });
+      saveFile.mutate(
+        { id: fileId, content: v, baseContent: baseContentRef.current },
+        {
+          onSuccess: () => {
+            dirtyRef.current = false;
+            baseContentRef.current = v;
+          },
+        },
+      );
     }, 900);
   }
 
@@ -406,6 +419,11 @@ export function CodeWorkspace({
                   ? "Unsaved"
                   : "Synced"}
           </span>
+          {collabQuery.error ? (
+            <span className="text-destructive text-xs">
+              Live session unavailable: {collabQuery.error.message}
+            </span>
+          ) : null}
           {activeRepo ? (
             <>
               <Button
@@ -526,8 +544,15 @@ export function CodeWorkspace({
           <div className="min-h-0 flex-1">
             {activeFileId && fileQuery.data && collabSession ? (
               <CollaborativeMonaco
-                key={`${activeFileId}-${monacoTheme}`}
+                key={activeFileId}
                 session={collabSession}
+                canEdit={canEdit}
+                onCommit={() => {
+                  void utils.code.getFile.invalidate({ id: activeFileId });
+                  void utils.engineering.status.invalidate({ projectId, branchId });
+                  void utils.verify.invalidate();
+                  void utils.project.invalidate();
+                }}
                 language={languageFor(fileQuery.data.path)}
                 theme={monacoTheme}
               />
@@ -541,7 +566,7 @@ export function CodeWorkspace({
                 value={content}
                 onChange={onChange}
                 options={{
-                  readOnly: !canEdit,
+                  readOnly: !canEdit || !collabResolved,
                   minimap: { enabled: false },
                   fontSize: 13,
                   scrollBeyondLastLine: false,

@@ -19,6 +19,10 @@ export function mintSitePromptCollabToken(
   return mintCollabToken({ ...claims, kind: "siteprompt" }, secretMaterial());
 }
 
+export function mintDesignCollabToken(claims: Omit<CollabClaims, "exp" | "kind">): string {
+  return mintCollabToken({ ...claims, kind: "design" }, secretMaterial());
+}
+
 export function getCollabWebsocketUrl(): string | null {
   return getServerEnv().NEXT_PUBLIC_COLLAB_URL ?? null;
 }

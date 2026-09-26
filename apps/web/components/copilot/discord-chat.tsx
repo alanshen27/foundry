@@ -120,7 +120,7 @@ function ChatMessage({
   return (
     <div
       className={cn(
-        "hover:bg-muted/30 group relative flex gap-3 px-5",
+        "hover:bg-muted/20 group relative flex gap-3 px-5",
         grouped ? "py-0.5" : "mt-4 py-0.5 first:mt-0",
       )}
     >
@@ -142,15 +142,15 @@ function ChatMessage({
           <div className="flex items-center gap-2">
             <span
               className={cn(
-                "font-mono text-[12px] font-medium tracking-[0.04em]",
-                !isUser && "text-primary",
+                "font-mono text-[11px] font-medium tracking-[0.08em] uppercase",
+                !isUser && "text-foreground",
                 isUser && isOwnUserMessage(message, viewer.id) && "text-foreground",
               )}
             >
               {authorName}
             </span>
             {isUser ? null : (
-              <span className="bg-primary text-primary-foreground px-1.5 py-px font-mono text-[9px] font-semibold tracking-[0.1em] uppercase">
+              <span className="border-primary/30 bg-primary/10 text-primary border px-1.5 py-px font-mono text-[9px] font-medium tracking-[0.1em] uppercase">
                 AI
               </span>
             )}
@@ -190,13 +190,13 @@ function ChatMessage({
               return isUser ? (
                 <p
                   key={block.key}
-                  className="text-foreground/90 text-[15px] leading-relaxed whitespace-pre-wrap"
+                  className="text-foreground text-[14px] leading-relaxed whitespace-pre-wrap"
                 >
                   {splitMentions(block.part.text).map((seg, j) =>
                     seg.kind === "mention" ? (
                       <span
                         key={j}
-                        className="bg-primary/15 text-primary rounded-none px-1 font-medium"
+                        className="bg-primary/10 text-primary rounded-none px-1 font-medium"
                       >
                         {seg.text}
                       </span>
@@ -206,7 +206,7 @@ function ChatMessage({
                   )}
                 </p>
               ) : (
-                <div key={block.key} className="text-[15px] leading-relaxed">
+                <div key={block.key} className="text-[14px] leading-relaxed">
                   <Markdown text={block.part.text} />
                 </div>
               );
@@ -317,7 +317,7 @@ export function DiscordChat({
 
   function trySend() {
     if (!canSend) return;
-    send(input, replyingTo ? { replyToId: replyingTo.id } : undefined);
+    if (!send(input, replyingTo ? { replyToId: replyingTo.id } : undefined)) return;
     setInput("");
     setCaret(0);
   }
@@ -362,9 +362,9 @@ export function DiscordChat({
       <ChannelRail title={projectName} subtitle={workspaceName} />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="bg-card flex h-12 shrink-0 items-center gap-2 border-b px-5">
+        <header className="bg-background border-border flex h-10 shrink-0 items-center gap-2 border-b px-5">
           <FoundryMarkIcon className="size-4 shrink-0" />
-          <h1 className="truncate font-mono text-[13px] font-medium tracking-[0.06em] uppercase">
+          <h1 className="truncate font-mono text-[11px] font-medium tracking-[0.08em] uppercase">
             {channelName}
           </h1>
           <span className="bg-border mx-1 hidden h-4 w-px shrink-0 sm:block" />
@@ -382,7 +382,7 @@ export function DiscordChat({
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto py-4">
           {messages.length === 0 ? (
             <div className="flex flex-col gap-5 px-5 pt-10">
-              <div className="bg-primary relative flex size-14 items-center justify-center overflow-hidden">
+              <div className="bg-primary relative flex size-10 items-center justify-center overflow-hidden">
                 <span
                   aria-hidden
                   className="pointer-events-none absolute inset-0 opacity-30"
@@ -391,7 +391,7 @@ export function DiscordChat({
                     backgroundSize: "3.5px 3.5px",
                   }}
                 />
-                <FoundryMarkIcon className="relative z-10 size-7 brightness-0 invert" />
+                <FoundryMarkIcon className="relative z-10 size-5 brightness-0 invert" />
               </div>
               <div className="flex flex-col gap-2">
                 <h2 className="font-mono text-2xl font-medium tracking-[-0.03em]">
@@ -403,14 +403,14 @@ export function DiscordChat({
                   checks.
                 </p>
               </div>
-              <div className="mt-1 flex flex-wrap gap-2">
+              <div className="border-border mt-1 grid max-w-xl divide-y divide-dotted border-y border-dotted">
                 {SUGGESTIONS.map((s) => (
                   <button
                     key={s}
                     type="button"
                     disabled={busy}
                     onClick={() => send(s)}
-                    className="border-border bg-card hover:border-foreground/30 rounded-none border px-3 py-2 text-left font-mono text-[12px] transition-colors disabled:pointer-events-none disabled:opacity-50"
+                    className="hover:bg-muted/30 rounded-none px-1 py-3 text-left text-[13px] transition-colors disabled:pointer-events-none disabled:opacity-50"
                   >
                     {s}
                   </button>
@@ -456,7 +456,10 @@ export function DiscordChat({
           ) : null}
         </div>
 
-        <form onSubmit={onSubmit} className="shrink-0 px-6 pb-5">
+        <form
+          onSubmit={onSubmit}
+          className="border-border shrink-0 border-t border-dotted px-5 py-3"
+        >
           <div className="relative">
             {replyingTo ? (
               <ReplyPreviewBar message={replyingTo} onClear={() => setReplyingTo(null)} />
@@ -465,7 +468,7 @@ export function DiscordChat({
               <div
                 role="listbox"
                 aria-label="Mentions"
-                className="bg-popover absolute bottom-full left-0 z-20 mb-2 w-full overflow-hidden rounded-none border shadow-lg"
+                className="bg-background absolute bottom-full left-0 z-20 mb-2 w-full overflow-hidden rounded-none border shadow-md"
               >
                 {mentionOptions.map((option, i) => (
                   <button
@@ -479,7 +482,7 @@ export function DiscordChat({
                     }}
                     className={cn(
                       "flex w-full items-center gap-2 px-3 py-2 text-left text-sm",
-                      i === mentionIndex ? "bg-muted" : "hover:bg-muted/60",
+                      i === mentionIndex ? "bg-primary/10" : "hover:bg-muted/40",
                     )}
                   >
                     <AtSign className="text-primary size-3.5 shrink-0" />
@@ -497,7 +500,7 @@ export function DiscordChat({
               </div>
             ) : null}
 
-            <div className="bg-muted/70 focus-within:ring-ring/40 flex items-end gap-2 rounded-none px-4 py-2.5 focus-within:ring-2">
+            <div className="bg-background border-foreground/25 focus-within:border-foreground focus-within:ring-foreground/10 flex items-end gap-2 rounded-none border px-3 py-2.5 transition-colors focus-within:ring-1">
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -515,13 +518,15 @@ export function DiscordChat({
                     : `Message #${channelName}`
                 }
                 rows={1}
-                className="placeholder:text-muted-foreground text-foreground max-h-40 min-h-6 flex-1 resize-none bg-transparent text-[15px] leading-6 outline-none"
+                className="placeholder:text-muted-foreground text-foreground max-h-40 min-h-6 flex-1 resize-none bg-transparent text-[14px] leading-6 outline-none"
                 aria-label="Copilot message"
               />
               {busy ? (
                 <Button
                   type="button"
                   size="icon-sm"
+                  variant="outline"
+                  className="border-foreground/30 text-foreground size-7 shrink-0 rounded-none"
                   onClick={(e) => {
                     e.preventDefault();
                     stop();
@@ -532,7 +537,13 @@ export function DiscordChat({
                   <Square className="size-3 fill-current" />
                 </Button>
               ) : (
-                <Button type="submit" size="icon-sm" disabled={!canSend} aria-label="Send">
+                <Button
+                  type="submit"
+                  size="icon-sm"
+                  className="size-7 shrink-0 rounded-none"
+                  disabled={!canSend}
+                  aria-label="Send"
+                >
                   <Send className="size-3.5" />
                 </Button>
               )}

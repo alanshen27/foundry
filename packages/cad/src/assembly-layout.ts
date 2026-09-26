@@ -1,7 +1,7 @@
 /**
  * Assembly helpers.
  *
- * Product preview path: Zoo generates assembly/product.kcl as a full visual
+ * Product preview path: Astra generates assembly/product.kcl as a full visual
  * product. Attached parts/* files are manufacturing references (dims / form);
  * the preview may use named solids that match those parts without importing
  * them. Import/pose helpers below remain for tests and MCP orientation probes.
@@ -18,7 +18,7 @@ import { partModuleAlias, toZooKclPath } from "./doc";
  */
 export function seedAssemblyKcl(parts: Array<Pick<CadComponent, "name" | "path">>): string {
   const lines: string[] = [
-    "// Product assembly (mm) — poses written by Zoo multi-file Text-to-CAD iteration.",
+    "// Product assembly (mm) — poses written by CAD project iteration.",
     "// Parts are attached as project files; only this assembly file should gain translate/rotate.",
     "",
   ];

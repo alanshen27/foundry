@@ -5,6 +5,8 @@
 export type {
   CadAsset,
   CadAssetFormat,
+  CadAssemblyInstance,
+  CadLinkedAssembly,
   CadBoundingBox,
   CadComponent,
   CadComponentKind,
@@ -16,6 +18,8 @@ export type {
   CadProjectIterateOptions,
 } from "./port";
 export { isPlausibleZooOpId } from "./op-id";
+export { stableCadHash, buildLinkedAssembly, linkedAssemblyStatus } from "./linked-assembly";
+export type { LinkedAssemblyStatus } from "./linked-assembly";
 export {
   planAssemblyPlacements,
   renderAssemblyKcl,
@@ -38,6 +42,9 @@ export {
   cadDoc,
   normalizeCadDoc,
   getActiveComponent,
+  isCadStarterComponent,
+  selectCadComponentId,
+  pickCadAssemblyPreview,
   listComponentsByKind,
   setActiveComponent,
   assemblyDropTargetId,
@@ -71,3 +78,16 @@ export {
 } from "./doc";
 export type { CadAssetImportMode, KclProjectBuild } from "./doc";
 export { parseCadParams, setCadParam, type CadParam } from "./params";
+export { pythonCadDoc, upsertPythonPart, upsertPythonParts, upsertPythonCadContent } from "./doc";
+export {
+  PYTHON_ASSEMBLY_PATH,
+  PYTHON_PART_STARTER,
+  PYTHON_ASSEMBLY_STARTER,
+  isPythonCadComponent,
+  pythonPartPath,
+  pythonModuleName,
+  isPythonProjectPath,
+  pythonProjectDependencies,
+  buildPythonProject,
+} from "./python-project";
+export type { PythonProjectBuild } from "./python-project";

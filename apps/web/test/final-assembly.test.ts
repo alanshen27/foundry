@@ -36,6 +36,7 @@ const pcbWithFootprint: PcbDoc = {
       yMm: 10,
       rotationDeg: 0,
       side: "front",
+      bodyHeightMm: 0.5,
     },
   ],
 };
@@ -43,15 +44,17 @@ const pcbWithFootprint: PcbDoc = {
 describe("pcbAssemblyKcl", () => {
   it("draws the board slab with the doc's dimensions", () => {
     const kcl = pcbAssemblyKcl(EMPTY_PCB);
-    expect(kcl).toContain("SIMULATED PCB");
-    expect(kcl).toContain("fpcbBoard = extrude(fpcbBoardProfile, length = 1.6)");
-    expect(kcl).toContain("line(end = [80, 0])");
+    expect(kcl).toContain("LOCAL PCB");
+    expect(kcl).toContain("UNVERIFIED");
+    expect(kcl).toContain("fpcb_width = 80");
+    expect(kcl).toContain("fpcb_thickness = 1.6");
+    expect(kcl).toContain("radius = fpcb_cornerRadius");
   });
 
   it("adds a body per known footprint and lifts it above the board", () => {
     const kcl = pcbAssemblyKcl(pcbWithFootprint, { zOffsetMm: 2 });
-    expect(kcl).toContain("fpcbFp0 = extrude(");
-    expect(kcl).toContain("translate(z = 3.6)");
+    expect(kcl).toContain("length = 0.5");
+    expect(kcl).toContain("z = 3.6");
   });
 
   it("skips mounting holes and unknown footprints", () => {
@@ -83,7 +86,7 @@ describe("buildFinalAssembly", () => {
     expect(out!.entryPath).toBe(FINAL_ASSEMBLY_PATH);
     // No assembly component → falls back to the standalone part.
     expect(out!.script).toContain('import "parts/housing/main.kcl" as fa0_housing');
-    expect(out!.script).toContain("fpcbBoard");
+    expect(out!.script).toContain("fpcb_board");
     expect(out!.projectFiles["parts/housing/main.kcl"]).toContain("body = extrude");
     expect(out!.projectFiles[FINAL_ASSEMBLY_PATH]).toBe(out!.script);
     expect(out!.mechanicalRoots).toEqual(["housing"]);
@@ -111,6 +114,6 @@ describe("buildFinalAssembly", () => {
     expect(out).not.toBeNull();
     expect(out!.mechanicalRoots).toEqual([]);
     expect(out!.script).not.toContain("import ");
-    expect(out!.script).toContain("fpcbBoard");
+    expect(out!.script).toContain("fpcb_board");
   });
 });

@@ -78,7 +78,12 @@ const serverEnvSchema = z
       const trimmed = value.trim();
       return trimmed.length > 0 ? trimmed : undefined;
     }, z.string().url().optional()),
-    // Zoo / KittyCAD engine + text-to-CAD (required for mechanical MODEL3D)
+    // CAD generation uses Astra through OpenAI; Zoo provides geometry execution.
+    CAD_MODEL: z.preprocess(
+      (value) => (typeof value === "string" && value.trim() ? value.trim() : undefined),
+      z.string().min(1).default("gpt-6-astra"),
+    ),
+    // Zoo / KittyCAD engine, viewport, and geometry verification.
     ZOO_API_TOKEN: z.preprocess((value) => {
       if (typeof value !== "string") return undefined;
       const trimmed = value.trim();

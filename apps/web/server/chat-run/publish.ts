@@ -4,6 +4,7 @@ import { copilotBroadcastChannel } from "@foundry/realtime";
 import { prisma } from "@foundry/db";
 import type { UIMessageChunk } from "ai";
 import { getBroadcastPublisher } from "../realtime";
+import type { RunEventWrite } from "./event-writer";
 
 /** Highest seq already stored for a run (0 if none). */
 export async function maxRunEventSeq(runId: string): Promise<number> {
@@ -16,14 +17,14 @@ export async function maxRunEventSeq(runId: string): Promise<number> {
 }
 
 /**
- * Persist a stream chunk and fan it out to every connected client.
+ * Persist a stream chunk for SSE replay.
  *
  * Upsert so a deploy reclaim / dual-pickup that reuses seq numbers cannot
  * crash the whole run with P2002 on (runId, seq).
  */
 export async function publishRunChunk(
   runId: string,
-  channelId: string,
+  _channelId: string,
   seq: number,
   chunk: UIMessageChunk,
 ): Promise<void> {
@@ -33,9 +34,18 @@ export async function publishRunChunk(
     // Keep the first write — replays must stay stable for SSE reconnect.
     update: {},
   });
-  await getBroadcastPublisher().publish(copilotBroadcastChannel(channelId), {
-    event: "chunk",
-    payload: { runId, seq, chunk },
+}
+
+/**
+ * SSE reads these rows directly. No client consumes per-chunk broadcasts;
+ * subscribing/sending/unsubscribing for every token delayed replies by minutes.
+ * A batch commits together, so SSE cannot skip an earlier uncommitted sequence.
+ */
+export async function publishRunChunks(runId: string, events: RunEventWrite[]): Promise<void> {
+  if (events.length === 0) return;
+  await prisma.chatRunEvent.createMany({
+    data: events.map(({ seq, chunk }) => ({ runId, seq, chunk: chunk as object })),
+    skipDuplicates: true,
   });
 }
 

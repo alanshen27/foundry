@@ -27,6 +27,8 @@ type Props = {
   language: string;
   theme: string;
   className?: string;
+  canEdit?: boolean;
+  onCommit?: () => void;
 };
 
 const STYLE_ID = "foundry-yjs-awareness-styles";
@@ -70,13 +72,26 @@ function syncAwarenessStyles(awareness: {
   el.textContent = rules.join("\n");
 }
 
-export function CollaborativeMonaco({ session, language, theme, className }: Props) {
+export function CollaborativeMonaco({
+  session,
+  language,
+  theme,
+  className,
+  canEdit = true,
+  onCommit,
+}: Props) {
   const ydocRef = useRef<Y.Doc | null>(null);
   const providerRef = useRef<HocuspocusProvider | null>(null);
   const bindingRef = useRef<MonacoBinding | null>(null);
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const [status, setStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
   const [sessionEpoch, setSessionEpoch] = useState(0);
+  const [synced, setSynced] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const commitRef = useRef(onCommit);
+  commitRef.current = onCommit;
 
   useEffect(() => {
     const ydoc = new Y.Doc();
@@ -84,11 +99,32 @@ export function CollaborativeMonaco({ session, language, theme, className }: Pro
       url: session.url,
       name: session.documentName,
       document: ydoc,
-      token: session.token,
+      token: () => sessionRef.current.token,
       onStatus: ({ status: next }) => {
         if (next === "connected") setStatus("connected");
         else if (next === "disconnected") setStatus("disconnected");
         else setStatus("connecting");
+        if (next !== "connected") setSynced(false);
+      },
+      onSynced: ({ state }) => {
+        setSynced(state);
+        if (state) setError(null);
+      },
+      onAuthenticationFailed: ({ reason }) => {
+        setError(reason);
+        setSynced(false);
+      },
+      onClose: ({ event }) => {
+        if (event.code !== 1000 && event.reason) setError(event.reason);
+      },
+      onStateless: ({ payload }) => {
+        try {
+          const event = JSON.parse(payload) as { type?: unknown; message?: unknown };
+          if (event.type === "committed") commitRef.current?.();
+          if (event.type === "error" && typeof event.message === "string") setError(event.message);
+        } catch {
+          /* Ignore unrelated presence messages. */
+        }
       },
     });
 
@@ -117,8 +153,8 @@ export function CollaborativeMonaco({ session, language, theme, className }: Pro
       ydocRef.current = null;
       providerRef.current = null;
     };
-    // Token rotation shouldn't tear the live session; auth is checked on
-    // connect, so session.token is omitted on purpose.
+    // The token callback reads the latest token on every reconnect without
+    // tearing down this document or dropping unacknowledged local edits.
   }, [session.url, session.documentName, session.user.id, session.user.name]);
 
   // Bind Monaco ↔ Yjs whenever both the editor and a live provider exist.
@@ -158,7 +194,7 @@ export function CollaborativeMonaco({ session, language, theme, className }: Pro
         beforeMount={defineFoundryMonacoThemes}
         onMount={onMount}
         options={{
-          readOnly: !session.canEdit,
+          readOnly: !canEdit || !session.canEdit || !synced,
           minimap: { enabled: false },
           fontSize: 13,
           scrollBeyondLastLine: false,
@@ -177,7 +213,13 @@ export function CollaborativeMonaco({ session, language, theme, className }: Pro
         )}
         aria-live="polite"
       >
-        {status === "connected" ? "Live" : status === "connecting" ? "Connecting…" : "Disconnected"}
+        {error
+          ? `Unsaved — ${error}`
+          : status === "connected" && synced
+            ? "Live"
+            : status === "connecting" || (!synced && status === "connected")
+              ? "Connecting…"
+              : "Disconnected"}
       </div>
     </div>
   );

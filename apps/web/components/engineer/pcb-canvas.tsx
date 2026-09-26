@@ -1,5 +1,8 @@
 "use client";
 
+import { useCollaborativeDesign } from "./use-collaborative-design";
+import { DesignCollaborationStatus } from "./design-collaboration-status";
+
 /**
  * PCB layout workspace (Engineer > PCB): board outline, stackup dimensions,
  * footprint placement, two-layer copper routing, DRC, and Gerber output.
@@ -61,6 +64,8 @@ import {
   emptyPcbDoc,
   emptyPcbSet,
   footprintDef,
+  FOOTPRINT_LIBRARY,
+  padByPin,
   normalizePcbDoc,
   normalizePcbSet,
   pcbId,
@@ -88,6 +93,11 @@ import {
 } from "@/lib/pcb/routing";
 import { runDrc } from "@/lib/pcb/drc";
 import { fabricationFiles } from "@/lib/pcb/export";
+import {
+  syncPcbFromSchematic,
+  wiredPinsForPart,
+  type SchematicSyncIssue,
+} from "@/lib/pcb/schematic-sync";
 import { trpc } from "@/lib/trpc";
 import { useCursors } from "@/lib/use-cursors";
 import { useLiveEdit } from "@/lib/use-live-edit";
@@ -471,12 +481,15 @@ function FootprintGraphic({
 export function PcbCanvas({
   projectId,
   branchId,
-  canEdit,
+  canEdit: allowEdit,
+  focusBoardId,
 }: {
   projectId: string;
   branchId: string;
   canEdit: boolean;
+  focusBoardId?: string;
 }) {
+  const utils = trpc.useUtils();
   const query = trpc.design.get.useQuery({ projectId, branchId, kind: "PCB" });
   // The schematic is the source of nets; the board only references it.
   const circuitQuery = trpc.design.get.useQuery({ projectId, branchId, kind: "CIRCUIT" });
@@ -486,6 +499,7 @@ export function PcbCanvas({
   /** Every board in the project; `doc` below is the one being edited. */
   const [boards, setBoards] = useState<PcbDoc[]>(() => emptyPcbSet().boards);
   const [activeBoardId, setActiveBoardId] = useState<string>("board-1");
+  const appliedFocusBoard = useRef<string | undefined>(undefined);
   const doc = useMemo(
     () => boards.find((b) => b.id === activeBoardId) ?? boards[0] ?? emptyPcbDoc(),
     [boards, activeBoardId],
@@ -505,6 +519,13 @@ export function PcbCanvas({
     [activeBoardId],
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showSchematicSync, setShowSchematicSync] = useState(false);
+  const [packageChoices, setPackageChoices] = useState<Record<string, string>>({});
+  const [syncReport, setSyncReport] = useState<{
+    added: number;
+    updated: number;
+    issues: SchematicSyncIssue[];
+  } | null>(null);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [footprintCategory, setFootprintCategory] = useState("All");
@@ -551,6 +572,29 @@ export function PcbCanvas({
   activeBoardIdRef.current = activeBoardId;
   const saveRef = useRef(save);
   saveRef.current = save;
+  const sharedBaseRef = useRef<unknown>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const shared = useCollaborativeDesign({
+    projectId,
+    branchId,
+    kind: "PCB",
+    canEdit: allowEdit,
+    onRemoteData: (data) => {
+      if (dirtyRef.current) return;
+      const next = normalizePcbSet(data);
+      sharedBaseRef.current = next;
+      setBoards(next.boards);
+      setActiveBoardId((current) =>
+        next.boards.some((b) => b.id === current)
+          ? current
+          : (next.activeBoardId ?? next.boards[0]?.id ?? "board-1"),
+      );
+    },
+  });
+  const canEdit = allowEdit && shared.canEdit && (shared.mode === "local" || shared.ready);
+  const sharedRef = useRef(shared);
+  sharedRef.current = shared;
+
   const dragRef = useRef<{
     id: string;
     originX: number;
@@ -615,12 +659,14 @@ export function PcbCanvas({
     if (!canEdit) return;
     dirtyRef.current = true;
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (sharedRef.current.mode !== "local") return;
     saveTimer.current = setTimeout(() => {
       saveRef.current.mutate(
         {
           projectId,
           branchId,
           kind: "PCB",
+          baseData: sharedBaseRef.current,
           data: {
             version: 2,
             boards: boardsRef.current,
@@ -628,25 +674,71 @@ export function PcbCanvas({
           },
         },
         {
-          onSuccess: () => {
+          onSuccess: (saved) => {
             dirtyRef.current = false;
+            sharedBaseRef.current = saved.data;
             liveRef.current.commit();
+            void utils.engineering.status.invalidate({ projectId, branchId });
           },
         },
       );
     }, 800);
-  }, [canEdit, projectId, branchId]);
+  }, [canEdit, projectId, branchId, utils]);
 
   useEffect(() => {
-    if (dirtyRef.current) return;
+    if (!focusBoardId) appliedFocusBoard.current = undefined;
+    if (
+      focusBoardId &&
+      appliedFocusBoard.current !== focusBoardId &&
+      boards.some((board) => board.id === focusBoardId)
+    ) {
+      setActiveBoardId(focusBoardId);
+      appliedFocusBoard.current = focusBoardId;
+    }
+  }, [focusBoardId, boards]);
+
+  useEffect(() => {
+    setPackageChoices({});
+    setSyncReport(null);
+  }, [activeBoardId]);
+
+  useEffect(() => {
+    if (shared.mode !== "local" || dirtyRef.current) return;
     const set = query.data ? normalizePcbSet(query.data.data) : emptyPcbSet();
+    sharedBaseRef.current = set;
     setBoards(set.boards);
     setActiveBoardId((current) =>
       set.boards.some((b) => b.id === current)
         ? current
         : (set.activeBoardId ?? set.boards[0]!.id!),
     );
-  }, [query.data]);
+  }, [query.data, shared.mode]);
+
+  useEffect(() => {
+    if (shared.mode !== "live" || !shared.ready || !dirtyRef.current) return;
+    const next = { version: 2, boards, activeBoardId };
+    const before = sharedBaseRef.current;
+    sharedBaseRef.current = next;
+    dirtyRef.current = false;
+    try {
+      shared.applySnapshot(before, next);
+      setWriteError(null);
+      void utils.engineering.status.invalidate({ projectId, branchId });
+    } catch (error) {
+      sharedBaseRef.current = before;
+      dirtyRef.current = true;
+      setWriteError(error instanceof Error ? error.message : "Could not synchronize board edits");
+    }
+  }, [
+    boards,
+    activeBoardId,
+    shared.mode,
+    shared.ready,
+    shared.applySnapshot,
+    utils,
+    projectId,
+    branchId,
+  ]);
 
   const undo = useCallback(() => {
     const previous = undoRef.current.pop();
@@ -799,6 +891,27 @@ export function PcbCanvas({
     [fullCircuit, doc.groupId],
   );
   const boardSlice = partition.slices.find((s) => s.group.id === doc.groupId) ?? null;
+
+  const updateFromSchematic = () => {
+    const current = docRef.current;
+    const assignments = circuit.parts.flatMap((part) => {
+      const linked = current.footprints.filter((fp) => fp.partId === part.id);
+      const libraryId =
+        packageChoices[part.id] ?? (linked.length === 1 ? linked[0]!.libraryId : "");
+      return libraryId ? [{ partId: part.id, libraryId }] : [];
+    });
+    const result = syncPcbFromSchematic(circuit, current, assignments);
+    if (result.added.length || result.updated.length) {
+      pushHistory();
+      setDoc(result.doc);
+      scheduleSave();
+    }
+    setSyncReport({
+      added: result.added.length,
+      updated: result.updated.length,
+      issues: result.issues,
+    });
+  };
 
   const addBoard = useCallback(
     (groupId?: string, label?: string) => {
@@ -1246,7 +1359,13 @@ export function PcbCanvas({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+      if (
+        el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.tagName === "SELECT" ||
+          el.isContentEditable)
+      ) {
         return;
       }
 
@@ -1365,6 +1484,7 @@ export function PcbCanvas({
 
   return (
     <div className="bg-background absolute inset-0 flex">
+      <DesignCollaborationStatus status={shared.status} error={writeError ?? shared.error} />
       {/* Library */}
       <aside className="bg-card/40 hidden w-64 shrink-0 flex-col border-r md:flex">
         <div className="border-b px-3 py-2">
@@ -1417,6 +1537,14 @@ export function PcbCanvas({
           <Button
             variant="outline"
             size="xs"
+            disabled={!canEdit}
+            onClick={() => setShowSchematicSync(true)}
+          >
+            Update PCB from schematic
+          </Button>
+          <Button
+            variant="outline"
+            size="xs"
             disabled={!canEdit || doc.footprints.length === 0}
             onClick={arrangeFootprints}
           >
@@ -1430,7 +1558,92 @@ export function PcbCanvas({
 
       {/* Canvas */}
       <div className="relative min-w-0 flex-1">
+        {showSchematicSync ? (
+          <section
+            role="dialog"
+            aria-label="Update PCB from schematic"
+            className="bg-card absolute top-16 right-3 bottom-3 z-30 flex w-80 max-w-[calc(100%-1.5rem)] flex-col gap-3 overflow-y-auto border p-4 shadow-xl"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">Update PCB from schematic</h2>
+              <Button variant="ghost" size="xs" onClick={() => setShowSchematicSync(false)}>
+                Close
+              </Button>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              Choose physical packages for this board. Existing placement and copper are retained.
+              Unknown packages stay unresolved; check pin mapping and routing after updating.
+            </p>
+            {circuit.parts.length === 0 ? (
+              <p className="text-xs">No schematic parts in this board's region.</p>
+            ) : null}
+            {circuit.parts.map((part) => {
+              const linked = doc.footprints.filter((fp) => fp.partId === part.id);
+              return (
+                <label key={part.id} className="flex flex-col gap-1 text-xs">
+                  <span>
+                    {part.label ?? part.id}{" "}
+                    <span className="text-muted-foreground">· {part.type}</span>
+                  </span>
+                  <select
+                    aria-label={`Package for ${part.label ?? part.id}`}
+                    value={
+                      packageChoices[part.id] ?? (linked.length === 1 ? linked[0]!.libraryId : "")
+                    }
+                    onChange={(event) =>
+                      setPackageChoices((choices) => ({
+                        ...choices,
+                        [part.id]: event.target.value,
+                      }))
+                    }
+                    className="bg-background h-8 border px-2"
+                  >
+                    <option value="">Choose package — unresolved</option>
+                    {FOOTPRINT_LIBRARY.map((def) => (
+                      <option key={def.id} value={def.id}>
+                        {def.name}
+                      </option>
+                    ))}
+                  </select>
+                  {linked.length > 1 ? (
+                    <span className="text-amber-600">
+                      Multiple footprints linked; resolve in the inspector.
+                    </span>
+                  ) : null}
+                </label>
+              );
+            })}
+            <Button disabled={!canEdit || !circuit.parts.length} onClick={updateFromSchematic}>
+              Apply package assignments
+            </Button>
+            {syncReport ? (
+              <div role="status" className="space-y-2 text-xs">
+                <p>
+                  {syncReport.added} added · {syncReport.updated} updated. Existing copper retained.
+                </p>
+                {syncReport.issues.length ? (
+                  <ul className="list-disc space-y-1 pl-4">
+                    {syncReport.issues.map((issue, index) => (
+                      <li key={`${issue.code}-${index}`}>{issue.message}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>All schematic parts are linked. Review DRC before fabrication.</p>
+                )}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
         <div className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-1.5">
+          <Button
+            variant="outline"
+            size="xs"
+            disabled={!canEdit}
+            onClick={() => setShowSchematicSync(true)}
+            title="Update PCB from schematic"
+          >
+            Schematic → PCB
+          </Button>
           {/* Board switcher. Present even with one board so it is discoverable. */}
           <div className="bg-card/90 flex items-center gap-1 rounded-none border px-1.5 py-0.5 shadow-lg backdrop-blur-md">
             <Layers3 className="text-muted-foreground size-3" />
@@ -2372,24 +2585,113 @@ export function PcbCanvas({
                   <p className="text-muted-foreground text-[10px]">
                     {selected.libraryId} · {selected.side}
                   </p>
+                  <label className="flex flex-col gap-1 text-[10px]">
+                    Package height (mm)
+                    <Input
+                      type="number"
+                      min="0.01"
+                      max="500"
+                      step="0.1"
+                      aria-label="Package height in millimetres"
+                      placeholder="Unknown"
+                      disabled={!canEdit}
+                      value={selected.bodyHeightMm ?? ""}
+                      onChange={(event) => {
+                        const value =
+                          event.target.value === "" ? undefined : Number(event.target.value);
+                        if (
+                          value === undefined ||
+                          (Number.isFinite(value) && value > 0 && value <= 500)
+                        )
+                          patchSelected({ bodyHeightMm: value });
+                      }}
+                      className="h-7 text-xs"
+                    />
+                    <span className="text-muted-foreground">
+                      Use a specified or measured height; blank remains unknown in CAD.
+                    </span>
+                  </label>
 
                   <div className="mt-1 border-t pt-2">
                     <h3 className="text-muted-foreground mb-1 text-[10px] font-semibold tracking-wide uppercase">
                       Nets
                     </h3>
-                    {selected.partId ? (
-                      <p className="text-muted-foreground mb-1 text-[10px]">
-                        Schematic part{" "}
-                        <span className="text-foreground font-mono">
-                          {selectedPart?.label ?? selectedPart?.id ?? selected.partId}
-                        </span>
-                        {selectedPart ? null : " (missing)"}
-                      </p>
-                    ) : (
-                      <p className="text-muted-foreground mb-1 text-[10px]">
-                        Not linked to a schematic part — no nets.
-                      </p>
-                    )}
+                    <label className="mb-2 flex flex-col gap-1 text-[10px]">
+                      Schematic part
+                      <select
+                        aria-label="Linked schematic part"
+                        disabled={!canEdit}
+                        value={selected.partId ?? ""}
+                        onChange={(event) =>
+                          patchSelected({
+                            partId: event.target.value || undefined,
+                            pinMap: undefined,
+                          })
+                        }
+                        className="bg-background h-8 max-w-full border px-1"
+                      >
+                        <option value="">Board-only / unlinked</option>
+                        {selected.partId && !selectedPart ? (
+                          <option value={selected.partId}>{selected.partId} (missing)</option>
+                        ) : null}
+                        {circuit.parts.map((part) => (
+                          <option
+                            key={part.id}
+                            value={part.id}
+                            disabled={doc.footprints.some(
+                              (fp) => fp.id !== selected.id && fp.partId === part.id,
+                            )}
+                          >
+                            {part.label ?? part.id} · {part.id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {selectedPart ? (
+                      <div className="mb-2 space-y-1">
+                        <p className="text-[10px] font-medium">Wired pin → package pad</p>
+                        {wiredPinsForPart(circuit, selectedPart.id).map((pin) => (
+                          <label
+                            key={pin}
+                            className="flex items-center justify-between gap-2 text-[10px]"
+                          >
+                            <span className="min-w-0 break-all font-mono">{pin}</span>
+                            <select
+                              aria-label={`Pad for schematic pin ${pin}`}
+                              disabled={!canEdit}
+                              className="bg-background h-7 max-w-32 border px-1"
+                              value={selected.pinMap?.[pin] ?? ""}
+                              onChange={(event) => {
+                                const pinMap = { ...selected.pinMap };
+                                if (event.target.value) pinMap[pin] = event.target.value;
+                                else delete pinMap[pin];
+                                patchSelected({
+                                  pinMap: Object.keys(pinMap).length ? pinMap : undefined,
+                                });
+                              }}
+                            >
+                              <option value="">
+                                {padByPin(selected.libraryId, pin)
+                                  ? `Same name (${pin})`
+                                  : "Choose pad — unresolved"}
+                              </option>
+                              {(selectedDef?.pads ?? [])
+                                .filter((pad) => pad.pin)
+                                .map((pad) => (
+                                  <option key={pad.pin} value={pad.pin}>
+                                    {pad.pin}
+                                  </option>
+                                ))}
+                            </select>
+                          </label>
+                        ))}
+                        {!wiredPinsForPart(circuit, selectedPart.id).length ? (
+                          <p className="text-muted-foreground text-[10px]">
+                            This part has no wired pins yet.
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <div className="flex flex-col gap-0.5">
                       {(selectedDef?.pads ?? [])
                         .filter((pad) => pad.pin)

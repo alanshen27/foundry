@@ -3,15 +3,12 @@
  */
 
 import { z } from "zod";
-import { prisma, type Prisma } from "@foundry/db";
+import { prisma } from "@foundry/db";
 import { getServerEnv } from "@foundry/config";
-import { createLogger } from "@foundry/observability";
-import { normalizeCadDoc } from "@/lib/cad/engine";
 import { recordAudit } from "../../audit";
+import { writeDesignWithCollaboration } from "../../collab-write";
 import { getObjectStorage } from "../../storage";
-import { getCad } from "../../cad";
 import { mintRenderToken } from "../../render-token";
-import { withKclProjectDir } from "../../kcl-project-dir";
 import { screenshotRenderPage } from "../render";
 import { type ToolContext, type ToolKit, guard } from "./shared";
 
@@ -105,16 +102,14 @@ export function buildRenderTools(ctx: ToolContext, kit: ToolKit) {
             ...data,
             conceptImages: [...conceptImages, { key, prompt, createdAt: new Date().toISOString() }],
           };
-          await prisma.designDoc.upsert({
-            where: { projectId_branchId_kind: { projectId, branchId, kind: "DESIGN" } },
-            create: {
-              projectId,
-              branchId,
-              kind: "DESIGN",
-              data: nextData as Prisma.InputJsonValue,
-              updatedById: ctx.userId,
-            },
-            update: { data: nextData as Prisma.InputJsonValue, updatedById: ctx.userId },
+          await writeDesignWithCollaboration({
+            projectId,
+            branchId,
+            userId: ctx.userId,
+            runId: ctx.runId,
+            kind: "DESIGN",
+            data: nextData,
+            baseData: existing?.data ?? null,
           });
           await recordAudit({
             type: "DesignDocUpdated",
@@ -148,81 +143,36 @@ export function buildRenderTools(ctx: ToolContext, kit: ToolKit) {
 
     render_model_views: {
       description:
-        "Screenshot the current 3D model / product assembly from multiple camera angles and look at the results. Prefers Zoo MCP multiview for the product assembly (real engine execute); falls back to the headless viewport which WAITS until the model has painted. Use after text_to_cad, add_part_to_assembly, or save_cad_script.",
+        "Screenshot the current native 3D model / product assembly in the Three.js viewport after local build123d geometry has painted. Use for a final visual check or to resolve a specific geometry question; request extra angles only when needed.",
       inputSchema: z.object({
         views: z
           .array(z.enum(["iso", "front", "top", "right"]))
           .min(1)
           .max(4)
-          .default(["iso", "front", "top", "right"]),
+          .default(["iso"]),
       }),
       execute: async (
         { views }: { views: ("iso" | "front" | "top" | "right")[] },
-        { toolCallId }: { toolCallId: string },
+        { toolCallId, abortSignal }: { toolCallId: string; abortSignal?: AbortSignal },
       ) =>
         guard(ctx, "project.read", async () => {
           const storage = getObjectStorage();
           progress(toolCallId, "snapshot");
-
-          // Prefer Zoo MCP multiview — executes KCL on Zoo and returns a real collage.
-          try {
-            const cad = getCad();
-            const modelRow = await prisma.designDoc.findUnique({
-              where: { projectId_branchId_kind: { projectId, branchId, kind: "MODEL3D" } },
-            });
-            const doc = normalizeCadDoc(modelRow?.data ?? null);
-            const assembly =
-              doc.components.find(
-                (c) => c.kind === "assembly" && c.path === "assembly/product.kcl",
-              ) ?? doc.components.find((c) => c.kind === "assembly");
-            const entry =
-              assembly ?? doc.components.find((c) => c.kind === "part" && c.content.trim()) ?? null;
-
-            if (entry) {
-              const snap = await withKclProjectDir(doc, entry.path, (projectDir) =>
-                cad.multiviewSnapshotKcl({ projectDir }),
-              );
-              if (snap.ok) {
-                const key = `projects/${projectId}/ai/model-multiview-${Date.now()}.jpg`;
-                await storage.put(key, new Uint8Array(snap.data.jpeg), "image/jpeg");
-                return {
-                  ok: true,
-                  source: "zoo-mcp",
-                  images: [
-                    {
-                      view: "multiview",
-                      key,
-                      imageUrl: `/api/files/${key}`,
-                      layout: "front | right / top | iso",
-                    },
-                  ],
-                };
-              }
-              createLogger("tool").warn("Zoo snapshot unavailable", { tool: "render_model_views" });
-            }
-          } catch {
-            createLogger("tool").warn("Zoo snapshot unavailable; using viewport", {
-              tool: "render_model_views",
-            });
-          }
-
-          progress(toolCallId, "snapshot", "Zoo snapshot unavailable — rendering in the viewport");
+          progress(toolCallId, "snapshot", "Rendering the local geometry in the Three.js viewport");
           const token = mintRenderToken({ projectId, branchId, kind: "model3d" });
           try {
-            // Serial views — parallel Zoo WebRTC cold-starts routinely time out
-            // as "Connecting…". Cap the fallback at 2 views × 45s so one
-            // inspect can't burn many minutes of Playwright on a small dyno;
-            // the MCP path above returns all four angles in one collage.
-            const fallbackViews = views.slice(0, 2);
             const images: { view: string; key: string; imageUrl: string }[] = [];
-            for (const view of fallbackViews) {
+            for (const view of views) {
+              abortSignal?.throwIfAborted();
               const url = `${ctx.origin}/render/model3d?token=${encodeURIComponent(token)}&view=${view}`;
               const png = await screenshotRenderPage(url, {
                 width: 640,
                 height: 480,
                 readyTimeout: 45_000,
                 requireReady: true,
+                signal: abortSignal,
               });
+              abortSignal?.throwIfAborted();
               const key = `projects/${projectId}/ai/model-${view}-${Date.now()}.png`;
               await storage.put(key, new Uint8Array(png), "image/png");
               images.push({ view, key, imageUrl: `/api/files/${key}` });

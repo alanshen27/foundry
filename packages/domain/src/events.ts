@@ -33,6 +33,7 @@ export const DOMAIN_EVENT_TYPES = [
   "RepoLinkCreated",
   "RepoLinkDeleted",
   "DesignDocUpdated",
+  "CollaborationDocumentUpdated",
   // AI copilot
   "ChatChannelCreated",
   "ChatChannelDeleted",
@@ -41,6 +42,7 @@ export const DOMAIN_EVENT_TYPES = [
   "ChatMessageEdited",
   "ChatMessageDeleted",
   "ChatReactionToggled",
+  "ChatRunCancelled",
   // Viewport comments (pinned to CAD/PCB canvases)
   "ViewportCommentCreated",
   "ViewportCommentResolved",

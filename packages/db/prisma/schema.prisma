@@ -383,8 +383,8 @@ enum DesignDocKind {
 /**
  * JSON documents backing the visual editors: circuit schematic (CIRCUIT),
  * PCB board layout (PCB), parametric 3D model (MODEL3D), and industrial
- * design notes (DESIGN). One doc per kind per branch; edits autosave
- * last-write-wins. Live co-editing (Yjs) replaces this storage in a later phase.
+ * design notes (DESIGN). Materialized snapshots of durable Yjs documents;
+ * source and CRDT state are committed in one transaction.
  */
 model DesignDoc {
   id          String        @id @default(cuid())
@@ -399,6 +399,16 @@ model DesignDoc {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, branchId, kind])
+}
+
+/// Durable CRDT identities survive room unloads/restarts and server-side edits.
+/// Names encode an authorized CodeFile or project/branch/design kind. The
+/// source row remains the materialized read model for queries and exports.
+model CollaborationDocument {
+  documentName String   @id
+  state        Bytes
+  revision     Int      @default(1)
+  updatedAt    DateTime @updatedAt
 }
 
 model Component {

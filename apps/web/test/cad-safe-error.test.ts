@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { safeCadError } from "@/lib/cad/safe-error";
 
 describe("safeCadError", () => {
+  it("explains how to preview preserved KCL without suggesting another remote retry", () => {
+    expect(safeCadError(new Error("LEGACY_KCL_REQUIRES_CONVERSION"))).toBe(
+      "This KCL source is preserved. Ask Copilot to convert this part to Python to preview and edit its geometry.",
+    );
+  });
+  it("explains missing argument labels and the engine's bracketed source location", () => {
+    const message = safeCadError(
+      "Failed to execute KCL: \\x1b[31mKCL Argument error\\x1b[0m\\nThis argument needs a label, but it does not have one; suggested labels: `privatePartDimension`\\n ╭─[91:20] /private/server/secret.ts",
+    );
+    expect(message).toBe(
+      "A function call needs named arguments near line 91, column 20. Use argumentName = value for its parameters.",
+    );
+    expect(message).not.toContain("privatePartDimension");
+    expect(message).not.toContain("/private");
+  });
   it("does not expose environment names, paths, URLs, or credentials", () => {
     const message = safeCadError(
       new Error(
@@ -40,6 +55,12 @@ describe("safeCadError", () => {
       "The CAD workspace could not start. Try again or contact a workspace administrator.",
     );
   });
+  it("explains a broken local Python CAD runtime instead of a generic rebuild", () => {
+    expect(safeCadError(new Error("ModuleNotFoundError: No module named 'OCP.collections'"))).toBe(
+      "The local Python CAD runtime is incompatible. Reinstall the pinned build123d and ocpsvg versions, then retry.",
+    );
+  });
+
   it("recognises the viewport's own rejected-token failure as an auth problem", () => {
     // Regression: this exact message used to fall through to "could not start".
     expect(

@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { cadDoc } from "@foundry/cad";
+import { pythonCadDoc } from "@foundry/cad";
 import { prisma, type Prisma } from "@foundry/db";
 import { slugify, STAGES } from "@foundry/domain";
 import { protectedProcedure, router } from "../trpc";
@@ -84,7 +84,7 @@ export const projectRouter = router({
           projectId: project.id,
           branchId: branch.id,
           kind: "MODEL3D",
-          data: cadDoc("") as unknown as Prisma.InputJsonValue,
+          data: pythonCadDoc() as unknown as Prisma.InputJsonValue,
           updatedById: ctx.user.id,
         },
       });
@@ -142,7 +142,7 @@ export const projectRouter = router({
   /**
    * Render the project's 3D model to a cached PNG for workspace cards.
    *
-   * Slow (headless browser + Zoo stream), so callers fire it in the background
+   * Uses a headless browser and local solid evaluation, so callers fire it in the background
    * and let the card fall back to a placeholder until it lands.
    */
   refreshThumbnail: protectedProcedure
@@ -268,7 +268,7 @@ export const projectRouter = router({
           projectId: project.id,
           branchId: branch.id,
           kind: "MODEL3D",
-          data: cadDoc("") as unknown as Prisma.InputJsonValue,
+          data: pythonCadDoc() as unknown as Prisma.InputJsonValue,
           updatedById: ctx.user.id,
         },
       });

@@ -1,5 +1,5 @@
 /**
- * Chooses what the Zoo viewport is asked to build for a given CAD component.
+ * Chooses the source and dependency closure for a component's local viewport.
  *
  * The distinction matters: a component that imports other modules only renders
  * when the whole workspace is submitted as a multi-file project, because the
@@ -8,6 +8,8 @@
  */
 import {
   buildKclProject,
+  buildPythonProject,
+  isPythonCadComponent,
   isForeignImportOnlyScript,
   parseForeignImports,
   parseKclModuleImports,
@@ -24,6 +26,7 @@ export type CadViewportMesh = {
 };
 
 export type CadViewportInput = {
+  engine: "build123d" | "zoo";
   script: string;
   /** Present only for multi-file submits. */
   projectFiles?: Record<string, string>;
@@ -48,9 +51,22 @@ export function cadViewportInput(doc: CadDoc, activeId: string): CadViewportInpu
   const entry = doc.components.find((c) => c.id === activeId);
   if (!entry || entry.kind === "instructions") return null;
 
+  if (isPythonCadComponent(entry)) {
+    const project = buildPythonProject(doc, entry.path);
+    return {
+      engine: "build123d",
+      script: project.files[project.entryPath] ?? entry.content,
+      projectFiles: project.files,
+      entryPath: project.entryPath,
+      meshAssets: project.meshAssets.map(toViewportMesh),
+      foreignImportOnly: false,
+    };
+  }
+
   if (parseKclModuleImports(entry.content).length > 0) {
     const project = buildKclProject(doc, entry.path);
     return {
+      engine: "zoo",
       // Prefer remapped entry source so import paths match projectFiles keys.
       script: project.files[project.entryPath] ?? entry.content,
       projectFiles: project.files,
@@ -68,6 +84,7 @@ export function cadViewportInput(doc: CadDoc, activeId: string): CadViewportInpu
     .map(toViewportMesh);
 
   return {
+    engine: "zoo",
     script: entry.content,
     meshAssets,
     foreignImportOnly: isForeignImportOnlyScript(entry.content),

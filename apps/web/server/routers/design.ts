@@ -6,6 +6,11 @@ import { requireProjectCapability } from "../access";
 import { ensureStageStarted, touchProject } from "../stage-state";
 import { AiEditLockConflict, getActiveAiEditLock, withAiEditLockGuard } from "../ai-edit-lock";
 import { recordAudit } from "../audit";
+import { designDocumentRoom } from "@foundry/collaboration";
+import {
+  syncCollaborationSnapshot,
+  publishCollaborationUpdate,
+} from "@foundry/collaboration/server";
 
 const kind = z.enum(["CIRCUIT", "PCB", "MODEL3D", "DESIGN"]);
 
@@ -58,6 +63,7 @@ export const designRouter = router({
         branchId: z.string(),
         kind,
         data: z.unknown(),
+        baseData: z.unknown().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -66,9 +72,34 @@ export const designRouter = router({
         input.projectId,
         KIND_CAPABILITY[input.kind],
       );
-      const data = (input.data ?? {}) as Prisma.InputJsonValue;
-      const write = (db: Pick<Prisma.TransactionClient, "designDoc">) =>
-        db.designDoc.upsert({
+      const documentName = designDocumentRoom(input.projectId, input.branchId, input.kind);
+      const write = async (db: Prisma.TransactionClient) => {
+        const branch = await db.projectBranch.findFirst({
+          where: { id: input.branchId, projectId: input.projectId },
+          select: { id: true },
+        });
+        if (!branch)
+          throw new TRPCError({ code: "NOT_FOUND", message: "Project branch not found" });
+        await db.$executeRaw`
+          SELECT id FROM "DesignDoc" WHERE "projectId" = ${input.projectId}
+          AND "branchId" = ${input.branchId} AND kind = CAST(${input.kind} AS "DesignDocKind") FOR UPDATE
+        `;
+        const existing = await db.designDoc.findUnique({
+          where: {
+            projectId_branchId_kind: {
+              projectId: input.projectId,
+              branchId: input.branchId,
+              kind: input.kind,
+            },
+          },
+        });
+        const data = (await syncCollaborationSnapshot(db, {
+          documentName,
+          current: existing?.data ?? null,
+          before: input.baseData === undefined ? (existing?.data ?? null) : input.baseData,
+          after: input.data ?? {},
+        })) as Prisma.InputJsonValue;
+        return db.designDoc.upsert({
           where: {
             projectId_branchId_kind: {
               projectId: input.projectId,
@@ -85,25 +116,21 @@ export const designRouter = router({
           },
           update: { data, updatedById: ctx.user.id },
         });
+      };
 
       let doc;
       try {
-        // Mechanical CAD is the shared workspace being leased. Other design
-        // surfaces keep their existing independent collaboration behavior.
-        doc =
-          input.kind === "MODEL3D"
-            ? await withAiEditLockGuard(input.projectId, input.branchId, write)
-            : await write(prisma);
+        doc = await withAiEditLockGuard(input.projectId, input.branchId, write);
       } catch (error) {
         if (error instanceof AiEditLockConflict) {
           throw new TRPCError({
             code: "CONFLICT",
-            message:
-              "CAD workspace locked while an AI agent is editing. Your changes were not saved.",
+            message: "Workspace locked while an AI agent is editing. Your changes were not saved.",
           });
         }
         throw error;
       }
+      await publishCollaborationUpdate(documentName);
       await ensureStageStarted({
         workspaceId: project.workspaceId,
         projectId: input.projectId,

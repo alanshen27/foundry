@@ -67,6 +67,7 @@ export async function createRunEventStream(runId: string): Promise<ReadableStrea
           if (run.status === "ERROR" && run.error?.trim()) {
             controller.enqueue(sseEncode({ type: "error", errorText: run.error.trim() }));
           }
+          if (run.status === "CANCELLED") controller.enqueue(sseEncode({ type: "abort" }));
           controller.enqueue(sseComment("done"));
           controller.close();
           closed = true;
@@ -86,6 +87,7 @@ export async function createRunEventStream(runId: string): Promise<ReadableStrea
         if (run.status === "ERROR" && run.error?.trim()) {
           controller.enqueue(sseEncode({ type: "error", errorText: run.error.trim() }));
         }
+        if (run.status === "CANCELLED") controller.enqueue(sseEncode({ type: "abort" }));
         controller.enqueue(sseComment("done"));
         controller.close();
         closed = true;

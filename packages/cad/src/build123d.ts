@@ -1,39 +1,49 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { CadResult } from "./port";
+import { mkdtemp, readFile, rm, writeFile, mkdir, realpath, lstat } from "node:fs/promises";
+import { tmpdir, homedir } from "node:os";
+import { join, dirname, resolve, sep } from "node:path";
+import { z } from "zod";
+import type { CadResult, CadBoundingBox } from "./port";
+import { isPythonProjectPath } from "./python-project";
 
-/**
- * build123d (OCCT) code-CAD runner: executes a Python script in an isolated
- * `uv run` environment and returns the exported STL mesh. This is the fast,
- * LLM-friendly path — plain Python, local execution, no ML agent loop.
- *
- * Script contract: the script must end up with the model in a variable named
- * `result` (a build123d Shape/Part/Compound or a BuildPart builder). The
- * runner appends the export; the script itself never touches the filesystem.
- */
-
-/** First run pays the uv resolve + OCCT wheel download; later runs are seconds. */
-const DEFAULT_TIMEOUT_MS = 240_000;
-
+const DEFAULT_TIMEOUT_MS = 120_000;
+const MAX_LOG_BYTES = 128_000;
+const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const BUILD123D_VERSION = "0.9.1";
+/** Last ocpsvg that imports on cadquery-ocp 7.8; 0.7.0 requires OCP.collections from 7.9. */
+const OCPSVG_VERSION = "0.5.0";
 const PYTHON_VERSION = "3.12";
+export const PYTHON_CAD_PACKAGES = [
+  `build123d==${BUILD123D_VERSION}`,
+  `ocpsvg==${OCPSVG_VERSION}`,
+] as const;
 
 export type Build123dRunOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
-  /** Override the uv binary (tests). */
+  /** Trusted runtime resolver only; generated code never executes uv. */
   uvCommand?: string;
   /** Stream progress notes emitted by the Python script. */
   onProgress?: (note: string) => void;
 };
-
-export type Build123dRunOutput = {
+export type PythonCadInput = Build123dRunOptions & {
+  files: Record<string, string>;
+  entryPath: string;
+  /** Already-authorized, project-relative CAD resources supplied by the storage boundary. */
+  assets?: Record<string, Uint8Array>;
+};
+export type PythonCadOutput = {
   stl: Buffer;
-  /** Bounding box of the exported shape, millimetres. */
-  bbox: { x: number; y: number; z: number };
+  /** Exact OCCT source shape exported directly to STEP, never reconstructed from STL. */
+  step: Buffer;
+  bbox: CadBoundingBox;
+  valid: boolean;
+  solidCount: number;
+  volumeMm3: number;
   logs: string;
+};
+export type Build123dRunOutput = Omit<PythonCadOutput, "bbox"> & {
+  bbox: { x: number; y: number; z: number };
 };
 
 const PROGRESS_PREFIX = "BUILD123D_PROGRESS:";
@@ -84,147 +94,394 @@ function createOutputSink(onProgress?: (note: string) => void): {
   };
 }
 
-const DRIVER = `
-import json, sys
+const vectorSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  z: z.number().finite(),
+});
+const metadataSchema = z.object({
+  bbox: z.object({ center: vectorSchema, dimensions: vectorSchema }),
+  valid: z.literal(true),
+  solidCount: z.number().int().positive(),
+  volumeMm3: z.number().finite().positive(),
+});
+const runtimeSchema = z.object({
+  executable: z.string(),
+  roots: z.array(z.string()).min(1),
+  sites: z.array(z.string()),
+});
+type Runtime = z.infer<typeof runtimeSchema>;
+const runtimes = new Map<string, Runtime>();
 
-print("BUILD123D_PROGRESS: loading build123d")
-from build123d import Shape, export_stl
-try:
-    from build123d import Builder
-except ImportError:
-    Builder = None
+// This trusted probe resolves only pinned dependencies. It receives no generated source.
+const PROBE = `import sys,json,os
+sites = [os.path.realpath(p) for p in sys.path if "site-packages" in p and not p.startswith(sys.prefix + os.sep)]
+roots = {os.path.realpath(sys.base_prefix), *sites}
+print(json.dumps({"executable":os.path.realpath(sys.executable),"roots":sorted(roots),"sites":sites}))`;
 
-print("BUILD123D_PROGRESS: executing model")
-import model  # user script; must define \`result\`
-
-shape = getattr(model, "result", None)
-if Builder is not None and isinstance(shape, Builder):
-    shape = shape.part if hasattr(shape, "part") else getattr(shape, "_obj", None)
+// The driver sets process/file limits before importing any project code. The OS sandbox,
+// not Python imports or uv's virtual environment, enforces filesystem and network isolation.
+const DRIVER = `import json, sys, os, runpy, resource, math
+resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
+resource.setrlimit(resource.RLIMIT_FSIZE, (${MAX_FILE_BYTES}, ${MAX_FILE_BYTES}))
+resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+sys.path.extend(json.loads(sys.argv[2]))
+project = os.path.join(os.getcwd(), "project")
+sys.path.insert(0, project)
+os.chdir(project)
+print("BUILD123D_PROGRESS: loading build123d", flush=True)
+from build123d import Shape, Builder, export_stl, export_step
+print("BUILD123D_PROGRESS: executing model", flush=True)
+module = runpy.run_module(sys.argv[1][:-3].replace("/", "."), run_name="__main__")
+shape = module.get("result")
+if isinstance(shape, Builder):
+    shape = getattr(shape, "part", getattr(shape, "_obj", None))
 if shape is None:
-    print("BUILD123D_ERROR: the script must assign the finished model to a variable named 'result'", file=sys.stderr)
-    sys.exit(3)
+    raise ValueError("BUILD123D_ERROR: the script must assign the finished model to a variable named 'result'")
 if not isinstance(shape, Shape):
-    print(f"BUILD123D_ERROR: 'result' is {type(shape).__name__}, not a build123d Shape/Part", file=sys.stderr)
-    sys.exit(3)
-
-print("BUILD123D_PROGRESS: computing bounding box")
+    raise ValueError("BUILD123D_ERROR: 'result' must be a build123d Shape or BuildPart")
+if not shape.is_valid:
+    raise ValueError("BUILD123D_ERROR: OCCT reports invalid geometry; repair the source before export")
+solids = shape.solids()
+volume = sum(s.volume for s in solids)
+if not solids or not math.isfinite(volume) or volume <= 0:
+    raise ValueError("BUILD123D_ERROR: result must contain nonempty solid geometry, not a mesh, wire, or empty compound")
+print("BUILD123D_PROGRESS: computing bounding box", flush=True)
 bb = shape.bounding_box()
-print("BUILD123D_PROGRESS: exporting mesh")
-export_stl(shape, "out.stl")
-with open("meta.json", "w") as f:
-    json.dump({"bbox": {"x": bb.size.X, "y": bb.size.Y, "z": bb.size.Z}}, f)
+size, center = bb.size, bb.center()
+if not all(math.isfinite(v) for v in [size.X,size.Y,size.Z,center.X,center.Y,center.Z]):
+    raise ValueError("BUILD123D_ERROR: result has nonfinite bounds")
+output = os.path.join(os.path.dirname(project), "output")
+print("BUILD123D_PROGRESS: exporting mesh", flush=True)
+if not export_stl(shape, os.path.join(output, "model.stl"), tolerance=0.05, angular_tolerance=0.1):
+    raise ValueError("BUILD123D_ERROR: STL export failed")
+if not export_step(shape, os.path.join(output, "model.step")):
+    raise ValueError("BUILD123D_ERROR: STEP export failed")
+with open(os.path.join(output, "meta.json"), "w") as f:
+    json.dump({"bbox":{"center":{"x":center.X,"y":center.Y,"z":center.Z},"dimensions":{"x":size.X,"y":size.Y,"z":size.Z}},"valid":True,"solidCount":len(solids),"volumeMm3":volume},f)
 `;
 
-export async function runBuild123d(
-  script: string,
-  opts: Build123dRunOptions = {},
-): Promise<CadResult<Build123dRunOutput>> {
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const dir = await mkdtemp(join(tmpdir(), "foundry-b123d-"));
-  try {
-    await writeFile(join(dir, "model.py"), script, "utf8");
-    await writeFile(join(dir, "driver.py"), DRIVER, "utf8");
+type ProcessResult = {
+  code: number | null;
+  output: string;
+  cancelled: boolean;
+  timedOut: boolean;
+  exceeded: boolean;
+};
+async function boundedProcess(
+  command: string,
+  args: string[],
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    timeoutMs: number;
+    monitorMemory?: boolean;
+    onProgress?: (note: string) => void;
+  },
+): Promise<ProcessResult> {
+  if (options.signal?.aborted)
+    return { code: null, output: "", cancelled: true, timedOut: false, exceeded: false };
+  return new Promise((resolveResult, reject) => {
+    const proc = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    });
+    let output = "";
+    let bytes = 0;
+    let cancelled = false;
+    let timedOut = false;
+    let exceeded = false;
+    let memoryBusy = false;
+    const sink = createOutputSink(options.onProgress);
+    const kill = () => {
+      try {
+        if (proc.pid) process.kill(-proc.pid, "SIGKILL");
+      } catch {
+        proc.kill("SIGKILL");
+      }
+    };
+    const collect = (chunk: Buffer) => {
+      bytes += chunk.byteLength;
+      if (bytes > MAX_LOG_BYTES) {
+        exceeded = true;
+        kill();
+        return;
+      }
+      const text = chunk.toString();
+      output += text;
+      sink.append(text);
+    };
+    proc.stdout.on("data", collect);
+    proc.stderr.on("data", collect);
+    const onAbort = () => {
+      cancelled = true;
+      kill();
+    };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
+    const timer = setTimeout(() => {
+      timedOut = true;
+      kill();
+    }, options.timeoutMs);
+    // macOS does not enforce RLIMIT_RSS. Bound resident memory with a sampled host
+    // watchdog instead; the sandbox denies child processes so this is the whole build.
+    const memoryTimer = options.monitorMemory
+      ? setInterval(() => {
+          if (!proc.pid || memoryBusy) return;
+          memoryBusy = true;
+          const ps = spawn("/bin/ps", ["-o", "rss=", "-p", String(proc.pid)], {
+            env: { PATH: "/usr/bin:/bin", NODE_ENV: "production" },
+            stdio: ["ignore", "pipe", "ignore"],
+          });
+          let rss = "";
+          ps.stdout.on("data", (data: Buffer) => {
+            rss += data.toString().slice(0, 100);
+          });
+          ps.once("error", () => {
+            memoryBusy = false;
+          });
+          ps.once("close", () => {
+            memoryBusy = false;
+            if (Number(rss.trim()) > 2 * 1024 * 1024) {
+              exceeded = true;
+              kill();
+            }
+          });
+        }, 1000)
+      : undefined;
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (memoryTimer) clearInterval(memoryTimer);
+      options.signal?.removeEventListener("abort", onAbort);
+      sink.flush();
+    };
+    proc.once("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+    proc.once("close", (code) => {
+      cleanup();
+      resolveResult({ code, output, cancelled, timedOut, exceeded });
+    });
+  });
+}
 
-    const proc = spawn(
-      opts.uvCommand ?? "uv",
+function cleanEnvironment(home: string, temporary: string): NodeJS.ProcessEnv {
+  return {
+    NODE_ENV: "production",
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    HOME: home,
+    TMPDIR: temporary,
+    LANG: "en_US.UTF-8",
+    LC_ALL: "en_US.UTF-8",
+    OPENBLAS_NUM_THREADS: "1",
+    OMP_NUM_THREADS: "1",
+    MKL_NUM_THREADS: "1",
+    PYTHONDONTWRITEBYTECODE: "1",
+    PYTHONUNBUFFERED: "1",
+  };
+}
+
+async function resolveRuntime(
+  uvCommand: string,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+): Promise<Runtime> {
+  const cached = runtimes.get(uvCommand);
+  if (cached) return cached;
+  const env = cleanEnvironment(homedir(), tmpdir());
+  env.PATH = process.env.PATH ?? env.PATH;
+  const result = await boundedProcess(
+    uvCommand,
+    [
+      "run",
+      "--no-project",
+      "--python",
+      PYTHON_VERSION,
+      ...PYTHON_CAD_PACKAGES.flatMap((pkg) => ["--with", pkg]),
+      "python",
+      "-I",
+      "-c",
+      PROBE,
+    ],
+    { cwd: tmpdir(), env, signal, timeoutMs },
+  );
+  if (result.cancelled) throw new Error("build123d run cancelled");
+  if (result.timedOut) throw new Error("build123d runtime setup timed out");
+  if (result.code !== 0 || result.exceeded)
+    throw new Error(`build123d runtime setup failed: ${summarizePythonError(result.output)}`);
+  const line = result.output
+    .split("\n")
+    .reverse()
+    .find((item) => item.startsWith('{"executable":'));
+  const runtime = runtimeSchema.parse(JSON.parse(line ?? "null"));
+  runtimes.set(uvCommand, runtime);
+  return runtime;
+}
+
+function sandboxProfile(runtime: Runtime, dir: string): string {
+  const q = (path: string) => JSON.stringify(path);
+  const roots = [
+    ...runtime.roots,
+    "/System/Library",
+    "/usr/lib",
+    "/usr/share",
+    "/Library/Apple/System/Library",
+    dir,
+  ];
+  return `(version 1)\n(deny default)\n(allow process-exec (literal ${q(runtime.executable)}))\n(allow signal (target self))\n(allow sysctl-read)\n(allow file-read-metadata)\n(allow file-read* ${roots.map((path) => `(subpath ${q(path)})`).join(" ")} (literal "/") (literal "/dev/urandom") (literal "/dev/random") (literal "/dev/null"))\n(allow file-write* (subpath ${q(dir)}) (literal "/dev/null"))\n`;
+}
+
+async function readOutput(path: string, maxBytes = MAX_FILE_BYTES): Promise<Buffer> {
+  const stat = await lstat(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.size > maxBytes)
+    throw new Error("build123d produced an invalid or oversized output file");
+  return readFile(path);
+}
+
+/** Execute untrusted native source. macOS sandbox is mandatory; unsupported hosts fail closed. */
+export async function runPythonCad(input: PythonCadInput): Promise<CadResult<PythonCadOutput>> {
+  if (input.signal?.aborted) return { ok: false, error: "build123d run cancelled" };
+  let dir: string | undefined;
+  try {
+    if (process.platform !== "darwin")
+      throw new Error(
+        "Native Python CAD needs a configured OS sandbox. This runner currently supports macOS sandbox-exec; use a restricted container worker on other hosts.",
+      );
+    const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 240_000)
+      throw new Error("Python CAD timeoutMs must be between 1 and 240000");
+    const entries = Object.entries(input.files);
+    if (!entries.length || entries.length > 100 || !Object.hasOwn(input.files, input.entryPath))
+      throw new Error("Python CAD requires an entry file and at most 100 source files");
+    let bytes = 0;
+    for (const [path, source] of entries) {
+      if (
+        !isPythonProjectPath(path) ||
+        typeof source !== "string" ||
+        source.includes("\0") ||
+        source.length > 1_000_000
+      )
+        throw new Error(`Invalid Python CAD source: ${path}`);
+      bytes += Buffer.byteLength(source);
+    }
+    if (bytes > 4_000_000) throw new Error("Python CAD source project exceeds 4 MB");
+    const assets = Object.entries(input.assets ?? {});
+    if (assets.length > 100) throw new Error("Python CAD supports at most 100 asset files");
+    for (const [path, data] of assets) {
+      if (
+        !/^(?:[A-Za-z0-9_][A-Za-z0-9_. -]*\/)*[A-Za-z0-9_][A-Za-z0-9_. -]*\.(step|stp|ste|stl|brep)$/i.test(
+          path,
+        ) ||
+        path.split("/").some((p) => p === "." || p === "..") ||
+        !(data instanceof Uint8Array)
+      )
+        throw new Error(`Invalid Python CAD asset: ${path}`);
+      bytes += data.byteLength;
+      if (data.byteLength > MAX_FILE_BYTES || bytes > 128 * 1024 * 1024)
+        throw new Error("Python CAD assets exceed the size limit");
+    }
+    const started = Date.now();
+    const runtime = await resolveRuntime(input.uvCommand ?? "uv", input.signal, timeoutMs);
+    if (input.signal?.aborted) throw new Error("build123d run cancelled");
+    dir = await realpath(await mkdtemp(join(tmpdir(), "foundry-b123d-")));
+    const project = join(dir, "project");
+    await Promise.all([
+      mkdir(project),
+      mkdir(join(dir, "output")),
+      mkdir(join(dir, "home")),
+      mkdir(join(dir, "tmp")),
+    ]);
+    for (const [path, content] of [...entries, ...assets] as [string, string | Uint8Array][]) {
+      const target = resolve(project, path);
+      if (!target.startsWith(project + sep)) throw new Error("Python CAD path escapes its project");
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, content, { flag: "wx" });
+    }
+    await writeFile(join(dir, "driver.py"), DRIVER);
+    const remainingMs = timeoutMs - (Date.now() - started);
+    if (remainingMs <= 0) throw new Error("build123d runtime setup exceeded the run timeout");
+    const outcome = await boundedProcess(
+      "/usr/bin/sandbox-exec",
       [
-        "run",
-        "--no-project",
-        "--python",
-        PYTHON_VERSION,
-        "--with",
-        `build123d==${BUILD123D_VERSION}`,
-        "driver.py",
+        "-p",
+        sandboxProfile(runtime, dir),
+        runtime.executable,
+        "-I",
+        "-B",
+        join(dir, "driver.py"),
+        input.entryPath,
+        JSON.stringify(runtime.sites),
       ],
       {
         cwd: dir,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, PYTHONUNBUFFERED: "1" },
+        env: cleanEnvironment(join(dir, "home"), join(dir, "tmp")),
+        signal: input.signal,
+        timeoutMs: remainingMs,
+        monitorMemory: true,
+        onProgress: input.onProgress,
       },
     );
-
-    const outSink = createOutputSink(opts.onProgress);
-    const errSink = createOutputSink(opts.onProgress);
-    proc.stdout.on("data", (d: Buffer) => outSink.append(d.toString("utf8")));
-    proc.stderr.on("data", (d: Buffer) => errSink.append(d.toString("utf8")));
-
-    const exitCode = await new Promise<number | null>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        proc.kill("SIGKILL");
-        resolve(null);
-      }, timeoutMs);
-      const onAbort = () => {
-        proc.kill("SIGKILL");
-        resolve(null);
-      };
-      opts.signal?.addEventListener("abort", onAbort, { once: true });
-      proc.on("error", (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-      proc.on("close", (code) => {
-        clearTimeout(timer);
-        opts.signal?.removeEventListener("abort", onAbort);
-        resolve(code);
-      });
-    }).catch((err: Error) => {
-      errSink.append(`\nspawn failed: ${err.message}`);
-      return 1;
-    });
-
-    outSink.flush();
-    errSink.flush();
-    const out = outSink.raw;
-    const errOut = errSink.raw;
-    const logs = [out.trim(), errOut.trim()].filter(Boolean).join("\n");
-    if (exitCode === null) {
-      return {
-        ok: false,
-        error: opts.signal?.aborted
-          ? "build123d run cancelled"
-          : `build123d run exceeded ${Math.round(timeoutMs / 1000)}s`,
-      };
-    }
-    if (exitCode !== 0) {
-      return { ok: false, error: summarizePythonError(logs) };
-    }
-
-    const [stl, metaRaw] = await Promise.all([
-      readFile(join(dir, "out.stl")),
-      readFile(join(dir, "meta.json"), "utf8"),
+    if (outcome.cancelled) throw new Error("build123d run cancelled");
+    if (outcome.timedOut)
+      throw new Error(`build123d run exceeded ${Math.round(timeoutMs / 1000)}s`);
+    if (outcome.exceeded)
+      throw new Error("build123d exceeded its memory or diagnostic output limit");
+    if (outcome.code !== 0) throw new Error(summarizePythonError(outcome.output));
+    const [stl, step, metadata] = await Promise.all([
+      readOutput(join(dir, "output/model.stl")),
+      readOutput(join(dir, "output/model.step")),
+      readOutput(join(dir, "output/meta.json"), 16_384),
     ]);
-    const meta = JSON.parse(metaRaw) as { bbox: { x: number; y: number; z: number } };
-    if (stl.byteLength === 0) return { ok: false, error: "build123d exported an empty STL" };
-    return { ok: true, data: { stl, bbox: meta.bbox, logs } };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    const meta = metadataSchema.parse(JSON.parse(metadata.toString("utf8")));
+    if (!step.subarray(0, 100).toString("ascii").includes("ISO-10303-21"))
+      throw new Error("build123d exported an invalid STEP header");
+    return { ok: true, data: { stl, step, ...meta, logs: outcome.output.trim() } };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-/** Return the part of a Python traceback the model can act on, not pip noise. */
+/** Compatibility wrapper; native source still runs inside the mandatory OS sandbox. */
+export async function runBuild123d(
+  script: string,
+  options: Build123dRunOptions = {},
+): Promise<CadResult<Build123dRunOutput>> {
+  const result = await runPythonCad({
+    files: { "main.py": script },
+    entryPath: "main.py",
+    ...options,
+  });
+  return result.ok
+    ? { ok: true, data: { ...result.data, bbox: result.data.bbox.dimensions } }
+    : result;
+}
+
+/** Return an actionable Python error rather than dependency resolver chatter. */
 export function summarizePythonError(logs: string): string {
   const marker = logs.lastIndexOf("BUILD123D_ERROR:");
-  if (marker !== -1) {
+  if (marker !== -1)
     return logs
       .slice(marker + "BUILD123D_ERROR:".length)
       .trim()
       .split("\n")[0]!
       .trim();
-  }
-  const lines = logs.split("\n").filter((l) => l.trim());
-  const tbStart = lines.findIndex((l) => l.startsWith("Traceback"));
+  const lines = logs.split("\n").filter((line) => line.trim());
+  const tbStart = lines.findIndex((line) => line.startsWith("Traceback"));
   if (tbStart !== -1) {
     const tail = lines.slice(tbStart);
-    // Last line is the exception; include the offending source line when shown.
-    const last = tail[tail.length - 1] ?? "";
-    const srcLine = tail
+    const last = tail.at(-1) ?? "";
+    const source = tail
       .slice(0, -1)
       .reverse()
-      .find((l) => l.startsWith("    ") && !l.trimStart().startsWith("File "));
-    return srcLine ? `${last} — at: ${srcLine.trim()}` : last;
+      .find((line) => line.startsWith("    ") && !line.trimStart().startsWith("File "));
+    return source ? `${last} — at: ${source.trim()}` : last;
   }
-  const tail = lines.slice(-4).join("\n");
-  return tail || "build123d run failed with no output";
+  return lines.slice(-4).join("\n") || "build123d run failed with no output";
 }

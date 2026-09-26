@@ -1,15 +1,9 @@
 "use client";
 
-/**
- * Zoo / KittyCAD WebRTC viewport with CAD-style chrome:
- * standard views, fit/home, ortho/perspective, edges, axes, select/orbit tools.
- *
- * Connection is kept alive across KCL edits — only `executor().submit` re-runs.
- * Stream resolution is capped so 4K layouts don't open a huge WebRTC pipe;
- * SSAO stays on for readable surfaces.
- */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import * as zoo from "@kittycad/lib";
+/** Local Three.js rendering of meshes exported by the authoritative CAD engine. */
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
   Aperture,
   Axis3d,
@@ -18,332 +12,74 @@ import {
   Focus,
   Maximize2,
   Move,
-  Scan,
   Square,
   ZoomOut,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DotMatrixLoader } from "@/components/dot-matrix-loader";
+import { useTheme } from "@/components/theme-provider";
+import { useWorkspaceUiPreview } from "@/components/dev/workspace-ui-preview";
+import { cadSurfaceColors } from "@/lib/theme";
 import {
-  entityIdFromHighlight,
-  pairSolidNames,
-  resolveHoverLabel,
-  sceneGetSolidIdsCmd,
-  solidIdsFromSceneGet,
-} from "@/lib/cad/entity-labels";
-import { listCadSolids } from "@/lib/cad/tools";
-import {
-  cameraOrientationAfterDrag,
   orientationForView,
   projectCadAxis,
-  ZOOM_BUTTON_STEP,
-  attachViewportInput,
-  toStreamPoint,
   type CameraOrientation,
   type NavTool,
-  type ViewportInput,
 } from "@/lib/cad/viewport-input";
+import {
+  cadModelTransform,
+  cadSelectionTarget,
+  cameraOrientation,
+  disposeCadObject,
+  frameCadModel,
+  meshLabel,
+  switchCadProjection,
+  viewDirection,
+  type CadCamera,
+} from "@/lib/cad/three-viewport";
 import { safeCadError } from "@/lib/cad/safe-error";
+import type { CadMeshRequest } from "@/lib/cad/mesh-request";
+import { CadSceneCache } from "@/lib/cad/scene-cache";
+import {
+  directViewportMeshSource,
+  parseViewportMeshResponse,
+} from "@/lib/cad/viewport-mesh-loader";
 import { cn } from "@/lib/utils";
-import { createLogger } from "@foundry/observability";
-
-const log = createLogger("cad-viewport");
 
 export type CadView = "orbit" | "iso" | "front" | "top" | "right" | "back" | "left" | "bottom";
-
-type EngineSession = { token: string; baseUrl?: string };
-type Projection = "perspective" | "orthographic";
 type StandardView = Exclude<CadView, "orbit">;
-type ViewportStatus = "connecting" | "executing" | "running" | "error";
-
-/**
- * Stream size in *physical* pixels, capped so 4K panels don't open a
- * multi-megapixel pipe.
- *
- * `clientWidth` is CSS pixels: on a 2x display the engine was rendering at half
- * the panel's real resolution and the browser upscaled the result, which is what
- * made edges and surfaces look soft. Aspect ratio is preserved exactly — both
- * axes take the same scale and the same rounding floor — so the video maps 1:1
- * onto the host and never needs cropping to fit.
- */
-function streamSize(host: HTMLElement, maxEdge: number): { width: number; height: number } {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const cssW = Math.max(host.clientWidth || 640, 320);
-  const cssH = Math.max(host.clientHeight || 480, 240);
-  const scale = Math.min(1, maxEdge / (Math.max(cssW, cssH) * dpr));
-  // Round to a multiple of 4 — h.264 chroma subsampling wants even dimensions.
-  const quantize = (edge: number) => Math.max(Math.round((edge * dpr * scale) / 4) * 4, 240);
-  return { width: quantize(cssW), height: quantize(cssH) };
-}
-
-/** Margin left around the model when fitting the camera. */
-const FIT_PADDING = 0.18;
-
-function cameraCmd(view: CadView, padding = FIT_PADDING): zoo.ModelingCmd {
-  if (view === "iso" || view === "orbit") {
-    return { type: "view_isometric", padding };
-  }
-  const center = { x: 0, y: 0, z: 0 };
-  const dist = 220;
-  switch (view) {
-    case "front":
-      return {
-        type: "default_camera_look_at",
-        center,
-        up: { x: 0, y: 0, z: 1 },
-        vantage: { x: 0, y: -dist, z: 0 },
-      };
-    case "back":
-      return {
-        type: "default_camera_look_at",
-        center,
-        up: { x: 0, y: 0, z: 1 },
-        vantage: { x: 0, y: dist, z: 0 },
-      };
-    case "right":
-      return {
-        type: "default_camera_look_at",
-        center,
-        up: { x: 0, y: 0, z: 1 },
-        vantage: { x: dist, y: 0, z: 0 },
-      };
-    case "left":
-      return {
-        type: "default_camera_look_at",
-        center,
-        up: { x: 0, y: 0, z: 1 },
-        vantage: { x: -dist, y: 0, z: 0 },
-      };
-    case "top":
-      return {
-        type: "default_camera_look_at",
-        center,
-        up: { x: 0, y: 1, z: 0 },
-        vantage: { x: 0, y: 0, z: dist },
-      };
-    case "bottom":
-      return {
-        type: "default_camera_look_at",
-        center,
-        up: { x: 0, y: -1, z: 0 },
-        vantage: { x: 0, y: 0, z: -dist },
-      };
-  }
-}
-
-async function sendCmd(rtc: zoo.WebRTC, cmd: zoo.ModelingCmd): Promise<unknown> {
-  const req: zoo.WebSocketRequest = {
-    type: "modeling_cmd_req",
-    cmd_id: crypto.randomUUID(),
-    cmd,
-  };
-  return rtc.send(zoo.modeling.modeling_commands_ws.toBSON(req));
-}
-
-/** Best-effort: name solid3d bodies from KCL bindings so hover can label them. */
-async function syncSolidLabels(rtc: zoo.WebRTC, script: string): Promise<Map<string, string>> {
-  const names = listCadSolids(script);
-  if (names.length === 0) return new Map();
-  try {
-    const listed = await sendCmd(rtc, sceneGetSolidIdsCmd(Math.max(names.length, 32)));
-    const ids = solidIdsFromSceneGet(listed);
-    const map = pairSolidNames(script, ids);
-    for (const [object_id, name] of map) {
-      try {
-        await sendCmd(rtc, { type: "object_set_name", object_id, name });
-      } catch {
-        // Naming is optional — hover still works via the local map.
-      }
-    }
-    return map;
-  } catch {
-    return new Map();
-  }
-}
-
-/** Pull a human-readable message out of Zoo's various failure shapes. */
-function kclSubmitErrorMessage(result: unknown): string | null {
-  if (!result || typeof result !== "object") return "KCL execution failed";
-  const r = result as Record<string, unknown>;
-
-  if (r.success === false) {
-    if (Array.isArray(r.errors)) {
-      const msgs = (r.errors as { message?: string }[]).map((e) => e.message).filter(Boolean);
-      if (msgs.length) return msgs.join("; ");
-    }
-    return "KCL execution failed";
-  }
-
-  if (r.error && typeof r.error === "object") {
-    const err = r.error as Record<string, unknown>;
-    const details = err.details;
-    if (typeof details === "string" && details.trim()) return details;
-    if (details && typeof details === "object") {
-      const d = details as Record<string, unknown>;
-      if (typeof d.msg === "string") return d.msg;
-      if (typeof d.message === "string") return d.message;
-      try {
-        return JSON.stringify(details);
-      } catch {
-        // fall through
-      }
-    }
-    if (typeof err.message === "string") return err.message;
-    if (typeof err.kind === "string") return `KCL error (${err.kind})`;
-    return "KCL execution failed";
-  }
-
-  return null;
-}
-
-/** Interaction commands are fire-and-forget, so they reuse the nil id like the SDK. */
-const HOT_PATH_CMD_ID = "00000000-0000-0000-0000-000000000000";
-
-/**
- * Navigation goes over the RTC data channel when it is up — the websocket adds
- * a round trip through the worker and makes orbiting feel laggy.
- */
-function sendInteraction(rtc: zoo.WebRTC, cmd: zoo.ModelingCmd): void {
-  const channel = rtc.channel;
-  if (channel?.readyState === "open") {
-    channel.send(JSON.stringify({ type: "modeling_cmd_req", cmd_id: HOT_PATH_CMD_ID, cmd }));
-    return;
-  }
-  void sendCmd(rtc, cmd).catch(() => undefined);
-}
-
-/** Zoo / KittyCAD default co-ordinate system (forward −Y, up +Z). */
-const ZOO_COORDS: zoo.System = {
-  forward: { axis: "y", direction: "negative" },
-  up: { axis: "z", direction: "positive" },
-};
-
 export type CadMeshAsset = {
   path: string;
   format: string;
-  /** Authenticated URL under /api/files/… */
   fileUrl: string;
   lengthUnit?: "mm" | "cm" | "m" | "in" | "ft" | "yd";
 };
+const FIT_PADDING = 0.18;
+const NO_MESH_ASSETS: CadMeshAsset[] = [];
 
-function inputFormatForMesh(asset: CadMeshAsset): zoo.InputFormat3d {
-  const units = asset.lengthUnit ?? "mm";
-  const fmt = asset.format.toLowerCase();
-  if (fmt === "stl") return { type: "stl", coords: ZOO_COORDS, units };
-  if (fmt === "obj") return { type: "obj", coords: ZOO_COORDS, units };
-  if (fmt === "ply") return { type: "ply", coords: ZOO_COORDS, units };
-  if (fmt === "gltf" || fmt === "glb") return { type: "gltf" };
-  if (fmt === "step" || fmt === "stp" || fmt === "ste") {
-    return { type: "step", coords: ZOO_COORDS };
-  }
-  if (fmt === "fbx") return { type: "fbx" };
-  if (fmt === "sat" || fmt === "sab" || fmt === "smb" || fmt === "smt") {
-    return { type: "acis", coords: ZOO_COORDS };
-  }
-  if (fmt === "catpart" || fmt === "catproduct") {
-    return { type: "catia", coords: ZOO_COORDS };
-  }
-  if (fmt === "prt" || fmt === "asm" || fmt === "g" || fmt === "neu") {
-    return { type: "creo" };
-  }
-  if (fmt === "ipt" || fmt === "iam") return { type: "inventor", coords: ZOO_COORDS };
-  if (fmt === "x_t" || fmt === "x_b") return { type: "parasolid", coords: ZOO_COORDS };
-  if (fmt === "sldprt") return { type: "sldprt" };
-  return { type: "stl", coords: ZOO_COORDS, units };
-}
-
-async function loadMeshBytes(fileUrl: string): Promise<number[]> {
-  const res = await fetch(fileUrl);
-  if (!res.ok) throw new Error(`Failed to load mesh (${res.status})`);
-  const buf = await res.arrayBuffer();
-  return Array.from(new Uint8Array(buf));
-}
-
-async function importMeshes(rtc: zoo.WebRTC, assets: CadMeshAsset[]): Promise<void> {
-  for (const asset of assets) {
-    const data = await loadMeshBytes(asset.fileUrl);
-    await sendCmd(rtc, {
-      type: "import_files",
-      files: [{ path: asset.path, data }],
-      format: inputFormatForMesh(asset),
-    });
-  }
-}
-
-const AUTH_TOKEN_INVALID_MSG = "The CAD service rejected its authentication token.";
-
-/**
- * Token-only Clients leave `oauth2` undefined. @kittycad/lib WebRTC still calls
- * `client.oauth2.fetchAuthorizationCode()` when the engine returns
- * auth_token_invalid — same stub pattern as KittyCAD/viewer.
- *
- * Only those two members are ever reached, so the stub is cast instead of
- * implementing the whole OAuth2AuthCodePKCE surface.
- */
-function ensureTokenAuthClient(client: zoo.Client, onAuthFailure: () => void): zoo.Client {
-  if (client.oauth2) return client;
-  client.oauth2 = {
-    getAccessToken: async () => (client.token ? { token: { value: client.token } } : undefined),
-    fetchAuthorizationCode: async () => {
-      onAuthFailure();
-    },
-  } as unknown as NonNullable<zoo.Client["oauth2"]>;
-  return client;
-}
-
-/**
- * Warm-session pool. A Zoo WebRTC connection takes seconds to negotiate, and
- * closing/reopening a viewport tab paid that price every time. When a viewport
- * unmounts cleanly, its connected session (rtc + video element) is parked here
- * for a short window; the next viewport with the same token/options adopts it
- * and only re-executes its script. Sessions are keyed on everything baked in at
- * connect time, and two live viewports never share one session — the pool only
- * holds sessions no component is using.
- */
-type PooledEngineSession = {
-  rtc: zoo.WebRTC;
-  video: HTMLVideoElement;
-  wrap: HTMLDivElement;
-  connectPromise: Promise<void>;
-};
-
-const WARM_SESSION_TTL_MS = 120_000;
-const warmSessions = new Map<
-  string,
-  { session: PooledEngineSession; timer: ReturnType<typeof setTimeout> }
->();
-
-function engineSessionKey(
-  token: string,
-  baseUrl: string | undefined,
-  headless: boolean,
-  scenery: boolean,
-): string {
-  return `${token}|${baseUrl ?? ""}|${headless ? "h" : "i"}|${scenery ? "g" : "p"}`;
-}
-
-function takeWarmSession(key: string): PooledEngineSession | null {
-  const entry = warmSessions.get(key);
-  if (!entry) return null;
-  warmSessions.delete(key);
-  clearTimeout(entry.timer);
-  return entry.session;
-}
-
-function parkWarmSession(key: string, session: PooledEngineSession): void {
-  const existing = warmSessions.get(key);
-  if (existing) {
-    // One warm spare per key is enough; drop the older one.
-    clearTimeout(existing.timer);
-    existing.session.rtc.deconstructor();
-  }
-  warmSessions.set(key, {
-    session,
-    timer: setTimeout(() => {
-      warmSessions.delete(key);
-      session.rtc.deconstructor();
-    }, WARM_SESSION_TTL_MS),
+function cadSceneBytes(root: THREE.Object3D): number {
+  const buffers = new Set<ArrayBufferLike>();
+  const textures = new Set<THREE.Texture>();
+  root.traverse((object) => {
+    if (!(object instanceof THREE.Mesh || object instanceof THREE.LineSegments)) return;
+    for (const attr of Object.values((object.geometry as THREE.BufferGeometry).attributes))
+      buffers.add(
+        attr instanceof THREE.InterleavedBufferAttribute
+          ? attr.data.array.buffer
+          : attr.array.buffer,
+      );
+    if (object.geometry.index) buffers.add(object.geometry.index.array.buffer);
+    for (const material of Array.isArray(object.material) ? object.material : [object.material])
+      for (const value of Object.values(material))
+        if (value instanceof THREE.Texture) textures.add(value);
   });
+  let bytes = [...buffers].reduce((sum, buffer) => sum + buffer.byteLength, 0);
+  for (const texture of textures) {
+    const image = texture.source.data as { width?: number; height?: number } | null;
+    if (image?.width && image.height) bytes += image.width * image.height * 6;
+  }
+  return bytes;
 }
 
 function ToolbarBtn({
@@ -372,7 +108,7 @@ function ToolbarBtn({
       disabled={disabled}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={onClick}
-      className={cn(active && "bg-primary/15 text-primary", "text-primary", className)}
+      className={cn("text-muted-foreground", active && "bg-primary/10 text-primary", className)}
     >
       {children}
     </Button>
@@ -444,7 +180,7 @@ function ViewCube({
                 onSelect(face.id);
               }}
               className={cn(
-                "absolute inset-0 flex items-center justify-center border text-[9px] font-semibold tracking-wider transition-colors",
+                "absolute inset-0 flex items-center justify-center border font-mono text-[9px] font-medium tracking-[0.1em] transition-colors",
                 "border-border bg-card/85 text-muted-foreground hover:bg-primary/25 hover:text-primary disabled:opacity-40",
                 active === face.id && "border-primary bg-primary/20 text-primary",
               )}
@@ -458,7 +194,7 @@ function ViewCube({
           ))}
         </div>
       </div>
-      <div className="bg-card/90 flex items-center gap-2 rounded-md border px-1.5 py-0.5 shadow-sm backdrop-blur-md">
+      <div className="bg-card flex items-center gap-2 rounded-none border px-1.5 py-0.5">
         <button
           type="button"
           disabled={disabled}
@@ -469,7 +205,7 @@ function ViewCube({
             onIso();
           }}
           className={cn(
-            "text-muted-foreground hover:text-primary rounded px-1 text-[9px] font-semibold disabled:opacity-40",
+            "text-muted-foreground hover:text-primary rounded-none px-1 font-mono text-[9px] font-medium tracking-[0.08em] disabled:opacity-40",
             active === "iso" && "text-primary",
           )}
         >
@@ -491,7 +227,7 @@ function ViewCube({
                       : "text-sky-500",
                 )}
                 style={{
-                  transform: `rotate(${projected.angleDeg}deg) scale(${0.75 + projected.scale * 0.25})`,
+                  transform: `rotate(${Number(projected.angleDeg.toFixed(3))}deg) scale(${Number((0.75 + projected.scale * 0.25).toFixed(4))})`,
                 }}
               >
                 {axis}
@@ -504,682 +240,619 @@ function ViewCube({
   );
 }
 
+type ViewportRuntime = {
+  scene: THREE.Scene;
+  renderer: THREE.WebGLRenderer;
+  camera: CadCamera;
+  controls: OrbitControls;
+  model: THREE.Group | null;
+  modelKey: string | null;
+  grid: THREE.GridHelper;
+  axes: THREE.AxesHelper;
+  bounds: THREE.Box3;
+  fitted: boolean;
+  fit: () => void;
+  applyView: (view: CadView) => void;
+  resize: () => void;
+  edges: (visible: boolean) => void;
+  select: (mesh: THREE.Object3D | null) => void;
+};
+
 export function CadViewport({
-  script,
   engine,
+  script,
+  projectId,
+  renderToken,
   view = "orbit",
   chrome = true,
   headless = false,
-  meshAssets = [],
-  foreignImportOnly = false,
+  meshAssets = NO_MESH_ASSETS,
   projectFiles,
   entryPath,
+  modelKey,
   fitPadding = FIT_PADDING,
   scenery = true,
+  debounceMs = 350,
   onReady,
   onError,
   onCameraOrientationChange,
 }: {
+  engine?: "build123d" | "zoo";
   script: string;
-  engine: EngineSession;
+  projectId?: string;
+  renderToken?: string;
   view?: CadView;
-  /** Editor chrome (toolbar / view cube). */
   chrome?: boolean;
-  /**
-   * Thumbnail / capture mode: lock a fixed camera after first paint.
-   * Independent of `chrome` so interactive scenes can hide the toolbar
-   * without getting the screenshot camera path.
-   */
   headless?: boolean;
-  /** Margin around the model when framing. Tighten for thumbnails. */
   fitPadding?: number;
-  /** Ground grid and axes gizmo. Off for a clean product shot. */
   scenery?: boolean;
-  /** Foreign mesh files to load via Zoo `import_files` (browser can't resolve KCL imports). */
+  /** Set to zero when the caller already debounces a complete project snapshot. */
+  debounceMs?: number;
   meshAssets?: CadMeshAsset[];
-  /** Skip KCL submit and only import meshes (import-only stub scripts). */
+  /** Retained for callers; server export resolves imports from meshAssets. */
   foreignImportOnly?: boolean;
-  /** Multi-file KCL project (path → source). Enables `import "parts/….kcl"`. */
   projectFiles?: Record<string, string>;
-  /** Entrypoint path inside projectFiles (e.g. assembly/product.kcl). */
   entryPath?: string;
+  /** Stable selected-part identity, independent of edits to that part's source. */
+  modelKey?: string;
   onReady?: () => void;
   onError?: (message: string | null) => void;
   onCameraOrientationChange?: (orientation: CameraOrientation) => void;
 }) {
+  const { theme } = useTheme();
+  const preview = useWorkspaceUiPreview();
   const hostRef = useRef<HTMLDivElement>(null);
-  const rtcRef = useRef<zoo.WebRTC | null>(null);
-  const scriptRef = useRef(script);
-  const meshAssetsRef = useRef(meshAssets);
-  const foreignImportOnlyRef = useRef(foreignImportOnly);
-  const projectFilesRef = useRef(projectFiles);
-  const entryPathRef = useRef(entryPath);
-  meshAssetsRef.current = meshAssets;
-  foreignImportOnlyRef.current = foreignImportOnly;
-  projectFilesRef.current = projectFiles;
-  entryPathRef.current = entryPath;
-  const initialViewRef = useRef(view);
-  const onReadyRef = useRef(onReady);
-  const onErrorRef = useRef(onError);
-  const onCameraOrientationChangeRef = useRef(onCameraOrientationChange);
-  const execGenRef = useRef(0);
-  const framedOnceRef = useRef(false);
-  const navToolRef = useRef<NavTool>("select");
-  scriptRef.current = script;
-  onReadyRef.current = onReady;
-  onErrorRef.current = onError;
-  onCameraOrientationChangeRef.current = onCameraOrientationChange;
-
-  const [status, setStatus] = useState<ViewportStatus>("connecting");
-  const [error, setError] = useState<string | null>(null);
-  const [rtcReady, setRtcReady] = useState(false);
-  const [hoverLabel, setHoverLabel] = useState<{ name: string; x: number; y: number } | null>(null);
-  const solidNamesRef = useRef<Map<string, string>>(new Map());
-  const labelCacheRef = useRef<Map<string, string | null>>(new Map());
-  const hoverSeqRef = useRef(0);
-  const streamSizeRef = useRef({ width: 640, height: 480 });
-  const [activeView, setActiveView] = useState<StandardView | null>(
-    view === "orbit" ? "iso" : (view as StandardView),
+  const runtimeRef = useRef<ViewportRuntime | null>(null);
+  const sceneCache = useRef(new CadSceneCache<THREE.Group>(disposeCadObject));
+  const callbacks = useRef({ onReady, onError, onCameraOrientationChange });
+  callbacks.current = { onReady, onError, onCameraOrientationChange };
+  const settings = useRef({ view, fitPadding, scenery, headless });
+  settings.current = { view, fitPadding, scenery, headless };
+  const [mounted, setMounted] = useState(false);
+  const [status, setStatus] = useState<"loading" | "building" | "running" | "error">("loading");
+  const [loadSource, setLoadSource] = useState<"cache" | "asset" | "engine" | "preview" | null>(
+    null,
   );
-  const [cameraOrientation, setCameraOrientation] = useState<CameraOrientation>(() =>
+  const [error, setError] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<StandardView | null>(
+    view === "orbit" ? "iso" : view,
+  );
+  const [orientation, setOrientation] = useState<CameraOrientation>(
     orientationForView(view === "orbit" ? "iso" : view),
   );
-  // Select by default: dragging orbits regardless of tool, so starting in
-  // orbit-only mode just meant clicks never picked anything.
-  const [navTool, setNavTool] = useState<NavTool>("select");
-  const [projection, setProjection] = useState<Projection>("perspective");
+  const [projection, setProjection] = useState("perspective");
   const [edges, setEdges] = useState(true);
-  const [axes, setAxes] = useState(true);
-  const ready = status === "running";
-  // Camera/view/display commands only need the live RTC session — gating them
-  // on a successful KCL execution left the whole toolbar dead whenever a model
-  // was slow or failed, with no way to even orbit or fit.
-  const controlsReady = rtcReady;
-  navToolRef.current = navTool;
+  const edgesRef = useRef(edges);
+  edgesRef.current = edges;
+  const [axes, setAxes] = useState(scenery);
+  const [navTool, setNavTool] = useState<NavTool>("select");
+  const navRef = useRef(navTool);
+  navRef.current = navTool;
+  const [hover, setHover] = useState<{ name: string; x: number; y: number } | null>(null);
+  const [retry, setRetry] = useState(0);
+  const requestedMesh = useRef(false);
 
-  const runCmd = useCallback(async (cmd: zoo.ModelingCmd) => {
-    const rtc = rtcRef.current;
-    if (!rtc) return false;
-    try {
-      await sendCmd(rtc, cmd);
-      return true;
-    } catch (err) {
-      log.warn("a CAD viewport command could not be completed", { err });
-      return false;
-    }
-  }, []);
-
-  const applyView = useCallback(
-    async (next: CadView) => {
-      const standard = next === "orbit" ? "iso" : next;
-      const applied = await runCmd(cameraCmd(next, fitPadding));
-      if (!applied) return;
-      await runCmd({ type: "zoom_to_fit", padding: fitPadding, animated: false });
-      const orientation = orientationForView(standard);
-      setActiveView(standard);
-      setCameraOrientation(orientation);
-      onCameraOrientationChangeRef.current?.(orientation);
-    },
-    [runCmd, fitPadding],
-  );
-
-  const fit = useCallback(async () => {
-    await runCmd({ type: "zoom_to_fit", padding: fitPadding });
-  }, [runCmd, fitPadding]);
-
-  const setNav = useCallback(
-    async (tool: NavTool) => {
-      setNavTool(tool);
-      if (tool !== "select") setHoverLabel(null);
-      await runCmd({
-        type: "set_tool",
-        tool: tool === "orbit" ? "camera_revolve" : "select",
-      });
-    },
-    [runCmd],
-  );
-
-  const toggleProjection = useCallback(async () => {
-    const next: Projection = projection === "perspective" ? "orthographic" : "perspective";
-    setProjection(next);
-    await runCmd(
-      next === "orthographic"
-        ? { type: "default_camera_set_orthographic" }
-        : { type: "default_camera_set_perspective" },
-    );
-  }, [projection, runCmd]);
-
-  const toggleEdges = useCallback(async () => {
-    const next = !edges;
-    setEdges(next);
-    await runCmd({ type: "edge_lines_visible", hidden: !next });
-  }, [edges, runCmd]);
-
-  const toggleAxes = useCallback(async () => {
-    const next = !axes;
-    setAxes(next);
-    await runCmd({ type: "make_axes_gizmo", clobber: true, gizmo_mode: next });
-  }, [axes, runCmd]);
-
-  const zoom = useCallback(
-    async (magnitude: number) => {
-      await runCmd({ type: "default_camera_zoom", magnitude });
-    },
-    [runCmd],
-  );
-
-  const captureView = useCallback(() => {
-    const video = hostRef.current?.querySelector("video");
-    if (!video || video.videoWidth === 0) return;
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.drawImage(video, 0, 0);
-    const a = document.createElement("a");
-    a.href = canvas.toDataURL("image/png");
-    a.download = `foundry-view-${activeView ?? "orbit"}.png`;
-    a.click();
-  }, [activeView]);
-
-  // Open one WebRTC session per token — script edits must not reconnect.
+  // One renderer survives edits, camera changes and resizes.
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-
-    let cancelled = false;
-    let rtc: zoo.WebRTC | null = null;
-    let authPoll: ReturnType<typeof setInterval> | null = null;
-    let input: ViewportInput | null = null;
-    let resizeObserver: ResizeObserver | null = null;
-    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-    setRtcReady(false);
-    framedOnceRef.current = false;
-    solidNamesRef.current = new Map();
-    labelCacheRef.current = new Map();
-    setHoverLabel(null);
-    setStatus("connecting");
-    setError(null);
-    onErrorRef.current?.(null);
-    rtcRef.current = null;
-
-    const token = engine.token?.trim();
-    if (!token) {
-      setStatus("error");
-      const message = safeCadError(new Error("CAD service token is empty"), "session");
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    } catch {
+      const message =
+        "This browser could not start the 3D viewport. Enable hardware acceleration and reload.";
       setError(message);
-      onErrorRef.current?.(message);
-      onReadyRef.current?.();
+      setStatus("error");
+      callbacks.current.onError?.(message);
+      callbacks.current.onReady?.();
       return;
     }
-
-    // Headless capture downscales anyway, so only the interactive viewport pays
-    // for the extra pixels a 2x display needs.
-    const maxEdge = headless ? 1440 : 2200;
-    const size = streamSize(host, maxEdge);
-    streamSizeRef.current = size;
-
-    const poolKey = engineSessionKey(token, engine.baseUrl, headless, scenery);
-    const warm = takeWarmSession(poolKey);
-    let session: PooledEngineSession;
-    let connectFailed = false;
-
-    if (warm) {
-      session = warm;
-    } else {
-      let authFailed = false;
-      const client = ensureTokenAuthClient(
-        new zoo.Client({
-          token,
-          baseUrl: engine.baseUrl ?? "https://api.zoo.dev",
-        }),
-        () => {
-          authFailed = true;
-          rtc?.deconstructor();
-        },
-      );
-
-      const wrap = document.createElement("div");
-      wrap.style.cssText = "position:relative;width:100%;height:100%;background:#1c222e";
-      const video = document.createElement("video");
-      video.muted = true;
-      video.playsInline = true;
-      video.autoplay = true;
-      // `contain`, not `cover`: the stream now matches the host's aspect ratio, and
-      // cropping a CAD view to fill would silently cut geometry off the edges.
-      video.style.cssText = "width:100%;height:100%;object-fit:contain;background:#1c222e";
-      wrap.appendChild(video);
-
-      rtc = new zoo.WebRTC({
-        client,
-        video_res_width: size.width,
-        video_res_height: size.height,
-        fps: 30,
-        unlocked_framerate: true,
-        post_effect: "ssao",
-        show_grid: scenery,
-        order_independent_transparency: true,
-        webrtc: true,
-      });
-
-      const connectPromise = new Promise<void>((resolve, reject) => {
-        const t = setTimeout(() => {
-          if (authPoll) clearInterval(authPoll);
-          reject(
-            new Error(authFailed ? AUTH_TOKEN_INVALID_MSG : "CAD engine connection timed out"),
-          );
-        }, 45_000);
-        const finish = (fn: () => void) => {
-          clearTimeout(t);
-          if (authPoll) clearInterval(authPoll);
-          authPoll = null;
-          fn();
-        };
-        authPoll = setInterval(() => {
-          if (!authFailed) return;
-          finish(() => reject(new Error(AUTH_TOKEN_INVALID_MSG)));
-        }, 100);
-        rtc!.addEventListener(
-          "track",
-          (event) => {
-            if (!(event.target instanceof zoo.WebRTC)) return;
-            video.srcObject = event.target.track?.streams[0] ?? null;
-          },
-          { once: true },
-        );
-        rtc!.addEventListener(
-          "connected",
-          () => {
-            void video.play().catch(() => undefined);
-            finish(() => resolve());
-          },
-          { once: true },
-        );
-        void rtc!.start();
-      });
-
-      session = { rtc, video, wrap, connectPromise };
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.25;
+    renderer.domElement.setAttribute("aria-label", "Interactive CAD model");
+    renderer.domElement.setAttribute("role", "img");
+    renderer.domElement.style.touchAction = "none";
+    renderer.domElement.style.display = "block";
+    // The drawing buffer scales with devicePixelRatio; CSS size must stay in
+    // layout pixels or Retina screens render an oversized, clipped viewport.
+    renderer.domElement.style.width = "100%";
+    renderer.domElement.style.height = "100%";
+    host.appendChild(renderer.domElement);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color("#1c222e");
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x59677e, 2));
+    const key = new THREE.DirectionalLight(0xffffff, 3);
+    key.position.set(100, -150, 200);
+    scene.add(key);
+    const fill = new THREE.DirectionalLight(0xb2cfff, 1.5);
+    fill.position.set(-120, 80, 60);
+    scene.add(fill);
+    const rim = new THREE.DirectionalLight(0xffffff, 2);
+    rim.position.set(0, 100, 200);
+    scene.add(rim);
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 1_000_000);
+    camera.up.set(0, 0, 1);
+    camera.position.copy(viewDirection("iso")).multiplyScalar(200);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.12;
+    controls.screenSpacePanning = true;
+    controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.PAN,
+      RIGHT: THREE.MOUSE.PAN,
+    };
+    controls.enabled = !settings.current.headless;
+    const grid = new THREE.GridHelper(1, 20, 0x8b9aad, 0x6d7b90);
+    grid.rotation.x = Math.PI / 2;
+    grid.visible = settings.current.scenery;
+    const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
+    for (const material of gridMaterials) {
+      material.transparent = true;
+      material.opacity = 0.18;
     }
-
-    const video = session.video;
-    host.replaceChildren(session.wrap);
-    void video.play().catch(() => undefined);
-
-    // The engine's window coordinate space, kept in sync with reconfigures.
-    let streamed = size;
-
-    const sessionRtc = session.rtc;
-    input = attachViewportInput({
-      video,
-      send: (cmd) => sendInteraction(sessionRtc, cmd),
-      getTool: () => navToolRef.current,
-      getStreamSize: () => streamed,
-      objectFit: "contain",
-      onCameraDrag: (interaction, deltaX, deltaY) => {
-        if (interaction !== "rotate" && interaction !== "rotatetrackball") return;
-        setActiveView(null);
-        setCameraOrientation((current) => {
-          const next = cameraOrientationAfterDrag(current, interaction, deltaX, deltaY);
-          onCameraOrientationChangeRef.current?.(next);
-          return next;
-        });
+    scene.add(grid);
+    const axisHelper = new THREE.AxesHelper(1);
+    axisHelper.visible = settings.current.scenery;
+    scene.add(axisHelper);
+    let selected: THREE.Object3D | null = null;
+    let selectionBox: THREE.BoxHelper | null = null;
+    const runtime: ViewportRuntime = {
+      scene,
+      renderer,
+      camera,
+      controls,
+      model: null,
+      modelKey: null,
+      grid,
+      axes: axisHelper,
+      fitted: false,
+      bounds: new THREE.Box3(),
+      select: (mesh) => {
+        selected = mesh;
+        if (selectionBox) {
+          scene.remove(selectionBox);
+          disposeCadObject(selectionBox);
+          selectionBox = null;
+        }
+        if (mesh) {
+          selectionBox = new THREE.BoxHelper(mesh, 0xe3a750);
+          scene.add(selectionBox);
+        }
       },
-    });
-
-    // Without this the stream keeps its connect-time resolution: the picture
-    // goes soft and pointer coordinates drift out of sync with the render.
-    resizeObserver = new ResizeObserver(() => {
-      if (resizeTimer) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        if (cancelled || !rtcRef.current) return;
-        const next = streamSize(host, maxEdge);
-        if (next.width === streamed.width && next.height === streamed.height) return;
-        streamed = next;
-        streamSizeRef.current = next;
-        video.width = next.width;
-        video.height = next.height;
-        rtcRef.current.resize(next);
-      }, 180);
-    });
-    resizeObserver.observe(host);
-
-    void session.connectPromise
-      .then(() => {
-        if (cancelled) return;
-        rtcRef.current = sessionRtc;
-        setRtcReady(true);
-        // An adopted session may have connected at a different host size.
-        const next = streamSize(host, maxEdge);
-        if (next.width !== streamed.width || next.height !== streamed.height) {
-          streamed = next;
-          streamSizeRef.current = next;
-          video.width = next.width;
-          video.height = next.height;
-          sessionRtc.resize(next);
+      fit: () => {
+        if (runtime.bounds.isEmpty()) return;
+        const aspect = Math.max(1, host.clientWidth) / Math.max(1, host.clientHeight);
+        // Keep the current viewing direction even when the model moved off origin.
+        const direction = runtime.camera.position.clone().sub(controls.target).normalize();
+        runtime.camera.position.copy(runtime.bounds.getCenter(new THREE.Vector3())).add(direction);
+        const fitted = frameCadModel(
+          runtime.camera,
+          runtime.bounds,
+          aspect,
+          settings.current.fitPadding,
+        );
+        controls.target.copy(fitted.target);
+        controls.minDistance = fitted.radius * 0.01;
+        controls.maxDistance = fitted.radius * 1000;
+        controls.update();
+      },
+      applyView: (nextView) => {
+        const standard = nextView === "orbit" ? "iso" : nextView;
+        const center = runtime.bounds.isEmpty()
+          ? controls.target.clone()
+          : runtime.bounds.getCenter(new THREE.Vector3());
+        runtime.camera.position.copy(center).addScaledVector(viewDirection(standard), 200);
+        controls.target.copy(center);
+        runtime.fit();
+        controls.update();
+        setActiveView(standard);
+      },
+      resize: () => {
+        const width = Math.max(1, host.clientWidth);
+        const height = Math.max(1, host.clientHeight);
+        renderer.setSize(width, height, false);
+        if (runtime.camera instanceof THREE.PerspectiveCamera)
+          runtime.camera.aspect = width / height;
+        else {
+          runtime.camera.left = (-runtime.camera.top * width) / height;
+          runtime.camera.right = (runtime.camera.top * width) / height;
         }
-      })
-      .catch((err) => {
-        connectFailed = true;
-        if (cancelled) return;
-        const message = safeCadError(err, "connection");
-        setStatus("error");
-        setError(message);
-        onErrorRef.current?.(message);
-        onReadyRef.current?.();
-      });
-
-    return () => {
-      cancelled = true;
-      if (authPoll) clearInterval(authPoll);
-      if (resizeTimer) clearTimeout(resizeTimer);
-      resizeObserver?.disconnect();
-      input?.detach();
-      setRtcReady(false);
-      rtcRef.current = null;
-      host.replaceChildren();
-      // A healthy connection is worth keeping: park it so the next viewport
-      // with the same engine options skips the multi-second handshake.
-      if (connectFailed) {
-        sessionRtc.deconstructor();
-      } else {
-        parkWarmSession(poolKey, session);
-      }
+        runtime.camera.updateProjectionMatrix();
+      },
+      edges: (visible) =>
+        runtime.model?.traverse((object) => {
+          if (object.userData.cadEdges) object.visible = visible;
+        }),
     };
-  }, [engine.token, engine.baseUrl, headless, scenery]);
-
-  // Re-execute KCL on the live session (params / autosave must not reconnect).
-  useEffect(() => {
-    if (!rtcReady) return;
-    const rtc = rtcRef.current;
-    if (!rtc) return;
-
-    const gen = ++execGenRef.current;
-    let cancelled = false;
-    const startView = initialViewRef.current;
-    const kcl = scriptRef.current;
-
-    const run = async () => {
-      setStatus("executing");
-      setError(null);
-      onErrorRef.current?.(null);
-
-      try {
-        await sendCmd(rtc, { type: "scene_clear_all" });
-      } catch {
-        // First paint may not need clear; ignore.
-      }
-      if (cancelled || gen !== execGenRef.current) return;
-
-      const meshes = meshAssetsRef.current;
-      const importOnly = foreignImportOnlyRef.current && meshes.length > 0;
-
-      if (importOnly) {
-        try {
-          await importMeshes(rtc, meshes);
-        } catch (err) {
-          if (cancelled || gen !== execGenRef.current) return;
-          const message = safeCadError(err, "import");
-          setStatus("error");
-          setError(message);
-          onErrorRef.current?.(message);
-          onReadyRef.current?.();
-          return;
-        }
-      } else {
-        const files = projectFilesRef.current;
-        const entry = entryPathRef.current;
-        const useProject = Boolean(files && entry && Object.keys(files).length > 0);
-        let submitResult: unknown;
-        if (useProject) {
-          const project = new Map(Object.entries(files!));
-          // Runtime accepts Map<path, source>; typings only list string.
-          submitResult = await (
-            rtc.executor().submit as (
-              input: string | Map<string, string>,
-              opts?: { mainKclPathName: string },
-            ) => Promise<unknown>
-          )(project, { mainKclPathName: entry! });
-        } else {
-          submitResult = await rtc.executor().submit(kcl);
-        }
-        if (cancelled || gen !== execGenRef.current) return;
-
-        const failMessage = kclSubmitErrorMessage(submitResult);
-        if (failMessage) {
-          const message = safeCadError(failMessage, "execution");
-          setStatus("error");
-          setError(message);
-          onErrorRef.current?.(message);
-          onReadyRef.current?.();
-          return;
-        }
-
-        // Best-effort meshes when viewing a single foreign-import part (not assembly proxies).
-        if (meshes.length > 0 && !useProject) {
-          try {
-            await importMeshes(rtc, meshes);
-          } catch {
-            // Parametric KCL already rendered; mesh attach is optional.
-          }
-        }
-      }
-
-      try {
-        if (!framedOnceRef.current) {
-          if (scenery) {
-            await sendCmd(rtc, { type: "make_axes_gizmo", clobber: true, gizmo_mode: true });
-          }
-          await sendCmd(rtc, { type: "edge_lines_visible", hidden: false });
-          // Camera drags are tool-independent, so the scene tool only needs to
-          // decide whether clicks pick entities.
-          await sendCmd(rtc, {
-            type: "set_tool",
-            tool: navToolRef.current === "orbit" ? "camera_revolve" : "select",
-          });
-          await sendCmd(rtc, cameraCmd(startView, fitPadding));
-          await sendCmd(rtc, { type: "zoom_to_fit", padding: fitPadding });
-          await new Promise((r) => setTimeout(r, 200));
-          if (!cancelled && gen === execGenRef.current && rtcRef.current) {
-            await sendCmd(rtc, { type: "zoom_to_fit", padding: fitPadding });
-          }
-          framedOnceRef.current = true;
-        }
-        // Later re-executes keep the current camera so orbit/pan aren't yanked.
-      } catch {
-        // Framing / display setup is best-effort.
-      }
-
-      if (cancelled || gen !== execGenRef.current) return;
-
-      // Name solids for hover labels (manufacturing/preview named bindings).
-      if (!importOnly && !headless) {
-        const labeled = await syncSolidLabels(rtc, scriptRef.current);
-        if (cancelled || gen !== execGenRef.current) return;
-        solidNamesRef.current = labeled;
-        labelCacheRef.current = new Map();
-      }
-
-      setStatus("running");
-      setTimeout(() => {
-        if (!cancelled && gen === execGenRef.current) onReadyRef.current?.();
-      }, 500);
+    runtimeRef.current = runtime;
+    const changed = () => {
+      const next = cameraOrientation(runtime.camera, controls.target);
+      setOrientation(next);
+      callbacks.current.onCameraOrientationChange?.(next);
     };
-
-    void run().catch((err) => {
-      if (cancelled || gen !== execGenRef.current) return;
-      const message = safeCadError(err, "execution");
-      setStatus("error");
+    controls.addEventListener("change", changed);
+    const started = () => {
+      setActiveView(null);
+      setHover(null);
+    };
+    controls.addEventListener("start", started);
+    let pointerDown: { x: number; y: number } | null = null;
+    const raycaster = new THREE.Raycaster();
+    const hit = (event: PointerEvent): THREE.Mesh | null => {
+      if (!runtime.model) return null;
+      const rect = renderer.domElement.getBoundingClientRect();
+      raycaster.setFromCamera(
+        new THREE.Vector2(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          (-(event.clientY - rect.top) / rect.height) * 2 + 1,
+        ),
+        runtime.camera,
+      );
+      const hits = raycaster.intersectObject(runtime.model, true);
+      return (
+        (hits.find((entry) => entry.object instanceof THREE.Mesh)?.object as
+          THREE.Mesh | undefined) ?? null
+      );
+    };
+    const down = (event: PointerEvent) => {
+      if (event.button === 0 && (event.ctrlKey || event.metaKey)) {
+        pointerDown = null;
+        event.stopImmediatePropagation();
+        return;
+      }
+      controls.mouseButtons.LEFT = event.altKey ? THREE.MOUSE.DOLLY : THREE.MOUSE.ROTATE;
+      pointerDown = { x: event.clientX, y: event.clientY };
+    };
+    const move = (event: PointerEvent) => {
+      if (event.buttons || navRef.current !== "select" || settings.current.headless) {
+        setHover(null);
+        return;
+      }
+      const mesh = hit(event);
+      const rect = host.getBoundingClientRect();
+      setHover(
+        mesh
+          ? { name: meshLabel(mesh), x: event.clientX - rect.left, y: event.clientY - rect.top }
+          : null,
+      );
+      renderer.domElement.style.cursor = mesh ? "pointer" : "grab";
+    };
+    const up = (event: PointerEvent) => {
+      if (
+        event.button === 0 &&
+        pointerDown &&
+        Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) < 4 &&
+        navRef.current === "select" &&
+        !settings.current.headless
+      ) {
+        const mesh = hit(event);
+        runtime.select(mesh ? cadSelectionTarget(mesh) : null);
+      }
+      pointerDown = null;
+    };
+    const leave = () => {
+      setHover(null);
+    };
+    const lost = (event: Event) => {
+      event.preventDefault();
+      const message = "The 3D display was interrupted. Reload the page to restore the viewport.";
       setError(message);
-      onErrorRef.current?.(message);
-      onReadyRef.current?.();
-    });
-
+      setStatus("error");
+      callbacks.current.onError?.(message);
+      callbacks.current.onReady?.();
+    };
+    const canvas = renderer.domElement;
+    canvas.addEventListener("pointerdown", down, true);
+    canvas.addEventListener("pointermove", move);
+    canvas.addEventListener("pointerup", up);
+    canvas.addEventListener("pointerleave", leave);
+    canvas.addEventListener("webglcontextlost", lost);
+    const resizeObserver = new ResizeObserver(runtime.resize);
+    resizeObserver.observe(host);
+    runtime.resize();
+    let frame = 0;
+    const tick = () => {
+      frame = requestAnimationFrame(tick);
+      controls.update();
+      if (selected && selectionBox) selectionBox.update();
+      renderer.render(scene, runtime.camera);
+    };
+    tick();
+    setMounted(true);
     return () => {
-      cancelled = true;
+      cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      controls.dispose();
+      canvas.removeEventListener("pointerdown", down, true);
+      canvas.removeEventListener("pointermove", move);
+      canvas.removeEventListener("pointerup", up);
+      canvas.removeEventListener("pointerleave", leave);
+      canvas.removeEventListener("webglcontextlost", lost);
+      if (runtime.model && sceneCache.current.owns(runtime.model)) scene.remove(runtime.model);
+      sceneCache.current.clear();
+      disposeCadObject(scene);
+      renderer.dispose();
+      canvas.remove();
+      runtimeRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (runtime)
+      runtime.scene.background = new THREE.Color(cadSurfaceColors(theme.mode).background);
+  }, [mounted, theme.mode]);
+
+  // Full content and dependency closure, not source length: dimension edits rebuild.
+  const requestBody = useMemo(
+    () =>
+      JSON.stringify({
+        engine,
+        projectId,
+        renderToken,
+        script,
+        projectFiles,
+        entryPath,
+        meshAssets,
+      }),
+    [engine, projectId, renderToken, script, projectFiles, entryPath, meshAssets],
+  );
+  const selectedModelKey = `${projectId ?? renderToken ?? "local"}:${modelKey ?? entryPath ?? "main"}`;
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!mounted || !runtime) return;
+    const controller = new AbortController();
+    let stale = false;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    const cache = sceneCache.current;
+    const cacheKey = `${selectedModelKey}\n${requestBody}`;
+    const changedPart = runtime.modelKey !== selectedModelKey;
+    const removeCurrent = () => {
+      runtime.select(null);
+      if (!runtime.model) return;
+      runtime.scene.remove(runtime.model);
+      if (!cache.owns(runtime.model)) disposeCadObject(runtime.model);
+      runtime.model = null;
+    };
+    if (changedPart) {
+      // Never show the previous part under the newly selected part's name.
+      removeCurrent();
+      runtime.modelKey = selectedModelKey;
+      runtime.fitted = false;
+      runtime.bounds.makeEmpty();
+      runtime.renderer.render(runtime.scene, runtime.camera);
+    }
+    setHover(null);
+    setError(null);
+    callbacks.current.onError?.(null);
+
+    const display = (root: THREE.Group) => {
+      const bounds = new THREE.Box3().setFromObject(root);
+      removeCurrent();
+      runtime.model = root;
+      runtime.scene.add(root);
+      runtime.bounds.copy(bounds);
+      const span = Math.max(1, bounds.getSize(new THREE.Vector3()).length());
+      runtime.grid.scale.setScalar(span * 2);
+      runtime.grid.position.copy(bounds.getCenter(new THREE.Vector3()));
+      runtime.grid.position.z = bounds.min.z - span * 0.005;
+      runtime.axes.scale.setScalar(span * 0.2);
+      runtime.axes.position.copy(bounds.min);
+      runtime.edges(edgesRef.current);
+      if (!runtime.fitted || settings.current.headless) runtime.applyView(settings.current.view);
+      runtime.fitted = true;
+      runtime.renderer.render(runtime.scene, runtime.camera);
+      setStatus("running");
+      requestAnimationFrame(() => {
+        if (!stale) callbacks.current.onReady?.();
+      });
+    };
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      // Restoring a viewed part does not require another export, parse or edge build.
+      setLoadSource("cache");
+      display(cached);
+      return () => {
+        stale = true;
+      };
+    }
+    setStatus(runtime.model ? "building" : "loading");
+    const timer = setTimeout(
+      () => {
+        requestedMesh.current = true;
+        void (async () => {
+          let parsedRoot: THREE.Group | null = null;
+          try {
+            if (!projectId && !renderToken && process.env.NODE_ENV === "production")
+              throw new Error("CAD preview is not configured for this demo");
+            deadline = setTimeout(() => {
+              timedOut = true;
+              controller.abort();
+            }, 150_000);
+            const direct = preview
+              ? null
+              : directViewportMeshSource(JSON.parse(requestBody) as CadMeshRequest);
+            if (!preview && !direct && engine !== "build123d")
+              throw new Error("LEGACY_KCL_REQUIRES_CONVERSION");
+            setLoadSource(preview ? "preview" : direct ? "asset" : "engine");
+            const response = preview
+              ? await preview.meshResponse(requestBody)
+              : direct
+                ? await fetch(direct.fileUrl, {
+                    credentials: "same-origin",
+                    redirect: "error",
+                    signal: controller.signal,
+                  })
+                : await fetch("/api/cad/mesh", {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: { "Content-Type": "application/json" },
+                    body: requestBody,
+                    signal: controller.signal,
+                  });
+            const loaded = await parseViewportMeshResponse(response, direct ?? undefined);
+            parsedRoot = loaded.scene;
+            controller.signal.throwIfAborted();
+            if (stale) {
+              disposeCadObject(parsedRoot);
+              return;
+            }
+            const root = cadModelTransform(loaded.upAxis, loaded.unit);
+            root.add(parsedRoot);
+            let meshes = 0;
+            parsedRoot.traverse((object) => {
+              if (!(object instanceof THREE.Mesh)) return;
+              meshes += 1;
+              const line = new THREE.LineSegments(
+                new THREE.EdgesGeometry(object.geometry, 30),
+                new THREE.LineBasicMaterial({ color: 0x263446, transparent: true, opacity: 0.35 }),
+              );
+              line.userData.cadEdges = true;
+              line.visible = edgesRef.current;
+              object.add(line);
+            });
+            root.updateMatrixWorld(true);
+            const bounds = new THREE.Box3().setFromObject(root);
+            if (!meshes || bounds.isEmpty()) {
+              disposeCadObject(root);
+              parsedRoot = null;
+              throw new Error("CAD model has no solid geometry");
+            }
+            // Detach the old scene before LRU eviction can release its resources.
+            removeCurrent();
+            cache.set(cacheKey, root, cadSceneBytes(root) + cacheKey.length * 2);
+            parsedRoot = null;
+            display(root);
+          } catch (err) {
+            if (parsedRoot) disposeCadObject(parsedRoot);
+            if (stale) return;
+            const message =
+              !projectId && !renderToken && process.env.NODE_ENV === "production"
+                ? "Live CAD previews are unavailable on this public demo. Open a project to inspect geometry."
+                : safeCadError(timedOut ? "CAD request timed out" : err);
+            setStatus("error");
+            setError(message);
+            callbacks.current.onError?.(message);
+            requestAnimationFrame(() => {
+              if (!stale) callbacks.current.onReady?.();
+            });
+          } finally {
+            if (deadline) clearTimeout(deadline);
+          }
+        })();
+      },
+      changedPart || headless || !requestedMesh.current ? 0 : debounceMs,
+    );
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+      if (deadline) clearTimeout(deadline);
+      controller.abort();
     };
   }, [
-    script,
-    rtcReady,
-    foreignImportOnly,
-    entryPath,
-    meshAssets.map((a) => a.fileUrl).join("|"),
-    projectFiles
-      ? Object.keys(projectFiles).sort().join("|") + Object.values(projectFiles).join("\0").length
-      : "",
+    mounted,
+    requestBody,
+    selectedModelKey,
+    retry,
+    projectId,
+    renderToken,
+    headless,
+    debounceMs,
+    preview,
+    engine,
   ]);
 
-  // Thumbnail / capture pages: lock a fixed camera after first successful paint.
   useEffect(() => {
-    if (!headless || !ready) return;
-    void applyView(view);
-  }, [headless, ready, view, applyView]);
-
-  // Hover label: throttle highlight queries and resolve solid names under the cursor.
-  useEffect(() => {
-    if (headless || !ready) {
-      setHoverLabel(null);
-      return;
+    const runtime = runtimeRef.current;
+    if (runtime?.fitted) {
+      runtime.applyView(view);
+      runtime.renderer.render(runtime.scene, runtime.camera);
+      const frame = requestAnimationFrame(() => callbacks.current.onReady?.());
+      return () => cancelAnimationFrame(frame);
     }
+  }, [view]);
+
+  const changeProjection = () => {
+    const runtime = runtimeRef.current;
     const host = hostRef.current;
-    const video = host?.querySelector("video");
-    if (!host || !video) return;
-
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let pending: { clientX: number; clientY: number; offsetX: number; offsetY: number } | null =
-      null;
-
-    const clearLabel = () => {
-      hoverSeqRef.current += 1;
-      setHoverLabel(null);
-    };
-
-    const probe = () => {
-      timer = null;
-      const p = pending;
-      pending = null;
-      if (!p || navToolRef.current !== "select") {
-        clearLabel();
-        return;
-      }
-      const rtc = rtcRef.current;
-      if (!rtc) return;
-
-      const point = toStreamPoint(
-        p.offsetX,
-        p.offsetY,
-        { width: video.clientWidth, height: video.clientHeight },
-        streamSizeRef.current,
-        "contain",
-      );
-      const seq = ++hoverSeqRef.current;
-      const localX = p.clientX - host.getBoundingClientRect().left;
-      const localY = p.clientY - host.getBoundingClientRect().top;
-
-      void (async () => {
-        try {
-          const result = await sendCmd(rtc, {
-            type: "highlight_set_entity",
-            selected_at_window: point,
-            sequence: seq,
-          });
-          if (seq !== hoverSeqRef.current) return;
-          const entityId = entityIdFromHighlight(result);
-          if (!entityId) {
-            setHoverLabel(null);
-            return;
-          }
-          const name = await resolveHoverLabel(
-            entityId,
-            solidNamesRef.current,
-            (cmd) => sendCmd(rtc, cmd),
-            labelCacheRef.current,
-          );
-          if (seq !== hoverSeqRef.current) return;
-          if (!name) {
-            setHoverLabel(null);
-            return;
-          }
-          setHoverLabel({ name, x: localX, y: localY });
-        } catch {
-          if (seq === hoverSeqRef.current) setHoverLabel(null);
-        }
-      })();
-    };
-
-    const onMove = (e: PointerEvent) => {
-      if (navToolRef.current !== "select") {
-        clearLabel();
-        return;
-      }
-      pending = {
-        clientX: e.clientX,
-        clientY: e.clientY,
-        offsetX: e.offsetX,
-        offsetY: e.offsetY,
-      };
-      // Follow the cursor immediately so the chip doesn't lag the pointer.
-      setHoverLabel((prev) =>
-        prev
-          ? {
-              ...prev,
-              x: e.clientX - host.getBoundingClientRect().left,
-              y: e.clientY - host.getBoundingClientRect().top,
-            }
-          : prev,
-      );
-      if (!timer) timer = setTimeout(probe, 70);
-    };
-
-    const onLeave = () => {
-      pending = null;
-      if (timer) clearTimeout(timer);
-      timer = null;
-      clearLabel();
-    };
-
-    video.addEventListener("pointermove", onMove);
-    video.addEventListener("pointerleave", onLeave);
-    return () => {
-      video.removeEventListener("pointermove", onMove);
-      video.removeEventListener("pointerleave", onLeave);
-      if (timer) clearTimeout(timer);
-      clearLabel();
-    };
-  }, [headless, ready]);
+    if (!runtime || !host) return;
+    runtime.camera = switchCadProjection(
+      runtime.camera,
+      runtime.controls.target,
+      Math.max(1, host.clientWidth) / Math.max(1, host.clientHeight),
+    );
+    runtime.controls.object = runtime.camera;
+    runtime.controls.update();
+    setProjection(
+      runtime.camera instanceof THREE.PerspectiveCamera ? "perspective" : "orthographic",
+    );
+  };
+  const zoom = (factor: number) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    if (runtime.camera instanceof THREE.OrthographicCamera) {
+      runtime.camera.zoom = THREE.MathUtils.clamp(runtime.camera.zoom * factor, 0.01, 1000);
+      runtime.camera.updateProjectionMatrix();
+    } else
+      runtime.camera.position
+        .sub(runtime.controls.target)
+        .multiplyScalar(1 / factor)
+        .add(runtime.controls.target);
+    runtime.controls.update();
+  };
+  const capture = () => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    runtime.renderer.render(runtime.scene, runtime.camera);
+    const a = document.createElement("a");
+    a.href = runtime.renderer.domElement.toDataURL("image/png");
+    a.download = `foundry-view-${activeView ?? "orbit"}.png`;
+    a.click();
+  };
 
   return (
-    <div className="bg-muted/30 absolute inset-0">
-      <div
-        ref={hostRef}
-        className="absolute inset-0 [&_video]:h-full [&_video]:w-full [&_video]:object-contain"
-      />
-      {hoverLabel && !headless ? (
+    <div
+      className="bg-muted/30 absolute inset-0"
+      data-cad-renderer="three"
+      data-cad-engine={engine ?? "zoo"}
+      data-cad-status={status}
+      data-cad-model-key={modelKey ?? entryPath ?? "main"}
+      data-cad-load-source={status === "running" ? loadSource : undefined}
+    >
+      <div ref={hostRef} className="absolute inset-0" />
+      {hover && !headless ? (
         <div
-          className="pointer-events-none absolute z-40 -translate-x-1/2 -translate-y-[calc(100%+10px)] rounded-none border bg-card/95 px-2 py-1 font-mono text-[11px] font-medium shadow-lg backdrop-blur-md"
-          style={{ left: hoverLabel.x, top: hoverLabel.y }}
+          className="pointer-events-none absolute z-40 -translate-x-1/2 -translate-y-[calc(100%+10px)] rounded-none border bg-card px-2 py-1 font-mono text-[11px] shadow-none"
+          style={{ left: hover.x, top: hover.y }}
         >
-          {hoverLabel.name}
+          {hover.name}
         </div>
       ) : null}
-
       {chrome ? (
         <>
           <div className="pointer-events-none absolute inset-x-0 bottom-14 z-20 flex justify-center px-3 pb-3">
-            <div className="bg-card/95 pointer-events-auto flex max-w-[min(100%,920px)] items-center gap-0.5 overflow-x-auto rounded-xl border px-1.5 py-1 shadow-lg backdrop-blur-md">
+            <div className="bg-card pointer-events-auto flex max-w-[min(100%,920px)] items-center gap-0.5 overflow-x-auto rounded-none border px-1.5 py-1 shadow-none">
               <ToolbarBtn
                 title="Orbit"
                 active={navTool === "orbit"}
-                disabled={!controlsReady}
-                onClick={() => void setNav("orbit")}
+                disabled={!mounted}
+                onClick={() => {
+                  setNavTool("orbit");
+                  setHover(null);
+                }}
               >
                 <Move className="size-3.5" />
               </ToolbarBtn>
               <ToolbarBtn
                 title="Select"
                 active={navTool === "select"}
-                disabled={!controlsReady}
-                onClick={() => void setNav("select")}
+                disabled={!mounted}
+                onClick={() => setNavTool("select")}
               >
                 <BoxSelect className="size-3.5" />
               </ToolbarBtn>
@@ -1187,30 +860,26 @@ export function CadViewport({
               <ToolbarBtn
                 title="Isometric view"
                 active={activeView === "iso"}
-                disabled={!controlsReady}
-                onClick={() => void applyView("iso")}
-                className="min-w-8 px-1 text-[9px] font-semibold"
+                disabled={!mounted}
+                onClick={() => runtimeRef.current?.applyView("iso")}
+                className="min-w-8 px-1 font-mono text-[9px] font-medium tracking-[0.08em]"
               >
                 ISO
               </ToolbarBtn>
-              <Divider />
-              <ToolbarBtn title="Fit all" disabled={!controlsReady} onClick={() => void fit()}>
+              <ToolbarBtn
+                title="Fit all"
+                disabled={!mounted}
+                onClick={() => runtimeRef.current?.fit()}
+              >
                 <Maximize2 className="size-3.5" />
               </ToolbarBtn>
-              <ToolbarBtn
-                title="Zoom in"
-                disabled={!controlsReady}
-                onClick={() => void zoom(ZOOM_BUTTON_STEP)}
-              >
+              <ToolbarBtn title="Zoom in" disabled={!mounted} onClick={() => zoom(1.25)}>
                 <Focus className="size-3.5" />
               </ToolbarBtn>
-              <ToolbarBtn
-                title="Zoom out"
-                disabled={!controlsReady}
-                onClick={() => void zoom(-ZOOM_BUTTON_STEP)}
-              >
+              <ToolbarBtn title="Zoom out" disabled={!mounted} onClick={() => zoom(0.8)}>
                 <ZoomOut className="size-3.5" />
               </ToolbarBtn>
+              <Divider />
               <ToolbarBtn
                 title={
                   projection === "perspective"
@@ -1218,81 +887,93 @@ export function CadViewport({
                     : "Perspective projection"
                 }
                 active={projection === "orthographic"}
-                disabled={!controlsReady}
-                onClick={() => void toggleProjection()}
+                disabled={!mounted}
+                onClick={changeProjection}
               >
                 <Aperture className="size-3.5" />
               </ToolbarBtn>
               <ToolbarBtn
                 title="Toggle edge lines"
                 active={edges}
-                disabled={!controlsReady}
-                onClick={() => void toggleEdges()}
+                disabled={!mounted}
+                onClick={() => {
+                  setEdges(!edges);
+                  runtimeRef.current?.edges(!edges);
+                }}
               >
                 <Square className="size-3.5" />
               </ToolbarBtn>
               <ToolbarBtn
                 title="Toggle axes gizmo"
                 active={axes}
-                disabled={!controlsReady}
-                onClick={() => void toggleAxes()}
+                disabled={!mounted}
+                onClick={() => {
+                  setAxes(!axes);
+                  if (runtimeRef.current) {
+                    runtimeRef.current.axes.visible = !axes;
+                    runtimeRef.current.grid.visible = !axes;
+                  }
+                }}
               >
                 <Axis3d className="size-3.5" />
               </ToolbarBtn>
               <ToolbarBtn
                 title="Capture PNG of current view"
-                disabled={!ready}
-                onClick={captureView}
+                disabled={status !== "running"}
+                onClick={capture}
               >
                 <Camera className="size-3.5" />
               </ToolbarBtn>
-              <span className="text-muted-foreground ml-1 hidden items-center gap-1 px-1 text-[10px] sm:inline-flex">
-                <Scan className="size-3" />
+              <span className="text-muted-foreground ml-1 hidden px-1 font-mono text-[9px] tracking-[0.06em] uppercase sm:inline">
                 {projection === "orthographic" ? "Ortho" : "Persp"}
                 {edges ? " · Edges" : ""}
               </span>
             </div>
           </div>
-
           <ViewCube
             active={activeView}
-            orientation={cameraOrientation}
-            disabled={!controlsReady}
-            onSelect={(v) => void applyView(v)}
-            onIso={() => void applyView("iso")}
+            orientation={orientation}
+            disabled={!mounted}
+            onSelect={(next) => runtimeRef.current?.applyView(next)}
+            onIso={() => runtimeRef.current?.applyView("iso")}
           />
-
-          <div className="bg-card/80 text-muted-foreground pointer-events-none absolute top-14 left-3 z-20 hidden items-center gap-2 rounded-md border px-2 py-1 text-[9px] shadow-sm backdrop-blur-md xl:flex">
+          <div className="text-muted-foreground pointer-events-none absolute bottom-3 left-3 z-20 hidden items-center gap-2 font-mono text-[9px] tracking-[0.04em] 2xl:flex">
             <span className="text-foreground/85 font-medium">mm · Z-up</span>
             <span className="bg-border h-3 w-px" />
             <span>Drag orbit · Shift-drag pan · Scroll zoom</span>
           </div>
         </>
       ) : null}
-
       {status === "error" && error ? (
-        <DotMatrixLoader
-          className="pointer-events-none absolute inset-0 z-10"
-          tone="signal"
-          label="Zoo engine error"
-        >
-          {error}
-        </DotMatrixLoader>
-      ) : status === "connecting" ? (
-        <DotMatrixLoader
-          className="pointer-events-none absolute inset-0 z-10"
-          tone="signal"
-          label="Connecting to Zoo CAD engine"
-        />
-      ) : status === "executing" ? (
-        // The stream is already live — a full-screen loader here hid the scene
-        // and blocked every control on each re-execute. Small pill instead.
         <div
-          className="bg-card/95 text-muted-foreground pointer-events-none absolute top-14 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] shadow-lg backdrop-blur-md"
+          role="alert"
+          className="bg-card absolute top-24 left-1/2 z-30 w-[min(90%,380px)] -translate-x-1/2 rounded-none border px-4 py-3 text-center text-xs shadow-none"
+        >
+          <p>{error}</p>
+          {mounted ? (
+            <button
+              type="button"
+              className="text-primary mt-3 inline-flex items-center gap-2 font-mono text-[10px] tracking-[0.08em] uppercase"
+              onClick={() => setRetry((value) => value + 1)}
+            >
+              <RefreshCw className="size-3" />
+              Retry model
+            </button>
+          ) : null}
+        </div>
+      ) : status === "loading" ? (
+        <DotMatrixLoader
+          className="pointer-events-none absolute inset-0 z-10"
+          tone="signal"
+          label="Building geometry"
+        />
+      ) : status === "building" ? (
+        <div
           role="status"
+          className="bg-card text-muted-foreground pointer-events-none absolute top-24 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-none border px-3 py-1.5 text-[11px] shadow-none"
         >
           <span className="bg-primary size-1.5 animate-pulse rounded-full" />
-          Building model in Zoo engine…
+          Updating this part · showing previous geometry
         </div>
       ) : null}
     </div>

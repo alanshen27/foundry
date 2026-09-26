@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { execSync } from "node:child_process";
-import { runBuild123d, summarizePythonError, extractProgressNote } from "../src/build123d";
+import {
+  PYTHON_CAD_PACKAGES,
+  runBuild123d,
+  summarizePythonError,
+  extractProgressNote,
+} from "../src/build123d";
+
+describe("PYTHON_CAD_PACKAGES", () => {
+  it("pins ocpsvg to the last release that imports on cadquery-ocp 7.8", () => {
+    expect(PYTHON_CAD_PACKAGES).toContain("build123d==0.9.1");
+    expect(PYTHON_CAD_PACKAGES).toContain("ocpsvg==0.5.0");
+  });
+});
 
 describe("summarizePythonError", () => {
   it("prefers the explicit driver contract error", () => {
@@ -62,7 +74,7 @@ describe.skipIf(!hasUv)("runBuild123d (live, uv)", () => {
     { timeout: 300_000 },
     async () => {
       const notes: string[] = [];
-      const result = await runBuild123d("from build123d import *\nresult = Box(10, 20, 5)\n", {
+      const result = await runBuild123d("from build123d import Box\nresult = Box(10, 20, 5)\n", {
         onProgress: (note) => notes.push(note),
       });
       expect(result.ok).toBe(true);
@@ -78,7 +90,7 @@ describe.skipIf(!hasUv)("runBuild123d (live, uv)", () => {
   it("streams user-defined progress markers", { timeout: 300_000 }, async () => {
     const notes: string[] = [];
     const result = await runBuild123d(
-      "from build123d import *\nprint('BUILD123D_PROGRESS: sketching base')\nresult = Box(10, 20, 5)\n",
+      "from build123d import Box\nprint('BUILD123D_PROGRESS: sketching base')\nresult = Box(10, 20, 5)\n",
       { onProgress: (note) => notes.push(note) },
     );
     expect(result.ok).toBe(true);
@@ -86,13 +98,13 @@ describe.skipIf(!hasUv)("runBuild123d (live, uv)", () => {
   });
 
   it("returns the actionable Python error on a broken script", { timeout: 300_000 }, async () => {
-    const result = await runBuild123d("from build123d import *\nresult = Box(10, 'oops')\n");
+    const result = await runBuild123d("from build123d import Box\nresult = Box(10, 'oops')\n");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.length).toBeGreaterThan(0);
   });
 
   it("rejects a script that never sets result", { timeout: 300_000 }, async () => {
-    const result = await runBuild123d("from build123d import *\nx = Box(1, 1, 1)\n");
+    const result = await runBuild123d("from build123d import Box\nx = Box(1, 1, 1)\n");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("result");
   });

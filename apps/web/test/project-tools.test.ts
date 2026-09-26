@@ -81,7 +81,29 @@ vi.mock("../server/stage-state", () => ({
   markDownstreamStale: vi.fn(async () => []),
   setStageStatus: vi.fn(async () => true),
 }));
-vi.mock("../server/cad", () => ({ getCad: () => ({ executeKcl }) }));
+const evaluateCadComponent = vi.hoisted(() => vi.fn());
+const writeDesignWithCollaboration = vi.hoisted(() =>
+  vi.fn(async (input: { data: unknown }) => input.data),
+);
+const writeCodeWithCollaboration = vi.hoisted(() => vi.fn(async () => ({ id: "file-1" })));
+const deleteCodeWithCollaboration = vi.hoisted(() => vi.fn());
+
+vi.mock("../server/cad", () => ({
+  getCad: () => ({ executeKcl }),
+  getPythonCad: () => ({ generate: vi.fn() }),
+}));
+vi.mock("../server/python-cad", () => ({
+  evaluateCadComponent: (...a: unknown[]) => evaluateCadComponent(...a),
+}));
+vi.mock("../server/engineering", () => ({
+  getEngineeringStatus: vi.fn(),
+  updateEngineering: vi.fn(),
+}));
+vi.mock("../server/collab-write", () => ({
+  writeDesignWithCollaboration: (...a: unknown[]) => writeDesignWithCollaboration(...a),
+  writeCodeWithCollaboration: (...a: unknown[]) => writeCodeWithCollaboration(...a),
+  deleteCodeWithCollaboration: (...a: unknown[]) => deleteCodeWithCollaboration(...a),
+}));
 vi.mock("../server/cad-doc", () => ({
   mutateModel3dDoc: (...a: unknown[]) => mutateModel3dDoc(...a),
 }));
@@ -127,6 +149,10 @@ beforeEach(() => {
   recordAudit.mockReset().mockResolvedValue(undefined);
   executeKcl.mockReset().mockResolvedValue({ ok: true });
   mutateModel3dDoc.mockReset();
+  evaluateCadComponent.mockReset();
+  writeDesignWithCollaboration.mockReset().mockImplementation(async (input: { data: unknown }) => input.data);
+  writeCodeWithCollaboration.mockReset().mockResolvedValue({ id: "file-1" });
+  deleteCodeWithCollaboration.mockReset();
 });
 
 // ---------- the capability table ----------
@@ -159,6 +185,9 @@ const CAPABILITY: Record<string, string> = {
   patch_cad_script: "mechanical.edit",
   python_cad: "mechanical.edit",
   add_part_to_assembly: "mechanical.edit",
+  get_engineering_status: "project.read",
+  sync_pcb_to_cad: "mechanical.edit",
+  build_linked_assembly: "mechanical.edit",
   generate_concept_image: "site.edit",
   render_model_views: "project.read",
   render_circuit: "project.read",
@@ -172,7 +201,7 @@ const CAPABILITY: Record<string, string> = {
 };
 
 describe("the tool set", () => {
-  it("exposes all 31 tools in their original order", () => {
+  it("exposes all project tools in their declared order", () => {
     expect(Object.keys(tools())).toEqual(Object.keys(CAPABILITY));
   });
 
@@ -293,12 +322,13 @@ describe("save_circuit", () => {
   it("saves a valid schematic as the project's CIRCUIT document", async () => {
     const result = await tools().save_circuit!.execute(led, options);
     expect(result).toMatchObject({ ok: true, parts: 2, wires: 1 });
-    const upsert = calls.find((c) => c.model === "designDoc" && c.method === "upsert")!;
-    expect(upsert.args).toMatchObject({
-      where: {
-        projectId_branchId_kind: { projectId: "proj1", branchId: "branch1", kind: "CIRCUIT" },
-      },
-    });
+    expect(writeDesignWithCollaboration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "proj1",
+        branchId: "branch1",
+        kind: "CIRCUIT",
+      }),
+    );
   });
 });
 
@@ -322,7 +352,9 @@ describe("write_code_file", () => {
     );
     expect(result).toMatchObject({ ok: true, repo: "firmware", path: "src/main.cpp", bytes: 15 });
     expect(calls.find((c) => c.model === "repoLink" && c.method === "create")).toBeDefined();
-    expect(calls.find((c) => c.model === "codeFile" && c.method === "upsert")).toBeDefined();
+    expect(writeCodeWithCollaboration).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "src/main.cpp", content: "void setup() {}" }),
+    );
   });
 
   it("writes into the existing repository when one is linked", async () => {
@@ -337,11 +369,17 @@ describe("write_code_file", () => {
 describe("patch_cad_script", () => {
   const doc = normalizeCadDoc({
     version: 5,
-    engine: "zoo",
+    engine: "build123d",
     activeId: "c1",
     script: "",
     components: [
-      { id: "c1", kind: "part", name: "lid", path: "parts/lid/main.kcl", content: "width = 60\n" },
+      {
+        id: "c1",
+        kind: "part",
+        name: "lid",
+        path: "parts/lid/main.py",
+        content: "width = 60\nresult = Box(width, 10, 10)\n",
+      },
     ],
   });
 
@@ -350,6 +388,12 @@ describe("patch_cad_script", () => {
     mutateModel3dDoc.mockImplementation(async (_p, _b, _u, mutate: (d: typeof doc) => typeof doc) =>
       mutate(doc),
     );
+    evaluateCadComponent.mockResolvedValue({
+      valid: true,
+      solidCount: 1,
+      volumeMm3: 6000,
+      bbox: { center: { x: 0, y: 0, z: 0 }, dimensions: { x: 60, y: 10, z: 10 } },
+    });
   });
 
   it("refuses an edit whose find text is not in the file, saving nothing", async () => {
@@ -362,7 +406,7 @@ describe("patch_cad_script", () => {
   });
 
   it("refuses a patch the engine cannot execute, saving nothing", async () => {
-    executeKcl.mockResolvedValue({ ok: false, error: "unexpected token" });
+    evaluateCadComponent.mockRejectedValue(new Error("unexpected token"));
     const result = (await tools().patch_cad_script!.execute(
       { partName: "lid", edits: [{ find: "width = 60", replace: "width = )" }] },
       options,
@@ -373,10 +417,10 @@ describe("patch_cad_script", () => {
 
   it("saves a patch that executes, and reports it as engine-verified", async () => {
     const result = await tools().patch_cad_script!.execute(
-      { partName: "parts/lid/main.kcl", edits: [{ find: "width = 60", replace: "width = 64" }] },
+      { partName: "parts/lid/main.py", edits: [{ find: "width = 60", replace: "width = 64" }] },
       options,
     );
-    expect(executeKcl).toHaveBeenCalledWith({ code: "width = 64\n" });
+    expect(evaluateCadComponent).toHaveBeenCalled();
     expect(mutateModel3dDoc).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ ok: true, verified: true, editsApplied: 1 });
   });

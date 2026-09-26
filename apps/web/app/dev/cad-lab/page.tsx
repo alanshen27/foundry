@@ -12,8 +12,8 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 /**
- * DEV-ONLY lab for exercising CAD skills/MCPs with a prompt: Zoo ML
- * text-to-CAD / iteration, Zoo MCP KCL tools, and arbitrary stdio CAD MCP
+ * DEV-ONLY lab for exercising CAD skills/MCPs with a prompt: Astra KCL
+ * generation / iteration, Zoo MCP KCL tools, and arbitrary stdio CAD MCP
  * servers (e.g. wrappers around earthtojake/text-to-cad skills). Hidden in
  * production unless CAD_LAB_ENABLED=1.
  */

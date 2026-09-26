@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma, type Prisma } from "@foundry/db";
+import { COLLABORATION_TRANSACTION_OPTIONS } from "@foundry/collaboration";
 import { ACTIVE_AI_RUN_STATUSES } from "@/lib/ai-edit-policy";
 import { expireStaleProjectRuns } from "./chat-run/stale";
 
@@ -17,7 +18,7 @@ export type ActiveAiEditLock = Prisma.ChatRunGetPayload<{
   select: typeof activeRunSelect;
 }>;
 
-async function acquireBranchEditMutex(
+export async function acquireBranchEditMutex(
   tx: Prisma.TransactionClient,
   projectId: string,
   branchId: string,
@@ -83,7 +84,25 @@ export function withAiEditLockGuard<T>(
     const active = await findActiveAiEditLock(tx, projectId, branchId);
     if (active) throw new AiEditLockConflict(active);
     return save(tx);
-  });
+  }, COLLABORATION_TRANSACTION_OPTIONS);
+}
+
+/** A copilot mutation may use only the lease belonging to its current run. */
+export function withAiRunEditLockGuard<T>(
+  projectId: string,
+  branchId: string,
+  runId: string,
+  actorId: string,
+  save: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    await acquireBranchEditMutex(tx, projectId, branchId);
+    const active = await findActiveAiEditLock(tx, projectId, branchId);
+    if (!active || active.id !== runId || active.actorId !== actorId) {
+      throw new Error("The AI editing lease is no longer active. Refresh the workspace.");
+    }
+    return save(tx);
+  }, COLLABORATION_TRANSACTION_OPTIONS);
 }
 
 type CreateRunInput = {
@@ -112,9 +131,11 @@ export function createExclusiveAiRun(input: CreateRunInput): Promise<ExclusiveRu
     if (active) return { created: false, active };
 
     const run = await tx.chatRun.create({
-      data: input,
+      // The database's default timestamp can be the transaction start, before
+      // a long mutex wait. Start the pending-worker clock at actual creation.
+      data: { ...input, createdAt: new Date() },
       select: { id: true },
     });
     return { created: true, run };
-  });
+  }, COLLABORATION_TRANSACTION_OPTIONS);
 }

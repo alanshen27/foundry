@@ -188,8 +188,7 @@ describe("excellonDrill", () => {
     expect(d).not.toContain("T3C");
   });
 
-  it("includes plated footprint holes", () => {
-    // A pin header's pads are plated, so each one needs a drill hit.
+  it("does not infer unknown plated drill diameters from copper pad dimensions", () => {
     const d = excellonDrill(
       normalizePcbDoc({
         board: { widthMm: 80, heightMm: 50 },
@@ -207,7 +206,7 @@ describe("excellonDrill", () => {
       }),
     );
     const hits = d.split("\n").filter((l) => /^X[\d.]+Y[\d.]+$/.test(l));
-    expect(hits).toHaveLength(4);
+    expect(hits).toHaveLength(0);
   });
 
   it("flips Y to match the Gerber layers", () => {
@@ -219,6 +218,32 @@ describe("excellonDrill", () => {
 });
 
 describe("fabricationFiles", () => {
+  it("exports explicit mounting holes as non-plated drills without copper pads", () => {
+    const doc = normalizePcbDoc({
+      board: { widthMm: 80, heightMm: 50 },
+      footprints: [{ id: "h1", libraryId: "MountingHole_3.2mm", refDes: "H1", xMm: 10, yMm: 12 }],
+    });
+    const files = fabricationFiles(doc, "mounted");
+    const holes = files.find((file) => file.name === "mounted-NPTH.drl")!.contents;
+    expect(holes).toContain("T1C3.200");
+    expect(holes).toContain("X10.000Y38.000");
+    expect(files.find((file) => file.name === "mounted.drl")!.contents).not.toContain(
+      "X10.000Y38.000",
+    );
+    expect(gerberCopper(doc, "F.Cu")).not.toContain("G36*");
+  });
+
+  it("labels incomplete fabrication output when plated drilling is unknown", () => {
+    const doc = normalizePcbDoc({
+      footprints: [{ id: "j1", libraryId: "PinHeader_1x04", refDes: "J1" }],
+    });
+    const note = fabricationFiles(doc, "header").find(
+      (file) => file.name === "header-INCOMPLETE.txt",
+    )?.contents;
+    expect(note).toContain("UNVERIFIED");
+    expect(note).toContain("Do not fabricate");
+    expect(note).toContain("drill diameter unknown");
+  });
   it("returns the full set a fab needs", () => {
     const files = fabricationFiles(board({ tracks: [track] }), "demo");
     expect(files.map((f) => f.name)).toEqual([

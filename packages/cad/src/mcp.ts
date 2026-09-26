@@ -1,6 +1,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import type { CadBoundingBox, CadResult } from "./port";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { CadBoundingBox, CadKclInput, CadResult } from "./port";
 
 /**
  * Engine calls are seconds; the first `uvx zoo-mcp` of a machine also pays a
@@ -107,14 +110,36 @@ export class ZooMcpClient {
     }
   }
 
-  private async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
-    const client = await this.ensure();
-    const result = (await client.callTool(
-      { name, arguments: args },
-      undefined,
-      this.requestOptions(),
-    )) as McpToolResult;
-    return result;
+  private async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<McpToolResult> {
+    const requestSignal =
+      signal && this.signal ? AbortSignal.any([signal, this.signal]) : (signal ?? this.signal);
+    requestSignal?.throwIfAborted();
+    let onAbort: (() => void) | undefined;
+    try {
+      const connection = this.ensure();
+      const client = requestSignal
+        ? await Promise.race([
+            connection,
+            new Promise<never>((_resolve, reject) => {
+              onAbort = () => reject(requestSignal.reason);
+              requestSignal.addEventListener("abort", onAbort, { once: true });
+              if (requestSignal.aborted) onAbort();
+            }),
+          ])
+        : await connection;
+      // Cancel the caller's wait without closing a connection shared by other operations.
+      requestSignal?.throwIfAborted();
+      return (await client.callTool({ name, arguments: args }, undefined, {
+        ...this.requestOptions(),
+        ...(requestSignal ? { signal: requestSignal } : {}),
+      })) as McpToolResult;
+    } finally {
+      if (onAbort) requestSignal?.removeEventListener("abort", onAbort);
+    }
   }
 
   private textFrom(result: McpToolResult): string {
@@ -161,9 +186,10 @@ export class ZooMcpClient {
   async callGenericTool(
     name: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<CadResult<McpToolCallOutput>> {
     try {
-      const result = await this.callTool(name, args);
+      const result = await this.callTool(name, args, signal);
       const text = this.textFrom(result);
       if (result.isError) {
         return { ok: false, error: text || `MCP tool ${name} failed` };
@@ -186,21 +212,28 @@ export class ZooMcpClient {
     }
   }
 
-  async executeKcl(input: {
-    code?: string;
-    projectDir?: string;
-  }): Promise<CadResult<{ message: string }>> {
+  async executeKcl(input: CadKclInput): Promise<CadResult<{ message: string }>> {
     try {
       const args: Record<string, unknown> = {};
       if (input.code) args.kcl_code = input.code;
       if (input.projectDir) args.kcl_path = input.projectDir;
-      const result = await this.callTool("execute_kcl", args);
+      const result = await this.callTool("execute_kcl", args, input.signal);
+      input.signal?.throwIfAborted();
       const text = this.textFrom(result);
       // Tool returns tuple serialized as text, or structured content.
       if (result.isError) {
         return { ok: false, error: text || "Zoo MCP execute_kcl failed" };
       }
-      const structured = result.structuredContent;
+      const structured = result.structuredContent ?? tryParseJson(text);
+      if (structured && typeof structured === "object" && "ok" in structured) {
+        const value = structured as { ok?: unknown; message?: unknown };
+        if (typeof value.ok === "boolean") {
+          const message = typeof value.message === "string" ? value.message : text;
+          return value.ok
+            ? { ok: true, data: { message: message || "KCL code executed successfully" } }
+            : { ok: false, error: message || "KCL execution failed" };
+        }
+      }
       if (Array.isArray(structured) && structured.length >= 2) {
         const ok = Boolean(structured[0]);
         const message = String(structured[1] ?? "");
@@ -221,18 +254,15 @@ export class ZooMcpClient {
     }
   }
 
-  async boundingBoxKcl(input: {
-    code?: string;
-    projectDir?: string;
-    unit?: string;
-  }): Promise<CadResult<CadBoundingBox>> {
+  async boundingBoxKcl(input: CadKclInput & { unit?: string }): Promise<CadResult<CadBoundingBox>> {
     try {
       const args: Record<string, unknown> = {
         unit_length: input.unit ?? "mm",
       };
       if (input.code) args.kcl_code = input.code;
       if (input.projectDir) args.kcl_path = input.projectDir;
-      const result = await this.callTool("calculate_bounding_box_kcl", args);
+      const result = await this.callTool("calculate_bounding_box_kcl", args, input.signal);
+      input.signal?.throwIfAborted();
       const text = this.textFrom(result);
       if (result.isError) {
         return { ok: false, error: text || "Zoo MCP bounding box failed" };
@@ -254,15 +284,64 @@ export class ZooMcpClient {
     }
   }
 
-  async multiviewSnapshotKcl(input: {
-    code?: string;
-    projectDir?: string;
-  }): Promise<CadResult<{ jpeg: Buffer }>> {
+  /** Execute real KCL and return its binary mesh for the local Three.js viewport. */
+  async exportGlb(input: CadKclInput): Promise<CadResult<{ glb: Buffer }>> {
+    if (input.signal?.aborted) return { ok: false, error: "CAD export cancelled" };
+    if (!input.code?.trim() && !input.projectDir) {
+      return { ok: false, error: "CAD export needs KCL code or a project directory" };
+    }
+    let dir: string | undefined;
+    try {
+      dir = await mkdtemp(join(tmpdir(), "foundry-glb-"));
+      if (input.signal?.aborted) return { ok: false, error: "CAD export cancelled" };
+      const output = join(dir, "model.glb");
+      const result = await this.callGenericTool(
+        "export_kcl",
+        {
+          ...(input.projectDir ? { kcl_path: input.projectDir } : { kcl_code: input.code }),
+          export_format: "glb",
+          export_path: output,
+        },
+        input.signal,
+      );
+      if (input.signal?.aborted) return { ok: false, error: "CAD export cancelled" };
+      if (!result.ok) return result;
+      // Zoo MCP also reports errors as plain text. Never follow its returned path.
+      const info = await stat(output).catch(() => null);
+      if (!info?.isFile() || info.size < 20 || info.size > 25_000_000) {
+        return { ok: false, error: "CAD engine did not produce a usable GLB model" };
+      }
+      const glb = await readFile(output);
+      if (input.signal?.aborted) return { ok: false, error: "CAD export cancelled" };
+      if (
+        glb.toString("ascii", 0, 4) !== "glTF" ||
+        glb.readUInt32LE(4) !== 2 ||
+        glb.readUInt32LE(8) !== glb.length
+      ) {
+        return { ok: false, error: "CAD engine returned an invalid GLB model" };
+      }
+      return { ok: true, data: { glb } };
+    } catch (err) {
+      return {
+        ok: false,
+        error: input.signal?.aborted
+          ? "CAD export cancelled"
+          : err instanceof Error
+            ? err.message
+            : String(err),
+      };
+    } finally {
+      if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  async multiviewSnapshotKcl(input: CadKclInput): Promise<CadResult<{ jpeg: Buffer }>> {
     try {
       const args: Record<string, unknown> = { zoom: true };
       if (input.code) args.kcl_code = input.code;
       if (input.projectDir) args.kcl_path = input.projectDir;
-      const result = await this.callTool("multiview_snapshot_of_kcl", args);
+      const result = await this.callTool("multiview_snapshot_of_kcl", args, input.signal);
+      input.signal?.throwIfAborted();
       if (result.isError) {
         return {
           ok: false,

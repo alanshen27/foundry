@@ -1,19 +1,21 @@
 "use client";
 
+import { useCollaborativeDesign } from "./use-collaborative-design";
+import { DesignCollaborationStatus } from "./design-collaboration-status";
+
 /**
  * Mechanical CAD workspace: multi-component tree (parts / assembly /
- * instructions) + Monaco + live Zoo viewport for the active KCL component.
+ * instructions), collaborative Python sources, and a local Three.js viewport.
  */
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import Editor from "@monaco-editor/react";
+import dynamic from "next/dynamic";
 import {
   Bot,
-  Axis3d,
   Boxes,
   ChevronDown,
   ChevronRight,
-  ChevronUp,
   Code,
+  Download,
   FilePlus,
   FileText,
   GripVertical,
@@ -25,7 +27,6 @@ import {
   Puzzle,
   Redo2,
   Ruler,
-  SlidersHorizontal,
   Undo2,
   Upload,
 } from "lucide-react";
@@ -39,34 +40,26 @@ import {
   cadAssetImportMode,
   displayNameFromCadPath,
   getActiveComponent,
+  isCadStarterComponent,
+  isPythonCadComponent,
+  selectCadComponentId,
   importMeshAsPart,
   insertPartIntoAssembly,
   normalizeCadDoc,
   setActiveComponent,
   slugifyCadName,
   upsertPartScript,
+  upsertPythonPart,
   updateComponentContent,
   type CadComponent,
   type CadComponentKind,
   type CadDoc,
 } from "@/lib/cad/engine";
-import {
-  parseCadFeatureFields,
-  parseCadFeatures,
-  setCadFeatureField,
-  type CadFeature,
-  type CadFeatureField,
-} from "@/lib/cad/features";
-import { parseCadParams, setCadParam, type CadParam } from "@/lib/cad/params";
 import { cadViewportInput } from "@/lib/cad/viewport-project";
-import { orientationForView, type CameraOrientation } from "@/lib/cad/viewport-input";
 import { CadViewport } from "@/components/engineer/cad-viewport";
-import { CadFeatureTimeline } from "@/components/engineer/cad-feature-timeline";
 import { CadImportDialog, type CadImportUnit } from "@/components/engineer/cad-import-dialog";
-import { CadToolsPanel } from "@/components/engineer/cad-tools-panel";
-import { CadTransformGizmo } from "@/components/engineer/cad-transform-gizmo";
-import { applyCadTool, findLastSolid } from "@/lib/cad/tools";
-import { safeCadError } from "@/lib/cad/safe-error";
+import { LEGACY_CAD_PREVIEW_MESSAGE, safeCadError } from "@/lib/cad/safe-error";
+import { useWorkspaceUiPreview } from "@/components/dev/workspace-ui-preview";
 import { useTheme } from "@/components/theme-provider";
 import { defineFoundryMonacoThemes } from "@/lib/monaco-theme";
 import { monacoThemeFor } from "@/lib/theme";
@@ -76,201 +69,14 @@ import { useCursors } from "@/lib/use-cursors";
 import { useLiveEdit } from "@/lib/use-live-edit";
 import { ViewportComments, type CommentPoint } from "@/components/engineer/viewport-comments";
 
-type CadMeasurement = {
-  unit: "mm";
-  center: { x: number; y: number; z: number };
-  dimensions: { x: number; y: number; z: number };
+// The viewport opens first; download Monaco only when the source panel is opened.
+const Editor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+
+const KIND_META: Record<CadComponentKind, { label: string; icon: typeof Puzzle }> = {
+  part: { label: "Manufacturing", icon: Puzzle },
+  assembly: { label: "Assembly", icon: Boxes },
+  instructions: { label: "Instructions", icon: FileText },
 };
-
-function ParamsPanel({
-  params,
-  inlineFields,
-  feature,
-  measurement,
-  measuring,
-  measureError,
-  canEdit,
-  onSet,
-  onSetInline,
-  onMeasure,
-}: {
-  params: CadParam[];
-  inlineFields: CadFeatureField[];
-  feature: CadFeature | null;
-  measurement?: CadMeasurement;
-  measuring: boolean;
-  measureError?: string;
-  canEdit: boolean;
-  onSet: (name: string, value: number | boolean | string) => void;
-  onSetInline: (field: CadFeatureField, value: number) => void;
-  onMeasure: () => void;
-}) {
-  const [collapsed, setCollapsed] = useState(true);
-
-  useEffect(() => {
-    if (feature) setCollapsed(false);
-  }, [feature?.id]);
-
-  return (
-    <div className="bg-card/90 absolute top-32 right-3 z-30 w-64 rounded-lg border shadow-lg backdrop-blur-md">
-      <button
-        type="button"
-        onClick={() => setCollapsed((c) => !c)}
-        aria-expanded={!collapsed}
-        aria-controls="cad-inspector-content"
-        className="flex w-full items-center gap-2 px-3 py-2"
-      >
-        <SlidersHorizontal className="text-primary size-3.5" />
-        <span className="text-xs font-semibold">Inspector</span>
-        <span className="text-muted-foreground ml-auto text-[10px]">
-          {feature?.operation ?? "part"}
-        </span>
-        {collapsed ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
-      </button>
-      {!collapsed ? (
-        <div id="cad-inspector-content" className="max-h-[62vh] overflow-y-auto border-t">
-          {feature ? (
-            <div className="border-b px-3 py-2.5">
-              <p className="truncate text-xs font-medium" title={feature.label}>
-                {feature.label}
-              </p>
-              <p className="text-muted-foreground mt-1 flex justify-between font-mono text-[10px]">
-                <span>{feature.kind}</span>
-                <span>
-                  L{feature.lineStart}–{feature.lineEnd}
-                </span>
-              </p>
-            </div>
-          ) : null}
-
-          <div className="flex flex-col gap-1.5 px-3 py-2.5">
-            <p className="text-muted-foreground mb-0.5 text-[10px] font-medium tracking-wide uppercase">
-              {feature ? "Feature parameters" : "Part parameters"}
-            </p>
-            {params.length === 0 && inlineFields.length === 0 ? (
-              <p className="text-muted-foreground text-[11px] leading-relaxed">
-                {feature
-                  ? "This feature has no exposed top-level parameters. Open code for advanced edits."
-                  : "No editable top-level parameters were found."}
-              </p>
-            ) : (
-              <>
-                {params.map((param) => (
-                  <label key={param.name} className="flex items-center gap-2 text-xs">
-                    <span
-                      className="text-muted-foreground min-w-0 flex-1 truncate"
-                      title={param.name}
-                    >
-                      {param.name}
-                    </span>
-                    {typeof param.value === "boolean" ? (
-                      <input
-                        type="checkbox"
-                        checked={param.value}
-                        disabled={!canEdit}
-                        onChange={(e) => onSet(param.name, e.target.checked)}
-                        className="accent-primary size-3.5"
-                      />
-                    ) : typeof param.value === "number" ? (
-                      <input
-                        type="number"
-                        value={param.value}
-                        disabled={!canEdit}
-                        step={Number.isInteger(param.value) ? 1 : 0.1}
-                        onChange={(e) => {
-                          const n = Number(e.target.value);
-                          if (Number.isFinite(n)) onSet(param.name, n);
-                        }}
-                        className={cn(
-                          "bg-background w-20 rounded-none border px-1.5 py-0.5 text-right font-mono text-xs outline-none",
-                          "focus:border-ring",
-                        )}
-                      />
-                    ) : (
-                      <input
-                        type="text"
-                        value={param.value}
-                        disabled={!canEdit}
-                        onChange={(e) => onSet(param.name, e.target.value)}
-                        className="bg-background w-24 rounded-none border px-1.5 py-0.5 font-mono text-xs outline-none focus:border-ring"
-                      />
-                    )}
-                  </label>
-                ))}
-                {inlineFields.map((field) => (
-                  <label key={field.id} className="flex items-center gap-2 text-xs">
-                    <span
-                      className="text-muted-foreground min-w-0 flex-1 truncate"
-                      title={field.name}
-                    >
-                      {field.name}
-                    </span>
-                    <span className="relative">
-                      <input
-                        type="number"
-                        value={field.value}
-                        disabled={!canEdit}
-                        step={Number.isInteger(field.value) ? 1 : 0.1}
-                        onChange={(event) => {
-                          const value = Number(event.target.value);
-                          if (Number.isFinite(value)) onSetInline(field, value);
-                        }}
-                        className={cn(
-                          "bg-background w-20 rounded-none border px-1.5 py-0.5 text-right font-mono text-xs outline-none",
-                          field.unit && "pr-7",
-                          "focus:border-ring",
-                        )}
-                      />
-                      {field.unit ? (
-                        <span className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 font-mono text-[9px]">
-                          {field.unit}
-                        </span>
-                      ) : null}
-                    </span>
-                  </label>
-                ))}
-              </>
-            )}
-          </div>
-
-          <div className="border-t px-3 py-2.5">
-            <button
-              type="button"
-              onClick={onMeasure}
-              disabled={measuring}
-              className="hover:bg-muted flex w-full items-center justify-center gap-1.5 rounded-none border px-2 py-1.5 text-[11px] font-medium disabled:opacity-60"
-            >
-              <Ruler className="size-3.5" />
-              {measuring ? "Measuring with Zoo…" : "Measure overall"}
-            </button>
-            {measurement ? (
-              <div className="mt-2 grid grid-cols-3 gap-1">
-                {(["x", "y", "z"] as const).map((axis) => (
-                  <div key={axis} className="bg-muted/50 px-1.5 py-1 text-center">
-                    <p className="text-muted-foreground text-[9px] uppercase">{axis}</p>
-                    <p className="font-mono text-[10px]">
-                      {measurement.dimensions[axis].toFixed(2)} {measurement.unit}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {measureError ? (
-              <p className="text-destructive mt-2 text-[10px] leading-relaxed">{measureError}</p>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-const KIND_META: Record<CadComponentKind, { label: string; icon: typeof Puzzle; folder: string }> =
-  {
-    part: { label: "Manufacturing", icon: Puzzle, folder: "parts/" },
-    assembly: { label: "Preview", icon: Boxes, folder: "assembly/" },
-    instructions: { label: "Instructions", icon: FileText, folder: "docs/" },
-  };
 
 function ComponentTree({
   doc,
@@ -297,17 +103,14 @@ function ComponentTree({
   });
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1">
-      <div className="mx-2 my-2 overflow-hidden rounded-lg border">
-        <div className="text-muted-foreground px-2.5 pt-2 text-[9px] font-semibold tracking-wider uppercase">
-          Project data
-        </div>
+      <div className="mx-2 mb-3 border-b pb-2">
         <button
           type="button"
           onClick={onImport}
           disabled={!canEdit}
-          className="hover:bg-muted/60 flex w-full items-center gap-2 px-2.5 py-2 text-left text-xs disabled:opacity-40"
+          className="text-muted-foreground hover:bg-muted hover:text-foreground flex h-8 w-full items-center gap-2 rounded-none px-2 text-left font-mono text-[10px] tracking-[0.08em] uppercase disabled:opacity-40"
         >
-          <Upload className="text-primary size-3.5" />
+          <Upload className="size-3.5" />
           <span className="font-medium">Import design file</span>
         </button>
       </div>
@@ -318,12 +121,12 @@ function ComponentTree({
         const open = openGroups[kind];
         return (
           <div key={kind} className="mb-2">
-            <div className="text-muted-foreground flex items-center px-1.5 py-0.5 text-[12px]">
+            <div className="text-muted-foreground flex items-center px-1.5 py-0.5 font-mono text-[10px] tracking-[0.1em] uppercase">
               <button
                 type="button"
                 aria-expanded={open}
                 onClick={() => setOpenGroups((current) => ({ ...current, [kind]: !open }))}
-                className="hover:bg-muted flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left"
+                className="hover:bg-muted flex min-w-0 flex-1 items-center gap-1.5 rounded-none px-1 py-1 text-left"
               >
                 {open ? (
                   <ChevronDown className="size-3 shrink-0" />
@@ -339,7 +142,7 @@ function ComponentTree({
                   type="button"
                   title={`Add ${kind}`}
                   onClick={() => onAdd(kind)}
-                  className="hover:bg-muted ml-1 rounded p-1"
+                  className="hover:bg-muted ml-1 rounded-none p-1"
                 >
                   <FilePlus className="size-3" />
                 </button>
@@ -348,9 +151,9 @@ function ComponentTree({
             {open ? (
               <>
                 {items.map((c) => {
-                  // Parts live at parts/<name>/main.kcl — show the part name, not "main.kcl".
+                  // Show the logical part name; the full source path stays in the tooltip.
                   const label = c.name || displayNameFromCadPath(c.path);
-                  const ext = c.kind === "instructions" ? ".md" : ".kcl";
+                  const ext = c.path.match(/\.[^.\/]+$/)?.[0] ?? "";
                   const canDropPart = kind === "assembly" && canEdit;
                   const imported = Boolean(
                     kind === "part" &&
@@ -392,25 +195,31 @@ function ComponentTree({
                       }}
                       onClick={() => onSelect(c.id)}
                       className={cn(
-                        "hover:bg-muted/60 flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs",
-                        activeId === c.id && "bg-muted text-foreground font-medium",
-                        canDropPart && "border-primary/0 hover:border-primary/30 border-y",
+                        "group hover:bg-muted/60 flex w-full items-center gap-2 border-l-2 border-l-transparent py-1.5 pr-2.5 pl-4 text-left text-xs",
+                        activeId === c.id &&
+                          "border-l-primary bg-primary/8 text-foreground font-medium",
+                        canDropPart && "border-y border-y-transparent hover:border-y-primary/30",
                         kind === "part" && canEdit && "cursor-grab active:cursor-grabbing",
                       )}
                     >
-                      <Layers className="text-muted-foreground size-3 shrink-0 opacity-60" />
+                      <Layers
+                        className={cn(
+                          "size-3 shrink-0",
+                          activeId === c.id ? "text-primary" : "text-muted-foreground/60",
+                        )}
+                      />
                       <span className="min-w-0 flex-1 truncate font-mono">
                         {label}
                         {ext}
                       </span>
                       {imported ? (
-                        <span className="bg-primary/10 text-primary rounded px-1 py-0.5 text-[8px] font-medium">
+                        <span className="bg-muted text-muted-foreground rounded-none border px-1 py-0.5 font-mono text-[8px] tracking-[0.06em] uppercase">
                           imported
                         </span>
                       ) : null}
                       {kind === "part" && canEdit ? (
                         <GripVertical
-                          className="text-muted-foreground size-3 shrink-0"
+                          className="text-muted-foreground size-3 shrink-0 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
                           aria-label="Drag part to canvas"
                         />
                       ) : null}
@@ -466,7 +275,7 @@ function CadCursorLayer({ peers }: { peers: CursorState[] }) {
             />
           </svg>
           <span
-            className="absolute top-4 left-3 rounded px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap text-[#0b0b0b] shadow"
+            className="absolute top-4 left-3 rounded-none px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap text-[#0b0b0b] shadow"
             style={{ background: peer.color }}
           >
             {peer.name}
@@ -531,12 +340,13 @@ export function ModelEditor({
   focusComponentId?: string;
   /**
    * Tree click → open a document tab (Chrome-style) instead of only swapping
-   * the in-editor selection. Parent keeps one ModelEditor mounted so the Zoo
-   * viewport session is reused across part tabs.
+   * the in-editor selection. Parent keeps one ModelEditor mounted so parsed
+   * viewport scenes are reused across part tabs.
    */
   onOpenComponent?: (component: { id: string; name: string }) => void;
 }) {
   const { theme } = useTheme();
+  const localPreview = useWorkspaceUiPreview();
   const monacoTheme = monacoThemeFor(theme.mode);
   const query = trpc.design.get.useQuery(
     { projectId, branchId, kind: "MODEL3D" },
@@ -546,7 +356,6 @@ export function ModelEditor({
       refetchOnWindowFocus: true,
     },
   );
-  const engine = trpc.cad.engineSession.useQuery({ projectId });
   const aiLock = trpc.design.aiEditLock.useQuery(
     { projectId, branchId },
     {
@@ -563,13 +372,10 @@ export function ModelEditor({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [showTree, setShowTree] = useState(true);
   const [showCode, setShowCode] = useState(false);
-  const [showGizmo, setShowGizmo] = useState(true);
   const [partDragActive, setPartDragActive] = useState(false);
-  const [cameraOrientation, setCameraOrientation] = useState<CameraOrientation>(() =>
-    orientationForView("iso"),
-  );
   const [execError, setExecError] = useState<string | null>(null);
-  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<"step" | "stl" | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [commentMode, setCommentMode] = useState(false);
@@ -591,8 +397,22 @@ export function ModelEditor({
   const saveRef = useRef(save);
   saveRef.current = save;
   const locked = Boolean(aiLock.data);
+  const sharedBaseRef = useRef<unknown>(null);
+  const shared = useCollaborativeDesign({
+    projectId,
+    branchId,
+    kind: "MODEL3D",
+    canEdit: canEdit && !locked,
+    onRemoteData: (data) => {
+      if (dirtyRef.current) return;
+      const next = normalizeCadDoc(data);
+      sharedBaseRef.current = next;
+      setDoc(next);
+      setActiveId((current) => selectCadComponentId(next, current, focusComponentId));
+    },
+  });
 
-  // Human soft locks per component: while a collaborator edits a part's KCL,
+  // Human soft locks per component: while a collaborator edits a part's source,
   // that part is read-only for everyone else (the AI lock stays doc-wide).
   const live = useLiveEdit(
     projectId,
@@ -609,7 +429,13 @@ export function ModelEditor({
   const liveRef = useRef(live);
   liveRef.current = live;
   const peerLock = activeId ? live.lockHolder(activeId) : undefined;
-  const editable = canEdit && !locked && !syncingAfterLock && !peerLock;
+  const editable =
+    canEdit &&
+    shared.canEdit &&
+    (shared.mode === "local" || shared.ready) &&
+    !locked &&
+    !syncingAfterLock &&
+    !peerLock;
 
   const measurement = trpc.cad.measure.useQuery(
     { projectId, branchId, componentId: activeId ?? "" },
@@ -617,7 +443,7 @@ export function ModelEditor({
   );
 
   useEffect(() => {
-    if (!query.isFetched) return;
+    if (shared.mode !== "local" || !query.isFetched) return;
     const serverUpdatedAt = query.data?.updatedAt
       ? new Date(query.data.updatedAt).toISOString()
       : "empty";
@@ -630,15 +456,11 @@ export function ModelEditor({
     if (!serverIsNew) return;
 
     const next = normalizeCadDoc(query.data?.data ?? null);
+    sharedBaseRef.current = next;
     appliedUpdatedAtRef.current = serverUpdatedAt;
     dirtyRef.current = false;
     setDoc(next);
-    setActiveId((prev) => {
-      if (focusComponentId && next.components.some((c) => c.id === focusComponentId)) {
-        return focusComponentId;
-      }
-      return prev && next.components.some((c) => c.id === prev) ? prev : next.activeId;
-    });
+    setActiveId((prev) => selectCadComponentId(next, prev, focusComponentId));
 
     const raw = query.data?.data as { version?: unknown } | null | undefined;
     if (editable && !migratedRef.current && raw && typeof raw === "object" && raw.version !== 5) {
@@ -650,7 +472,7 @@ export function ModelEditor({
         data: next,
       });
     }
-  }, [query.data, query.isFetched, editable, projectId, branchId, focusComponentId]);
+  }, [query.data, query.isFetched, editable, projectId, branchId, focusComponentId, shared.mode]);
 
   useEffect(() => {
     if (!doc || !focusComponentId) return;
@@ -712,6 +534,17 @@ export function ModelEditor({
       setHistoryVersion((version) => version + 1);
     }
 
+    if (shared.mode !== "local") {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      try {
+        dirtyRef.current = false;
+        shared.applySnapshot(sharedBaseRef.current ?? doc, normalizedNext);
+        setExecError(null);
+      } catch (error) {
+        setExecError(error instanceof Error ? error.message : "Could not synchronize CAD edits");
+      }
+      return;
+    }
     setDoc(normalizedNext);
     dirtyRef.current = true;
     liveRef.current.acquire(nextActiveId);
@@ -722,11 +555,13 @@ export function ModelEditor({
           projectId,
           branchId,
           kind: "MODEL3D",
+          baseData: sharedBaseRef.current,
           data: normalizedNext,
         },
         {
           onSuccess: (saved) => {
             dirtyRef.current = false;
+            sharedBaseRef.current = saved.data;
             if (saved.updatedAt) {
               appliedUpdatedAtRef.current = new Date(saved.updatedAt).toISOString();
             }
@@ -744,7 +579,6 @@ export function ModelEditor({
       onOpenComponent({ id: c.id, name: c.name });
       return;
     }
-    setSelectedFeatureId(null);
     setActiveId(id);
   }
 
@@ -752,19 +586,30 @@ export function ModelEditor({
     if (!doc || !editable) return;
     const base = kind === "part" ? "part" : kind === "assembly" ? "assembly" : "instructions";
     const n = doc.components.filter((c) => c.kind === kind).length + 1;
-    const next = addCadComponent(doc, { name: `${base}-${n}`, kind });
+    const next = addCadComponent({ ...doc, engine: "build123d" }, { name: `${base}-${n}`, kind });
     setActiveId(next.activeId);
-    setSelectedFeatureId(null);
     persist(next, { checkpoint: true, activeIdOverride: next.activeId });
   }
 
   function onInsertPart(assemblyId: string, partId: string) {
     if (!doc || !editable) return;
-    const next = insertPartIntoAssembly(doc, assemblyId, partId);
-    if (next === doc) return;
-    setActiveId(assemblyId);
-    setSelectedFeatureId(null);
-    persist(next, { checkpoint: true, activeIdOverride: assemblyId });
+    const assembly = doc.components.find((component) => component.id === assemblyId);
+    if (assembly && !isPythonCadComponent(assembly)) {
+      setExportError(
+        "Create or open a Python assembly before placing parts. The legacy assembly is preserved.",
+      );
+      return;
+    }
+    try {
+      const next = insertPartIntoAssembly(doc, assemblyId, partId);
+      if (next === doc) return;
+      setActiveId(assemblyId);
+      persist(next, { checkpoint: true, activeIdOverride: assemblyId });
+    } catch {
+      setExportError(
+        "This part cannot be placed yet. Generate or convert its source to Python first.",
+      );
+    }
   }
 
   function onChangeContent(next: string | undefined, checkpoint = false) {
@@ -786,7 +631,6 @@ export function ModelEditor({
     history.lastComponentId = null;
     setHistoryVersion((version) => version + 1);
     setActiveId(previous.activeId);
-    setSelectedFeatureId(null);
     persist(previous, {
       recordHistory: false,
       checkpoint: true,
@@ -805,7 +649,6 @@ export function ModelEditor({
     history.lastComponentId = null;
     setHistoryVersion((version) => version + 1);
     setActiveId(next.activeId);
-    setSelectedFeatureId(null);
     persist(next, {
       recordHistory: false,
       checkpoint: true,
@@ -831,15 +674,22 @@ export function ModelEditor({
       });
       const mode = cadAssetImportMode(result.asset.format);
       let next: CadDoc;
-      if (mode === "native-kcl") {
+      if (mode === "native-python") {
+        const source = (await file.text()).trim();
+        if (!source) throw new Error("The selected Python file is empty.");
+        next = upsertPythonPart(addCadAsset(doc, result.asset), result.asset.name, source);
+      } else if (mode === "native-kcl") {
         const source = (await file.text()).trim();
         if (!source) throw new Error("The selected KCL file is empty.");
-        next = upsertPartScript(addCadAsset(doc, result.asset), result.asset.name, source);
+        const withAsset = addCadAsset(doc, result.asset);
+        next = {
+          ...upsertPartScript({ ...withAsset, engine: "zoo" }, result.asset.name, source),
+          engine: doc.engine,
+        };
       } else {
-        next = importMeshAsPart(doc, result.asset);
+        next = importMeshAsPart({ ...doc, engine: "build123d" }, result.asset);
       }
       setActiveId(next.activeId);
-      setSelectedFeatureId(null);
       persist(next, { checkpoint: true, activeIdOverride: next.activeId });
       setImportOpen(false);
     } catch (error) {
@@ -852,7 +702,10 @@ export function ModelEditor({
     [doc, activeId],
   );
   const active: CadComponent | null = viewDoc ? getActiveComponent(viewDoc) : null;
-  const isKcl = active?.kind === "part" || active?.kind === "assembly";
+  const isCadSource = active?.kind === "part" || active?.kind === "assembly";
+  const isPython = active ? isPythonCadComponent(active) : false;
+  const isKcl = Boolean(isCadSource && !isPython);
+  const isStarter = active ? isCadStarterComponent(active) : false;
   const reportCursorRef = useRef<((x: number, y: number) => void) | null>(null);
   const cursorSelf = {
     userId: viewer.data?.id ?? "anonymous",
@@ -863,92 +716,116 @@ export function ModelEditor({
   // renders from every part it imports, so the engine needs one consistent
   // snapshot instead of a single file that may be newer than its siblings.
   const [settled, setSettled] = useState<{ doc: CadDoc; activeId: string } | null>(null);
+  const settledComponentId = useRef<string | null>(null);
   useEffect(() => {
-    if (!viewDoc || !active || !isKcl) {
+    if (!viewDoc || !active || !isCadSource) {
       setSettled(null);
+      settledComponentId.current = null;
       return;
     }
     const delay =
-      active.content.length > 12_000 ? 1_400 : active.content.length > 4_000 ? 900 : 500;
-    const timer = setTimeout(() => setSettled({ doc: viewDoc, activeId: active.id }), delay);
+      settledComponentId.current !== active.id
+        ? 0
+        : active.content.length > 12_000
+          ? 1_400
+          : active.content.length > 4_000
+            ? 900
+            : 500;
+    const timer = setTimeout(() => {
+      settledComponentId.current = active.id;
+      setSettled({ doc: viewDoc, activeId: active.id });
+    }, delay);
     return () => clearTimeout(timer);
-  }, [viewDoc, active?.id, active?.content, isKcl]);
+  }, [viewDoc, active?.id, active?.content, isCadSource]);
 
-  const viewport = useMemo(
-    () => (settled ? cadViewportInput(settled.doc, settled.activeId) : null),
-    [settled],
-  );
+  const viewportResult = useMemo(() => {
+    try {
+      // A different part is a complete saved snapshot, so select it immediately.
+      // Only edits within that same part need the typing debounce.
+      const snapshot =
+        active && viewDoc && settled?.activeId !== active.id
+          ? { doc: viewDoc, activeId: active.id }
+          : settled;
+      return {
+        data: snapshot ? cadViewportInput(snapshot.doc, snapshot.activeId) : null,
+        error: null,
+      };
+    } catch {
+      return {
+        data: null,
+        error:
+          "A referenced CAD file is missing or unavailable. Restore the import or update the source part.",
+      };
+    }
+  }, [settled, active?.id, viewDoc]);
+  const viewport = viewportResult.data;
+  const needsConversion = isKcl && !viewport?.foreignImportOnly;
 
-  const params = useMemo(
-    () => (isKcl && active ? parseCadParams(active.content) : []),
-    [isKcl, active?.content],
-  );
-  const features = useMemo(
-    () => (isKcl && active ? parseCadFeatures(active.content) : []),
-    [isKcl, active?.content],
-  );
-  const selectedFeature = features.find((feature) => feature.id === selectedFeatureId) ?? null;
-  const visibleParams = selectedFeature
-    ? params.filter((param) => selectedFeature.parameterNames.includes(param.name))
-    : params;
-  const inlineFields = selectedFeature ? parseCadFeatureFields(selectedFeature) : [];
-  const targetSolid =
-    selectedFeature?.isSolid && selectedFeature.kind !== "import" ? selectedFeature.binding : null;
-  const manipulatorTarget = isKcl && active ? (targetSolid ?? findLastSolid(active.content)) : null;
+  useEffect(() => {
+    setExportError(null);
+    setExecError(null);
+  }, [active?.id]);
+
+  async function exportCad(format: "step" | "stl") {
+    if (!viewDoc || !active || !isPython || localPreview || exporting) return;
+    setExporting(format);
+    setExportError(null);
+    try {
+      // Export the current collaborative source, including edits still waiting
+      // for the preview debounce or database checkpoint.
+      const input = cadViewportInput(viewDoc, active.id);
+      if (!input) throw new Error("No CAD source to export");
+      const response = await fetch(`/api/cad/export?format=${format}`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...input, projectId }),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(typeof detail?.error === "string" ? detail.error : "CAD export failed");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${slugifyCadName(active.name) || "model"}.${format}`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (error) {
+      setExportError(safeCadError(error));
+    } finally {
+      setExporting(null);
+    }
+  }
+
   const canvasAssemblyId = doc
     ? assemblyDropTargetId(doc, active?.id ?? activeId ?? undefined)
     : null;
   const canUndo = historyRef.current.past.length > 0;
   const canRedo = historyRef.current.future.length > 0;
 
-  function applyManipulatorTranslate(axis: "X" | "Y" | "Z", distanceMm: number) {
-    if (!active || !isKcl || !manipulatorTarget) return;
-    const values = {
-      x: axis === "X" ? distanceMm : 0,
-      y: axis === "Y" ? distanceMm : 0,
-      z: axis === "Z" ? distanceMm : 0,
-    };
-    const result = applyCadTool(active.content, "translate", values, {
-      targetSolid: manipulatorTarget,
-    });
-    onChangeContent(result.script, true);
-  }
-
-  function applyManipulatorRotate(axis: "X" | "Y" | "Z", degrees: number) {
-    if (!active || !isKcl || !manipulatorTarget) return;
-    const result = applyCadTool(
-      active.content,
-      "rotate",
-      {
-        roll: axis === "X" ? degrees : 0,
-        pitch: axis === "Y" ? degrees : 0,
-        yaw: axis === "Z" ? degrees : 0,
-      },
-      { targetSolid: manipulatorTarget },
-    );
-    onChangeContent(result.script, true);
-  }
-
-  if (doc === null || engine.isLoading) {
-    return <DotMatrixLoader className="absolute inset-0" label="Loading CAD" />;
-  }
-
-  if (engine.error || !engine.data) {
+  if (doc === null) {
     return (
-      <div className="text-destructive absolute inset-0 flex items-center justify-center p-8 text-center text-sm">
-        {safeCadError(engine.error ?? new Error("CAD service is not configured"), "session")}
-      </div>
+      <>
+        <DotMatrixLoader className="absolute inset-0" label="Loading CAD" />
+        <DesignCollaborationStatus status={shared.status} error={shared.error} />
+      </>
     );
   }
 
   return (
-    <div className="absolute inset-0 flex">
+    <div data-cad-workspace className="absolute inset-0 flex">
+      <DesignCollaborationStatus status={shared.status} error={shared.error} />
       {showTree ? (
-        <div className="bg-card/55 flex w-60 shrink-0 flex-col border-r">
+        <div className="bg-card flex w-52 shrink-0 flex-col border-r">
           <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
             <Boxes className="text-primary size-3.5" />
-            <span className="text-xs font-semibold">Design browser</span>
-            <span className="text-muted-foreground ml-auto text-[9px]">KCL</span>
+            <span className="font-mono text-[11px] font-medium tracking-[0.08em] uppercase">
+              Design browser
+            </span>
+            <span className="text-muted-foreground ml-auto font-mono text-[9px] tracking-[0.08em] uppercase">
+              {isPython ? "PYTHON" : isKcl ? "LEGACY KCL" : "SOURCE"}
+            </span>
           </div>
           <ComponentTree
             doc={doc}
@@ -967,22 +844,22 @@ export function ModelEditor({
 
       {showCode ? (
         <div className="flex min-w-0 w-[min(42%,420px)] shrink-0 flex-col border-r">
-          <div className="bg-card/60 flex h-9 shrink-0 items-center gap-2 border-b px-3">
+          <div className="bg-card flex h-10 shrink-0 items-center gap-2 border-b px-3">
             <span className="truncate font-mono text-xs font-medium" title={active?.path}>
               {active
                 ? `${active.name || displayNameFromCadPath(active.path)}${
-                    active.kind === "instructions" ? ".md" : ".kcl"
+                    active.path.match(/\.[^.\/]+$/)?.[0] ?? ""
                   }`
                 : "—"}
             </span>
-            <span className="text-muted-foreground ml-auto text-[11px]">
+            <span className="text-muted-foreground ml-auto font-mono text-[10px] tracking-[0.08em] uppercase">
               {save.isPending ? "Saving…" : "Autosaves"}
             </span>
           </div>
           <div className="min-h-0 flex-1">
             <Editor
               key={`${monacoTheme}-${active?.id ?? "none"}`}
-              language={isKcl ? "javascript" : "markdown"}
+              language={isPython ? "python" : isKcl ? "plaintext" : "markdown"}
               theme={monacoTheme}
               beforeMount={defineFoundryMonacoThemes}
               value={active?.content ?? ""}
@@ -998,7 +875,7 @@ export function ModelEditor({
               }}
             />
           </div>
-          {execError && isKcl ? (
+          {execError && isCadSource ? (
             <div className="text-destructive shrink-0 border-t px-3 py-2 font-mono text-[11px] leading-relaxed">
               {execError}
             </div>
@@ -1060,31 +937,52 @@ export function ModelEditor({
           <InstructionsPreview content={active.content} />
         ) : (
           <>
-            {active && isKcl ? (
-              <ParamsPanel
-                params={visibleParams}
-                inlineFields={inlineFields}
-                feature={selectedFeature}
-                measurement={measurement.data}
-                measuring={measurement.isFetching}
-                measureError={
-                  measurement.error ? safeCadError(measurement.error, "execution") : undefined
-                }
-                canEdit={editable}
-                onSet={(name, value) => onChangeContent(setCadParam(active.content, name, value))}
-                onSetInline={(field, value) => {
-                  if (!selectedFeature) return;
-                  onChangeContent(
-                    setCadFeatureField(active.content, selectedFeature, field, value),
-                  );
-                }}
-                onMeasure={() => void measurement.refetch()}
-              />
+            {viewportResult.error ? (
+              <div
+                role="alert"
+                className="text-destructive bg-background/95 absolute inset-x-0 top-0 z-20 border-b p-3 text-xs"
+              >
+                {viewportResult.error}
+              </div>
             ) : null}
-            {viewport ? (
+            {needsConversion ? (
+              <div className="absolute inset-0 flex items-center justify-center p-8 text-center">
+                <div className="max-w-xs">
+                  <Code className="text-muted-foreground mx-auto size-6" strokeWidth={1.5} />
+                  <p className="mt-3 font-mono text-sm font-medium tracking-[-0.02em]">
+                    Convert this part to Python
+                  </p>
+                  <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
+                    {LEGACY_CAD_PREVIEW_MESSAGE}
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-4"
+                    onClick={() => setShowCode(true)}
+                  >
+                    Open preserved source
+                  </Button>
+                </div>
+              </div>
+            ) : isStarter ? (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-8 pt-20 pb-28 text-center">
+                <div className="max-w-xs">
+                  <p className="font-mono text-sm font-medium tracking-[-0.02em]">
+                    No geometry yet
+                  </p>
+                  <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
+                    Open Python source or ask Copilot to build your part with build123d.
+                  </p>
+                </div>
+              </div>
+            ) : viewport ? (
               <CadViewport
+                engine={viewport.engine}
                 script={viewport.script}
-                engine={engine.data}
+                modelKey={active?.id}
+                debounceMs={0}
+                projectId={projectId}
                 view="orbit"
                 chrome={true}
                 projectFiles={viewport.projectFiles}
@@ -1092,31 +990,31 @@ export function ModelEditor({
                 meshAssets={viewport.meshAssets}
                 foreignImportOnly={viewport.foreignImportOnly}
                 onError={setExecError}
-                onCameraOrientationChange={setCameraOrientation}
               />
             ) : null}
-            {showGizmo && manipulatorTarget ? (
-              <CadTransformGizmo
-                target={manipulatorTarget}
-                canEdit={editable}
-                orientation={cameraOrientation}
-                onTranslate={applyManipulatorTranslate}
-                onRotate={applyManipulatorRotate}
-              />
+            {isPython && (measurement.data || measurement.error || exportError) ? (
+              <div className="bg-card/95 text-muted-foreground absolute top-3 right-3 z-20 max-w-xs rounded-none border px-3 py-2 text-[10px] leading-relaxed">
+                {measurement.data ? (
+                  <p className="font-mono">
+                    Saved model:{" "}
+                    {(["x", "y", "z"] as const)
+                      .map((axis) => measurement.data.dimensions[axis].toFixed(2))
+                      .join(" × ")}{" "}
+                    mm
+                  </p>
+                ) : null}
+                {measurement.error ? (
+                  <p role="alert" className="text-destructive">
+                    {safeCadError(measurement.error)}
+                  </p>
+                ) : null}
+                {exportError ? (
+                  <p role="alert" className="text-destructive">
+                    {exportError}
+                  </p>
+                ) : null}
+              </div>
             ) : null}
-            {active && isKcl ? (
-              <CadToolsPanel
-                script={active.content}
-                canEdit={editable}
-                targetSolid={targetSolid}
-                onApply={(next) => onChangeContent(next, true)}
-              />
-            ) : null}
-            <CadFeatureTimeline
-              features={features}
-              selectedId={selectedFeature?.id ?? null}
-              onSelect={(feature) => setSelectedFeatureId(feature?.id ?? null)}
-            />
           </>
         )}
         <CadCursorOverlay
@@ -1139,8 +1037,8 @@ export function ModelEditor({
           }}
         />
         {partDragActive ? (
-          <div className="border-primary/70 bg-primary/10 pointer-events-none absolute inset-3 z-[65] flex items-center justify-center rounded-xl border-2 border-dashed backdrop-blur-[1px]">
-            <div className="bg-card/95 flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium shadow-lg">
+          <div className="border-primary/70 bg-primary/10 pointer-events-none absolute inset-3 z-[65] flex items-center justify-center rounded-none border-2 border-dashed backdrop-blur-[1px]">
+            <div className="bg-card flex items-center gap-2 rounded-none border px-4 py-2.5 font-mono text-[11px] tracking-[0.08em] uppercase shadow-none">
               <Boxes className="text-primary size-4" />
               Drop to place in the product assembly
             </div>
@@ -1148,37 +1046,37 @@ export function ModelEditor({
         ) : null}
         {peerLock ? (
           <div
-            className="bg-card/95 pointer-events-none absolute top-32 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg backdrop-blur-md"
+            className="bg-card pointer-events-none absolute bottom-28 left-1/2 z-50 flex max-w-[calc(100%_-_1.5rem)] -translate-x-1/2 items-center gap-2 rounded-none border px-2.5 py-1.5 text-[11px] shadow-none"
             role="status"
           >
             <span
-              className="flex size-6 items-center justify-center rounded-md"
+              className="flex size-6 items-center justify-center rounded-none"
               style={{ backgroundColor: `${peerLock.color}26`, color: peerLock.color }}
             >
               <Lock className="size-3.5" />
             </span>
             <span>
-              <span className="font-semibold">{peerLock.name} is editing this part</span>
-              <span className="text-muted-foreground ml-1.5">read-only until they finish</span>
+              <span className="font-medium">{peerLock.name} is editing</span>
+              <span className="text-muted-foreground ml-1.5">Read-only</span>
             </span>
           </div>
         ) : null}
         {aiLock.data ? (
           <div
-            className="bg-card/95 pointer-events-none absolute top-32 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg backdrop-blur-md"
+            className="bg-card pointer-events-none absolute bottom-28 left-1/2 z-50 flex max-w-[calc(100%_-_1.5rem)] -translate-x-1/2 items-center gap-2 rounded-none border px-2.5 py-1.5 text-[11px] shadow-none"
             role="status"
           >
-            <span className="bg-primary/15 text-primary flex size-6 items-center justify-center rounded-md">
+            <span className="bg-primary/15 text-primary flex size-6 items-center justify-center rounded-none">
               <Bot className="size-3.5" />
             </span>
             <span>
-              <span className="font-semibold">{aiLock.data.actorName}&apos;s AI is editing</span>
-              <span className="text-muted-foreground ml-1.5">CAD locked for everyone</span>
+              <span className="font-medium">{aiLock.data.actorName}&apos;s AI is editing</span>
+              <span className="text-muted-foreground ml-1.5">Read-only</span>
             </span>
             <Lock className="text-muted-foreground size-3.5" />
           </div>
         ) : null}
-        <div className="bg-card/95 absolute inset-x-0 top-0 z-40 flex h-10 items-center gap-1 border-b px-2 shadow-sm backdrop-blur-md">
+        <div className="bg-card absolute inset-x-0 top-0 z-40 flex h-10 items-center gap-0.5 border-b px-2">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -1196,7 +1094,7 @@ export function ModelEditor({
             size="icon-sm"
             onClick={() => setShowCode(!showCode)}
             aria-label={showCode ? "Hide code" : "Show code"}
-            className={cn(showCode && "bg-muted")}
+            className={cn(showCode && "bg-primary/10 text-primary")}
           >
             <Code className="size-4" />
           </Button>
@@ -1210,7 +1108,7 @@ export function ModelEditor({
             aria-label={commentMode ? "Exit comment mode" : "Pin a comment to the viewport"}
             aria-pressed={commentMode}
             title="Pin a comment to the viewport"
-            className={cn(commentMode && "bg-muted")}
+            className={cn(commentMode && "bg-primary/10 text-primary")}
           >
             <MessageSquare className="size-4" />
           </Button>
@@ -1243,32 +1141,55 @@ export function ModelEditor({
             }}
             disabled={!editable}
             aria-label="Import design resource"
-            title="Import CAD, mesh, drawing, KCL, or electronics design files"
+            title="Import Python, CAD, mesh, drawing, or electronics design files"
           >
             <Upload className="size-4" />
           </Button>
           <div className="bg-border mx-1 h-5 w-px" />
-          <Button
-            variant={showGizmo ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => setShowGizmo((shown) => !shown)}
-            disabled={!manipulatorTarget}
-            aria-pressed={showGizmo}
-            title="Toggle the in-canvas move and rotate manipulator"
-            className="h-7 gap-1.5 px-2 text-[10px]"
-          >
-            <Axis3d className="size-3.5" />
-            Move / Copy
-          </Button>
+          {isPython ? (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 px-2 font-mono text-[10px] tracking-[0.08em] uppercase"
+                onClick={() => void measurement.refetch()}
+                disabled={
+                  Boolean(localPreview) || isStarter || measurement.isFetching || save.isPending
+                }
+                title="Measure the saved model"
+              >
+                <Ruler className="size-3.5" />
+                {measurement.isFetching ? "Measuring…" : "Measure"}
+              </Button>
+              <details className="relative">
+                <summary className="hover:bg-muted flex h-7 cursor-pointer list-none items-center gap-1.5 rounded-none px-2 font-mono text-[10px] tracking-[0.08em] uppercase">
+                  <Download className="size-3.5" />
+                  {exporting ? "Exporting…" : "Export"}
+                  <ChevronDown className="size-3" />
+                </summary>
+                <div className="bg-popover absolute top-full left-0 z-50 mt-1 w-36 rounded-none border p-1 shadow-none">
+                  {(["step", "stl"] as const).map((format) => (
+                    <button
+                      key={format}
+                      type="button"
+                      disabled={Boolean(localPreview) || isStarter || Boolean(exporting)}
+                      onClick={() => void exportCad(format)}
+                      className="hover:bg-muted block w-full px-2 py-2 text-left font-mono text-[10px] tracking-[0.08em] uppercase disabled:opacity-40"
+                    >
+                      Export {format.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </details>
+            </>
+          ) : null}
           <div className="text-muted-foreground ml-2 flex min-w-0 items-center gap-1.5 text-[10px]">
-            <span className="text-primary font-semibold tracking-wider">DESIGN</span>
-            <span>/</span>
             <span className="text-foreground max-w-52 truncate font-mono">
               {active?.path ?? "No active part"}
             </span>
           </div>
-          <div className="text-muted-foreground ml-auto flex items-center gap-2 pr-1 text-[10px]">
-            <span>{features.length} features</span>
+          <div className="text-muted-foreground ml-auto flex items-center gap-2 pr-1 font-mono text-[9px] tracking-[0.08em] uppercase">
+            <span>{isPython ? "Python" : isKcl ? "Legacy source" : "Markdown"}</span>
             <span className="bg-border h-3 w-px" />
             <span>{save.isPending ? "Saving…" : "Saved"}</span>
           </div>

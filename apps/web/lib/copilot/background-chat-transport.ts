@@ -10,7 +10,10 @@ type Body = {
   branchId: string;
   channelId: string;
   /** Fired once the server accepts the run so the client can cancel that id only. */
-  onRunId?: (runId: string) => void;
+  onRunId?: (runId: string, aborted: boolean) => void | Promise<unknown>;
+  /** Capture the attached run when reconnecting through the channel endpoint. */
+  currentRunId?: () => string | null;
+  onRunCancelled?: (runId: string) => void;
   /** Soft nudge when a note looks AI-related but had no @AI (no agent run). */
   onPingTip?: (tip: AiPingTip) => void;
 };
@@ -35,6 +38,7 @@ async function readApiError(response: Response, fallback: string): Promise<strin
 export class BackgroundChatTransport<
   UI_MESSAGE extends UIMessage = UIMessage,
 > extends DefaultChatTransport<UI_MESSAGE> {
+  private readonly pendingEnqueues = new Set<Promise<string | null>>();
   constructor(private readonly ctx: Body) {
     super();
   }
@@ -42,6 +46,31 @@ export class BackgroundChatTransport<
   async sendMessages(
     options: Parameters<ChatTransport<UI_MESSAGE>["sendMessages"]>[0],
   ): Promise<ReadableStream<UIMessageChunk>> {
+    options.abortSignal?.throwIfAborted();
+    const acknowledgement = this.enqueueRun(options);
+    this.pendingEnqueues.add(acknowledgement);
+    try {
+      const runId = await acknowledgement;
+      options.abortSignal?.throwIfAborted();
+      if (runId) return this.openRunStream(runId, options.abortSignal);
+      return new ReadableStream<UIMessageChunk>({
+        start(controller) {
+          controller.close();
+        },
+      });
+    } finally {
+      this.pendingEnqueues.delete(acknowledgement);
+    }
+  }
+
+  /** Stop must receive and cancel accepted ids before the next AI POST can claim the lock. */
+  async waitForPendingEnqueues(): Promise<void> {
+    await Promise.all([...this.pendingEnqueues]);
+  }
+
+  private async enqueueRun(
+    options: Parameters<ChatTransport<UI_MESSAGE>["sendMessages"]>[0],
+  ): Promise<string | null> {
     const response = await fetch("/api/ai/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -51,7 +80,9 @@ export class BackgroundChatTransport<
         channelId: this.ctx.channelId,
         messages: options.messages,
       }),
-      signal: options.abortSignal,
+      // Complete the enqueue acknowledgement even after Stop so the exact
+      // accepted run can be cancelled. Aborting this POST can orphan a worker
+      // run whose id the browser never received.
     });
 
     const text = await response.text();
@@ -82,20 +113,17 @@ export class BackgroundChatTransport<
       if (payload.tip?.id && payload.tip.text) {
         this.ctx.onPingTip?.(payload.tip);
       }
-      return new ReadableStream<UIMessageChunk>({
-        start(controller) {
-          controller.close();
-        },
-      });
+      return null;
     }
 
-    this.ctx.onRunId?.(payload.runId);
-    return this.openRunStream(payload.runId, options.abortSignal);
+    await this.ctx.onRunId?.(payload.runId, options.abortSignal?.aborted ?? false);
+    return payload.runId;
   }
 
   async reconnectToStream(
     _options: Parameters<ChatTransport<UI_MESSAGE>["reconnectToStream"]>[0],
   ): Promise<ReadableStream<UIMessageChunk> | null> {
+    const runId = this.ctx.currentRunId?.() ?? null;
     const url = new URL("/api/ai/chat/stream", window.location.origin);
     url.searchParams.set("projectId", this.ctx.projectId);
     url.searchParams.set("channelId", this.ctx.channelId);
@@ -113,7 +141,7 @@ export class BackgroundChatTransport<
       return null;
     }
     if (!response.body) return null;
-    return this.processResponseStream(response.body);
+    return this.observeCancellation(response.body, runId);
   }
 
   private async openRunStream(
@@ -128,6 +156,24 @@ export class BackgroundChatTransport<
       throw new Error(await readApiError(response, "Failed to open copilot stream"));
     }
     if (!response.body) throw new Error("Empty copilot stream body");
-    return this.processResponseStream(response.body);
+    return this.observeCancellation(response.body, runId);
+  }
+
+  private async observeCancellation(body: ReadableStream<Uint8Array>, runId: string | null) {
+    const source = await this.processResponseStream(body);
+    return source.pipeThrough(
+      new TransformStream<UIMessageChunk, UIMessageChunk>({
+        transform: (chunk, controller) => {
+          if (chunk.type === "abort") {
+            if (runId) this.ctx.onRunCancelled?.(runId);
+            // The installed SDK ignores the wire abort chunk; AbortError enters
+            // its normal cancellation path without displaying a failed response.
+            controller.error(new DOMException("Run stopped", "AbortError"));
+            return;
+          }
+          controller.enqueue(chunk);
+        },
+      }),
+    );
   }
 }

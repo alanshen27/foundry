@@ -34,6 +34,9 @@ import {
 } from "@/lib/engineer-tabs";
 import { cn } from "@/lib/utils";
 import { DotMatrixLoader } from "@/components/dot-matrix-loader";
+import { EngineeringWorkflow } from "@/components/engineer/engineering-workflow";
+import { LiveCadDrafts } from "@/components/engineer/live-cad-drafts";
+import type { EngineeringTarget } from "@/lib/engineering/readiness";
 
 const CircuitCanvas = dynamic(
   () => import("@/components/engineer/circuit-canvas").then((m) => m.CircuitCanvas),
@@ -204,10 +207,15 @@ function DocumentPane({ children }: { children: React.ReactNode }) {
 }
 
 export function EngineerStage({ projectId, branchId, canEdit, view, caps }: Props) {
+  useEffect(() => {
+    if (projectId)
+      document.cookie = `foundry-last-project=${encodeURIComponent(projectId)}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`;
+  }, [projectId]);
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const partParam = searchParams.get("part");
+  const boardParam = searchParams.get("board");
 
   return (
     <EngineerDocWorkspace
@@ -217,6 +225,7 @@ export function EngineerStage({ projectId, branchId, canEdit, view, caps }: Prop
       caps={caps}
       view={view}
       partParam={partParam}
+      boardParam={boardParam}
       pathname={pathname}
       router={router}
     />
@@ -230,6 +239,7 @@ function EngineerDocWorkspace({
   caps,
   view,
   partParam,
+  boardParam,
   pathname,
   router,
 }: {
@@ -239,10 +249,14 @@ function EngineerDocWorkspace({
   caps: StageCaps;
   view: EngineerView;
   partParam: string | null;
+  boardParam: string | null;
   pathname: string;
   router: ReturnType<typeof useRouter>;
 }) {
-  const initial = useMemo(() => tabFromViewParam(view, partParam), [view, partParam]);
+  const initial = useMemo(
+    () => tabFromViewParam(view, partParam, boardParam),
+    [view, partParam, boardParam],
+  );
 
   // Only multi-component surfaces (CAD / Schematic) live in the tab strip;
   // fixed surfaces are top-bar buttons and mount lazily on first visit.
@@ -254,22 +268,27 @@ function EngineerDocWorkspace({
     () => new Set(["assembly", ...(FIXED_KINDS.has(initial.kind) ? [initial.key] : [])]),
   );
   const [newOpen, setNewOpen] = useState(false);
+  const [pcbBoardId, setPcbBoardId] = useState<string | undefined>(
+    initial.kind === "pcb" ? initial.boardId : undefined,
+  );
 
   useEffect(() => {
-    const next = tabFromViewParam(view, partParam);
+    const next = tabFromViewParam(view, partParam, boardParam);
     if (FIXED_KINDS.has(next.kind)) {
       setVisitedFixed((prev) => (prev.has(next.key) ? prev : new Set([...prev, next.key])));
+      if (next.kind === "pcb" && next.boardId) setPcbBoardId(next.boardId);
     } else {
       setTabs((prev) => (prev.some((t) => t.key === next.key) ? prev : [...prev, next]));
     }
     setActiveKey(next.key);
-  }, [view, partParam]);
+  }, [view, partParam, boardParam]);
 
   const syncUrl = useCallback(
     (tab: EngineerDocTab) => {
       const params = new URLSearchParams();
       params.set("view", viewParamForTab(tab));
       if (tab.kind === "model" && tab.componentId) params.set("part", tab.componentId);
+      if (tab.kind === "pcb" && tab.boardId) params.set("board", tab.boardId);
       router.replace(`${pathname}?${params.toString()}`, { scroll: false });
     },
     [pathname, router],
@@ -284,12 +303,18 @@ function EngineerDocWorkspace({
   );
 
   const openTab = useCallback(
-    (kind: OpenableKind, opts?: { componentId?: string; label?: string }) => {
+    (kind: OpenableKind, opts?: { componentId?: string; boardId?: string; label?: string }) => {
       if (FIXED_KINDS.has(kind)) {
         const key = tabKeyFor(kind);
+        if (kind === "pcb" && opts?.boardId) setPcbBoardId(opts.boardId);
         setVisitedFixed((prev) => (prev.has(key) ? prev : new Set([...prev, key])));
         setActiveKey(key);
-        syncUrl({ key, kind, label: labelForKind(kind) });
+        syncUrl({
+          key,
+          kind,
+          label: opts?.label ?? labelForKind(kind),
+          boardId: opts?.boardId,
+        });
         setNewOpen(false);
         return;
       }
@@ -299,8 +324,16 @@ function EngineerDocWorkspace({
         kind,
         label: opts?.label ?? labelForKind(kind),
         componentId: opts?.componentId,
+        boardId: opts?.boardId,
+        pinned: false,
       };
-      setTabs((prev) => (prev.some((t) => t.key === key) ? prev : [...prev, tab]));
+      setTabs((prev) =>
+        prev.some((t) => t.key === key)
+          ? prev.map((existing) =>
+              existing.key === key ? { ...existing, ...tab, pinned: false as const } : existing,
+            )
+          : [...prev, tab],
+      );
       setActiveKey(key);
       syncUrl(tab);
       setNewOpen(false);
@@ -312,9 +345,18 @@ function EngineerDocWorkspace({
     (kind: FixedKind) => {
       setVisitedFixed((prev) => (prev.has(kind) ? prev : new Set([...prev, kind])));
       setActiveKey(kind);
-      syncUrl(kind === "assembly" ? ASSEMBLY_TAB : { key: kind, kind, label: labelForKind(kind) });
+      syncUrl(
+        kind === "assembly"
+          ? ASSEMBLY_TAB
+          : {
+              key: kind,
+              kind,
+              label: labelForKind(kind),
+              ...(kind === "pcb" && pcbBoardId ? { boardId: pcbBoardId } : {}),
+            },
+      );
     },
-    [syncUrl],
+    [pcbBoardId, syncUrl],
   );
 
   const closeTab = useCallback(
@@ -339,6 +381,7 @@ function EngineerDocWorkspace({
           key: activeKey,
           kind: activeKey as Exclude<EngineerDocKind, "assembly">,
           label: labelForKind(activeKey as EngineerDocKind),
+          ...(activeKey === "pcb" && pcbBoardId ? { boardId: pcbBoardId } : {}),
         }
       : ASSEMBLY_TAB);
   const hasModelTab = tabs.some((t) => t.kind === "model");
@@ -348,10 +391,26 @@ function EngineerDocWorkspace({
     return lastModel?.kind === "model" ? lastModel.componentId : undefined;
   }, [active, tabs]);
 
+  const navigateWorkflow = useCallback(
+    (target: EngineeringTarget) => {
+      if (target.view === "assembly") activate(ASSEMBLY_TAB);
+      else openTab(target.view, { componentId: target.componentId, boardId: target.boardId });
+    },
+    [activate, openTab],
+  );
+
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="relative flex h-full flex-col overflow-hidden">
+      <EngineeringWorkflow
+        projectId={projectId}
+        branchId={branchId}
+        onNavigate={navigateWorkflow}
+      />
       <div className="bg-card/60 flex h-9 shrink-0 items-center border-b px-1">
-        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+        <nav
+          aria-label="Open documents"
+          className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+        >
           {TOP_BAR_FIXED.map(({ kind, label, icon: Icon }) => (
             <button
               key={kind}
@@ -376,15 +435,21 @@ function EngineerDocWorkspace({
             <div
               key={tab.key}
               className={cn(
-                "group flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-none px-2.5 text-xs",
+                "group relative flex h-9 shrink-0 items-center border-b-2 font-mono text-[10px] tracking-[0.08em] uppercase",
                 tab.key === active.key
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:bg-muted/50",
+                  ? "border-primary bg-primary/5 text-primary"
+                  : "text-muted-foreground hover:bg-muted/40 border-transparent",
               )}
-              onClick={() => activate(tab)}
             >
-              <TabIcon kind={tab.kind} />
-              <span className="max-w-36 truncate">{tab.label}</span>
+              <button
+                type="button"
+                onClick={() => activate(tab)}
+                aria-current={tab.key === active.key ? "page" : undefined}
+                className="focus-visible:outline-ring flex h-full items-center gap-1.5 px-2.5 outline-offset-[-3px]"
+              >
+                <TabIcon kind={tab.kind} />
+                <span className="max-w-36 truncate">{tab.label}</span>
+              </button>
               {!tab.pinned ? (
                 <button
                   type="button"
@@ -393,16 +458,16 @@ function EngineerDocWorkspace({
                     e.stopPropagation();
                     closeTab(tab.key);
                   }}
-                  className="hover:bg-muted-foreground/20 rounded p-0.5 opacity-0 group-hover:opacity-100"
+                  className="hover:bg-muted focus-visible:opacity-100 mr-1.5 rounded-none p-0.5 opacity-50 group-hover:opacity-100"
                 >
                   <X className="size-3" />
                 </button>
               ) : null}
             </div>
           ))}
-        </div>
+        </nav>
 
-        <div className="relative ml-0.5 shrink-0">
+        <div className="relative ml-1 shrink-0">
           <button
             type="button"
             aria-label="Open window"
@@ -410,8 +475,8 @@ function EngineerDocWorkspace({
             aria-expanded={newOpen}
             onClick={() => setNewOpen((o) => !o)}
             className={cn(
-              "text-muted-foreground hover:bg-muted hover:text-foreground flex size-7 items-center justify-center rounded-none",
-              newOpen && "bg-muted text-foreground",
+              "text-primary hover:bg-primary/10 flex size-7 items-center justify-center rounded-none",
+              newOpen && "bg-primary/10",
             )}
           >
             <Plus className="size-3.5" strokeWidth={2} />
@@ -427,7 +492,7 @@ function EngineerDocWorkspace({
               <div
                 role="menu"
                 aria-label="Open window"
-                className="bg-popover text-popover-foreground absolute top-full right-0 z-50 mt-1 min-w-44 overflow-hidden rounded-none border py-1 text-[13px] shadow-md"
+                className="bg-popover text-popover-foreground absolute top-full right-0 z-50 mt-1 min-w-44 overflow-hidden rounded-none border py-1 font-mono text-[11px] tracking-[0.08em] uppercase shadow-none"
               >
                 {OPENABLE.map(({ kind, label, icon: Icon }) => (
                   <button
@@ -448,6 +513,7 @@ function EngineerDocWorkspace({
       </div>
 
       <div className="relative min-h-0 flex-1">
+        <LiveCadDrafts />
         {visitedFixed.has("assembly") ? (
           <div
             className={cn(
@@ -462,6 +528,8 @@ function EngineerDocWorkspace({
               onOpenEditor={(target) => {
                 if (target === "pcb") openTab("pcb");
                 else if (target === "schematic") openTab("schematic");
+                else if (target.editor === "pcb")
+                  openTab("pcb", { boardId: target.boardId, label: "PCB" });
                 else
                   openTab("model", {
                     componentId: target.componentId,
@@ -516,7 +584,12 @@ function EngineerDocWorkspace({
               aria-hidden={active.kind !== kind}
             >
               {kind === "pcb" ? (
-                <PcbCanvas projectId={projectId} branchId={branchId} canEdit={canEdit} />
+                <PcbCanvas
+                  projectId={projectId}
+                  branchId={branchId}
+                  canEdit={canEdit}
+                  focusBoardId={pcbBoardId}
+                />
               ) : null}
               {kind === "sourcing" ? (
                 <DocumentPane>

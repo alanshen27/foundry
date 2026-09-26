@@ -88,7 +88,7 @@ export function cadSurfaceColors(mode: ThemeMode) {
   }
   return {
     background: "#f4f2ec",
-    cell: "#d9d6ce",
-    section: "#b8b4aa",
+    cell: "#dedbd3",
+    section: "#c1bdb3",
   };
 }

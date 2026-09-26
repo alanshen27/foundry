@@ -1,13 +1,8 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@foundry/db";
 import { verifyRenderToken } from "@/server/render-token";
-import {
-  buildKclProject,
-  getActiveComponent,
-  normalizeCadDoc,
-  parseKclModuleImports,
-} from "@/lib/cad/engine";
-import { getZooEngineToken } from "@/server/cad";
+import { getActiveComponent, normalizeCadDoc, pickCadAssemblyPreview } from "@/lib/cad/engine";
+import { cadViewportInput } from "@/lib/cad/viewport-project";
 import { ModelRenderView } from "@/components/engineer/model-render-view";
 import type { CadView } from "@/components/engineer/cad-viewport";
 
@@ -40,31 +35,20 @@ export default async function ModelRenderPage({
 
   // Prefer the product assembly for screenshots — activeId may still point at a
   // part the agent last edited, which hides assembly import failures.
-  const assembly =
-    cad.components.find((c) => c.kind === "assembly" && c.path === "assembly/product.kcl") ??
-    cad.components.find((c) => c.kind === "assembly");
-  const active = assembly ?? getActiveComponent(cad);
-  const project =
-    active && parseKclModuleImports(active.content).length > 0
-      ? buildKclProject(cad, active.path)
-      : null;
-
-  let engineToken = "";
-  try {
-    engineToken = getZooEngineToken();
-  } catch {
-    engineToken = "";
-  }
+  const active = pickCadAssemblyPreview(cad)?.component ?? getActiveComponent(cad);
+  const viewport = active ? cadViewportInput(cad, active.id) : null;
 
   return (
     <div className="bg-background fixed inset-0">
       <ModelRenderView
-        script={active?.content ?? cad.script}
+        script={viewport?.script ?? active?.content ?? cad.script}
+        engine={viewport?.engine}
         view={cadView}
-        engineToken={engineToken}
-        engineBaseUrl="https://api.zoo.dev"
-        projectFiles={project?.files}
-        entryPath={project?.entryPath}
+        projectId={claims.projectId}
+        renderToken={token}
+        meshAssets={viewport?.meshAssets}
+        projectFiles={viewport?.projectFiles}
+        entryPath={viewport?.entryPath}
         tight={tight === "1"}
       />
     </div>

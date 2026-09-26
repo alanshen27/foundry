@@ -5,17 +5,15 @@ import { prisma } from "@foundry/db";
 import {
   cadAssetFormatFromName,
   importAssetPath,
-  isForeignImportOnlyScript,
+  isPythonCadComponent,
   normalizeCadDoc,
-  parseKclModuleImports,
   type CadAssetFormat,
 } from "@foundry/cad";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";
-import { getCad, getZooEngineToken } from "../cad";
+import { evaluateCadComponent } from "../python-cad";
 import { getObjectStorage } from "../storage";
-import { withKclProjectDir } from "../kcl-project-dir";
 
 function formatMime(format: CadAssetFormat): string {
   if (format === "stl") return "model/stl";
@@ -25,7 +23,7 @@ function formatMime(format: CadAssetFormat): string {
   if (format === "glb") return "model/gltf-binary";
   if (format === "ply") return "model/ply";
   if (format === "fbx") return "model/fbx";
-  if (format === "kcl") return "text/plain";
+  if (format === "kcl" || format === "py") return "text/plain";
   if (format === "svg") return "image/svg+xml";
   if (format === "kicad_sch" || format === "kicad_pcb" || format === "kicad_pro") {
     return "application/x-kicad";
@@ -34,19 +32,7 @@ function formatMime(format: CadAssetFormat): string {
 }
 
 export const cadRouter = router({
-  /** Short-lived use: Zoo WebRTC client token for the mechanical viewport. */
-  engineSession: protectedProcedure
-    .input(z.object({ projectId: z.string() }))
-    .query(async ({ ctx, input }) => {
-      await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
-      return {
-        token: getZooEngineToken(),
-        // Match Zoo viewer: https base; @kittycad/lib rewrites to wss for modeling WS.
-        baseUrl: "https://api.zoo.dev",
-      };
-    }),
-
-  /** Exact overall dimensions from the authoritative Zoo geometry engine. */
+  /** Exact overall dimensions from the local OCCT solid geometry. */
   measure: protectedProcedure
     .input(
       z.object({
@@ -73,33 +59,26 @@ export const cadRouter = router({
       if (!component || component.kind === "instructions") {
         throw new TRPCError({ code: "NOT_FOUND", message: "CAD component not found" });
       }
-      if (isForeignImportOnlyScript(component.content)) {
+      if (!isPythonCadComponent(component)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message:
-            "Exact dimensions for imported reference bodies are not available yet. Use a parametric KCL part for authoritative measurements.",
+          message: "Convert this preserved KCL part to Python/build123d for local measurement.",
         });
       }
-
-      const cad = getCad();
-      const result =
-        parseKclModuleImports(component.content).length > 0
-          ? await withKclProjectDir(doc, component.path, (projectDir) =>
-              cad.boundingBoxKcl({ projectDir, unit: "mm" }),
-            )
-          : await cad.boundingBoxKcl({ code: component.content, unit: "mm" });
-
-      if (!result.ok) {
+      let result;
+      try {
+        result = await evaluateCadComponent(doc, component.id, input.projectId);
+      } catch {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "The selected model could not be measured. Check its latest feature.",
+          message: "The selected Python model could not be measured. Check its source and imports.",
         });
       }
       return {
         componentId: component.id,
         componentName: component.name,
         unit: "mm" as const,
-        ...result.data,
+        ...result.bbox,
       };
     }),
 

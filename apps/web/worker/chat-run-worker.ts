@@ -89,6 +89,10 @@ function assertProdRedis(redisUrl: string) {
 const env = getServerEnv();
 assertProdRedis(env.REDIS_URL);
 
+// BullMQ records this on each job as processedBy. An explicit implementation
+// version makes a stale hosted consumer distinguishable from the local worker.
+const workerName = `foundry-chat-python-cad-v4-${process.env.RENDER ? "render" : "local"}-${process.pid}`;
+
 if (!env.OPENAI_API_KEY) {
   log.warn("OPENAI_API_KEY is unset; runs will error until it is set in foundry-shared");
 }
@@ -120,6 +124,8 @@ log.info("starting", {
   redis: redisHost,
   realtime: env.NEXT_PUBLIC_REALTIME_MODE,
   errorReporting: observability.sentry ? "sentry" : "logs only",
+  model: env.AI_MODEL,
+  name: workerName,
 });
 
 const worker = new Worker(
@@ -141,6 +147,7 @@ const worker = new Worker(
     }
   },
   {
+    name: workerName,
     connection,
     concurrency: 10,
     // Redelivery is now harmless: executeChatRun only claims PENDING rows and

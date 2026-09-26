@@ -2,19 +2,15 @@
  * Builds the virtual KCL project behind Engineer > Assembly.
  *
  * Geometry is rendered by importing the product **assembly** module(s) plus a
- * SIMULATED PCB. Zoo's module rules require subdirectory imports to target
+ * LOCAL / UNVERIFIED PCB. Zoo's module rules require subdirectory imports to target
  * `…/main.kcl` — buildKclProject / toZooKclPath handle that remapping.
  * The scene list still exposes every part for open-in-editor.
  */
 import {
   buildKclProject,
   isForeignImportOnlyScript,
-  meshPartProxyKcl,
-  parseForeignImports,
-  parseKclModuleImports,
   partModuleAlias,
   toZooKclPath,
-  fromZooKclPath,
   type CadComponent,
   type CadDoc,
 } from "./engine";
@@ -65,30 +61,14 @@ function projectFilesForScene(
   files: Record<string, string>;
   meshAssets: CadViewportMesh[];
 } {
-  const importedLogical = new Set(roots.map((r) => r.path));
-  for (const root of roots) {
-    for (const imp of parseKclModuleImports(root.content)) {
-      importedLogical.add(fromZooKclPath(imp.path));
-    }
-  }
-
   const files: Record<string, string> = {};
   const meshAssets: CadViewportMesh[] = [];
-  if (roots[0]) {
-    const build = buildKclProject(cad, roots[0].path);
+  for (const root of roots) {
+    const build = buildKclProject(cad, root.path);
     Object.assign(files, build.files);
     for (const asset of build.meshAssets) {
-      meshAssets.push(toViewportMesh(asset));
-    }
-  }
-  for (const c of cad.components) {
-    if (c.kind === "instructions") continue;
-    const outPath = toZooKclPath(c.path);
-    const foreign = parseForeignImports(c.content);
-    if (c.kind === "part" && importedLogical.has(c.path) && foreign.length > 0) {
-      files[outPath] = meshPartProxyKcl(c.name);
-    } else if (!files[outPath]) {
-      files[outPath] = c.content;
+      if (!meshAssets.some((existing) => existing.path === asset.path))
+        meshAssets.push(toViewportMesh(asset));
     }
   }
 
@@ -114,7 +94,7 @@ export function buildFinalAssembly(cad: CadDoc | null, pcb: PcbDoc | null): Fina
     : { files: {} as Record<string, string>, meshAssets: [] as CadViewportMesh[] };
 
   const sections: string[] = [
-    "// FINAL ASSEMBLY (read-only) — product assembly + SIMULATED PCB.",
+    "// FINAL ASSEMBLY (read-only) — product assembly + LOCAL / UNVERIFIED PCB.",
     "// Scene list still links every part; geometry comes from the assembly module.",
   ];
   if (importLines.length > 0) {

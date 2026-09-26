@@ -15,7 +15,6 @@ import type { UIMessage } from "ai";
 import type { Stage } from "@foundry/domain";
 import { Button } from "@/components/ui/button";
 import { FoundryMark } from "@/components/foundry-mark";
-import { InteractiveDotField } from "@/components/interactive-dot-field";
 import { PresenceBar } from "@/components/presence-bar";
 import { ReleaseChip } from "@/components/release-drawer";
 import { ShareButton } from "@/components/share-button";
@@ -143,34 +142,45 @@ function ShellInner({
   }
 
   return (
-    <div className="bg-background flex h-screen flex-col">
+    <div data-workspace-shell className="bg-background flex h-dvh flex-col overflow-hidden">
       <CommandPalette basePath={base} projectId={project.id} branchId={branchId} />
       <header className="bg-card relative z-20 flex h-11 shrink-0 items-center gap-1.5 border-b px-3">
         <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5">
           <Link
             href={`/w/${workspace.slug}`}
-            className="text-foreground flex size-5 shrink-0 items-center justify-center"
+            aria-label="Workspace home"
+            className="text-foreground flex shrink-0 items-center justify-center pr-1.5"
           >
-            <FoundryMark size="sm" showWord={false} />
+            <FoundryMark size="sm" className="[&>span]:hidden lg:[&>span]:inline" />
           </Link>
-          <span className="text-border flex h-5 items-center text-[13px] leading-none" aria-hidden>
+          <span
+            className="text-muted-foreground/50 flex h-5 items-center font-mono text-[13px] leading-none"
+            aria-hidden
+          >
             /
           </span>
-          <div className="flex h-5 min-w-0 max-w-44 items-center">
+          <div className="hidden h-5 min-w-0 max-w-36 items-center md:flex">
             <HeaderWorkspaceMenu workspaces={workspaces} current={workspace} />
           </div>
-          <span className="text-border flex h-5 items-center text-[13px] leading-none" aria-hidden>
+          <span
+            className="text-muted-foreground/50 hidden h-5 items-center font-mono text-[13px] leading-none md:flex"
+            aria-hidden
+          >
             /
           </span>
           <h1 className="flex h-5 max-w-52 items-center">
             <Link
               href={`${base}/overview`}
+              title={project.name}
               className="text-foreground hover:text-primary flex h-5 items-center truncate text-[13px] leading-none font-medium"
             >
               {project.name}
             </Link>
           </h1>
-          <span className="bg-muted text-muted-foreground ml-0.5 flex h-5 items-center rounded-none px-1.5 font-mono text-[11px] leading-none">
+          <span
+            className="bg-muted text-muted-foreground ml-0.5 flex h-5 items-center rounded-none px-1.5 font-mono text-[11px] leading-none"
+            title={branchName}
+          >
             {branchName}
           </span>
         </nav>
@@ -184,7 +194,8 @@ function ShellInner({
           <Link
             href={`/w/${workspace.slug}/settings`}
             title="Workspace settings"
-            className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-7 items-center justify-center rounded-none"
+            aria-label="Workspace settings"
+            className="text-muted-foreground hover:bg-muted hover:text-primary flex size-7 items-center justify-center rounded-none"
           >
             <Settings className="size-3.5" strokeWidth={1.75} />
           </Link>
@@ -193,6 +204,7 @@ function ShellInner({
             self={{ userId: user.id, name: user.name, avatarUrl: user.avatarUrl }}
           />
           <ShareButton
+            appearance="default"
             workspaceId={workspace.id}
             workspaceName={workspace.name}
             projectId={project.id}
@@ -203,18 +215,19 @@ function ShellInner({
             size="icon-sm"
             onClick={() => setOpen(!open)}
             aria-label={open ? "Hide copilot" : "Show copilot"}
+            aria-expanded={open}
           >
             {open ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />}
           </Button>
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <main className="relative min-w-0 flex-1 overflow-auto">
-          <div className="pointer-events-none sticky top-0 -mb-[100dvh] h-[100dvh] w-full">
-            <InteractiveDotField gap={16} radius={52} />
-          </div>
-          <div className="relative z-10 h-full">{children}</div>
+      <div className="relative flex min-h-0 flex-1">
+        <main
+          className="workspace-dot-field relative min-w-0 flex-1 overflow-auto"
+          aria-label="Project workspace"
+        >
+          <div className="h-full">{children}</div>
         </main>
         <ChatSidebar />
       </div>
@@ -246,7 +259,7 @@ function HeaderWorkspaceMenu({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="text-muted-foreground hover:text-foreground flex h-5 max-w-full items-center gap-1 text-[13px] leading-none transition-colors"
+        className="text-muted-foreground hover:text-foreground flex h-5 max-w-full items-center gap-1 font-mono text-[11px] leading-none transition-colors"
         aria-haspopup="listbox"
         aria-expanded={open}
       >
@@ -256,14 +269,14 @@ function HeaderWorkspaceMenu({
       {open ? (
         <div
           role="listbox"
-          className="bg-popover absolute top-full left-0 z-50 mt-1.5 w-56 overflow-hidden rounded-none border shadow-lg"
+          className="bg-popover absolute top-full left-0 z-50 mt-1.5 w-56 overflow-hidden rounded-none border shadow-[var(--shadow-panel)]"
         >
           <div className="max-h-64 overflow-y-auto p-1">
             {workspaces.map((w) => (
               <Link
                 key={w.id}
                 href={`/w/${w.slug}`}
-                className="hover:bg-muted flex items-center gap-2 rounded-none px-2 py-1.5 text-sm"
+                className="hover:bg-muted flex items-center gap-2 rounded-none px-2 py-1.5 text-xs"
                 onClick={() => setOpen(false)}
               >
                 <SignalIconTile kind="workspace" seed={w.id} letter={w.name} className="size-5" />
@@ -275,7 +288,7 @@ function HeaderWorkspaceMenu({
           <div className="border-t p-1">
             <Link
               href="/workspaces?manage=1"
-              className="text-muted-foreground hover:bg-muted flex items-center gap-2 rounded-none px-2 py-1.5 text-sm"
+              className="text-muted-foreground hover:bg-muted flex items-center gap-2 rounded-none px-2 py-1.5 text-xs"
               onClick={() => setOpen(false)}
             >
               <Plus className="size-3.5" /> Manage workspaces

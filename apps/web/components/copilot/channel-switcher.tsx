@@ -129,7 +129,7 @@ export function ChannelSwitcher() {
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className="hover:bg-muted/60 flex h-7 max-w-48 items-center gap-1 rounded-none px-1.5 text-[13px] font-medium transition-colors"
+          className="hover:bg-muted/60 flex h-7 max-w-48 items-center gap-1 rounded-none px-1.5 font-mono text-[11px] font-medium tracking-[0.08em] uppercase transition-colors"
           aria-haspopup="listbox"
           aria-expanded={open}
         >
@@ -149,7 +149,7 @@ export function ChannelSwitcher() {
                 return (
                   <div key={cat.id} className="mb-1">
                     <div className="group flex items-center gap-1 px-2 py-1">
-                      <span className="text-muted-foreground min-w-0 flex-1 truncate text-[11px] font-semibold tracking-wide uppercase">
+                      <span className="text-muted-foreground min-w-0 flex-1 truncate font-mono text-[10px] font-medium tracking-[0.08em] uppercase">
                         {cat.name}
                       </span>
                       {cat.name !== DEFAULT_CATEGORY ? (
@@ -214,7 +214,7 @@ export function ChannelSwitcher() {
 
               {grouped.uncategorized.length > 0 ? (
                 <div className="mb-1">
-                  <p className="text-muted-foreground px-2 py-1 text-[11px] font-semibold tracking-wide uppercase">
+                  <p className="text-muted-foreground px-2 py-1 font-mono text-[10px] font-medium tracking-[0.08em] uppercase">
                     Uncategorized
                   </p>
                   {grouped.uncategorized.map((channel) => (

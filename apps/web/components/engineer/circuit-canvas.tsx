@@ -1,5 +1,8 @@
 "use client";
 
+import { useCollaborativeDesign } from "./use-collaborative-design";
+import { DesignCollaborationStatus } from "./design-collaboration-status";
+
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Background,
@@ -327,7 +330,7 @@ export function CircuitCanvas(props: CanvasProps) {
   );
 }
 
-function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
+function CircuitCanvasInner({ projectId, branchId, canEdit: allowEdit }: CanvasProps) {
   const query = trpc.design.get.useQuery({ projectId, branchId, kind: "CIRCUIT" });
   const save = trpc.design.save.useMutation();
 
@@ -415,10 +418,34 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
   const modelRef = useRef(modelIndex);
   modelRef.current = modelIndex;
 
+  const sharedBaseRef = useRef<unknown>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const shared = useCollaborativeDesign({
+    projectId,
+    branchId,
+    kind: "CIRCUIT",
+    canEdit: allowEdit,
+    onRemoteData: (data) => {
+      if (dirtyRef.current) return;
+      const next = normalizeCircuitDoc(data);
+      sharedBaseRef.current = next;
+      const graph = docToGraph(next, allowEdit);
+      setNodes(graph.nodes);
+      setEdges(graph.edges);
+      setGroups(next.groups);
+      setSketchFileId(next.sketchFileId ?? null);
+      setPartSpecs(next.models);
+    },
+  });
+  const canEdit = allowEdit && shared.canEdit && (shared.mode === "local" || shared.ready);
+  const sharedRef = useRef(shared);
+  sharedRef.current = shared;
+
   const scheduleSave = useCallback(() => {
     if (!canEdit) return;
     dirtyRef.current = true;
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (sharedRef.current.mode !== "local") return;
     saveTimer.current = setTimeout(() => {
       const { nodes: n, edges: e, groups: g, sketchFileId: f, partSpecs: m } = stateRef.current;
       saveRef.current.mutate(
@@ -426,24 +453,62 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
           projectId,
           branchId,
           kind: "CIRCUIT",
+          baseData: sharedBaseRef.current,
           data: graphToDoc(n, e, g, f ?? undefined, m),
         },
-        { onSuccess: () => (dirtyRef.current = false) },
+        {
+          onSuccess: (saved) => {
+            dirtyRef.current = false;
+            sharedBaseRef.current = saved.data;
+          },
+        },
       );
     }, 800);
   }, [canEdit, projectId, branchId]);
 
   // Adopt server state (e.g. copilot edits) whenever we have no unsaved edits.
   useEffect(() => {
-    if (dirtyRef.current) return;
+    if (shared.mode !== "local" || dirtyRef.current) return;
     const doc = query.data ? normalizeCircuitDoc(query.data.data) : EMPTY_CIRCUIT;
+    sharedBaseRef.current = doc;
     const graph = docToGraph(doc, canEdit);
     setNodes(graph.nodes);
     setEdges(graph.edges);
     setGroups(doc.groups);
     setSketchFileId(doc.sketchFileId ?? null);
     setPartSpecs(doc.models);
-  }, [query.data, canEdit, setNodes, setEdges]);
+  }, [query.data, canEdit, setNodes, setEdges, shared.mode]);
+
+  useEffect(() => {
+    if (shared.mode !== "live" || !shared.ready || !dirtyRef.current) return;
+    const next = graphToDoc(nodes, edges, groups, sketchFileId ?? undefined, partSpecs);
+    const before = sharedBaseRef.current;
+    sharedBaseRef.current = next;
+    dirtyRef.current = false;
+    try {
+      shared.applySnapshot(before, next);
+      setWriteError(null);
+      void utils.engineering.status.invalidate({ projectId, branchId });
+    } catch (error) {
+      sharedBaseRef.current = before;
+      dirtyRef.current = true;
+      setWriteError(
+        error instanceof Error ? error.message : "Could not synchronize schematic edits",
+      );
+    }
+  }, [
+    nodes,
+    edges,
+    groups,
+    sketchFileId,
+    partSpecs,
+    shared.mode,
+    shared.ready,
+    shared.applySnapshot,
+    utils,
+    projectId,
+    branchId,
+  ]);
 
   /**
    * The simulation loop. Rebuilt whenever the schematic or sketch changes,
@@ -864,6 +929,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit }: CanvasProps) {
       onMouseUp={onPaneMouseUp}
       onMouseLeave={onPaneMouseUp}
     >
+      <DesignCollaborationStatus status={shared.status} error={writeError ?? shared.error} />
       <ReactFlow
         nodes={simNodes}
         edges={displayEdges}

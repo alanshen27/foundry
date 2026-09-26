@@ -1,37 +1,33 @@
 /**
- * Copilot tools: mechanical CAD: parts, KCL scripts, Python CAD, and the product assembly.
+ * Copilot tools: native Python/build123d CAD, linked assemblies, and
+ * the connected schematic → PCB → CAD workflow.
  */
 
 import { z } from "zod";
 import { prisma } from "@foundry/db";
-import { createLogger } from "@foundry/observability";
-import { normalizePcbDoc } from "@/lib/pcb/doc";
-import { isPlausibleZooOpId } from "@foundry/cad";
 import {
   addCadComponents,
   normalizeCadDoc,
   removeCadComponents,
-  upsertCadContent,
-  upsertPartScripts,
   toZooKclPath,
   fromZooKclPath,
-  importAssetPath,
-  importMeshAsPart,
-  slugifyCadName,
   type CadComponentKind,
   type CadDoc,
 } from "@/lib/cad/engine";
 import { mutateModel3dDoc } from "../../cad-doc";
-import { getObjectStorage } from "../../storage";
-import { getCad } from "../../cad";
-import { runBuild123d } from "@foundry/cad/server";
-import { assembleProductWithZooMcp } from "../../assemble-product";
-import { applyKclEdits } from "@/lib/cad/patch-kcl";
+import { getPythonCad } from "../../cad";
+import { evaluateCadComponent } from "../../python-cad";
 import {
-  buildFixIteratePrompt,
-  buildRegeneratePrompt,
-  withKclGuardrails,
-} from "@/lib/cad/zoo-guardrails";
+  upsertPythonPart,
+  upsertPythonParts,
+  upsertPythonCadContent,
+  isPythonCadComponent,
+  isCadStarterComponent,
+  PYTHON_ASSEMBLY_PATH,
+} from "@foundry/cad";
+import { applyKclEdits } from "@/lib/cad/patch-kcl";
+import { assemblyInstanceSchema } from "@/lib/engineering/input";
+import { getEngineeringStatus, updateEngineering } from "../../engineering";
 import { type ToolContext, type ToolKit, guard, touchStage } from "./shared";
 
 /**
@@ -55,18 +51,29 @@ function stripProgressLogForModel({ output }: { output: unknown }) {
  */
 function findCadComponent(doc: CadDoc, key: string, kind: CadComponentKind) {
   const raw = key.trim();
-  const bare = raw.replace(/\.kcl$/i, "");
+  const bare = raw.replace(/\.(?:kcl|py)$/i, "");
   const zooKey = toZooKclPath(raw);
   const fromZoo = fromZooKclPath(raw);
-  return doc.components.find((c) => {
-    if (c.kind !== kind) return false;
-    if (c.path === raw || c.path === zooKey || c.path === fromZoo) return true;
-    if (c.name === bare || c.name === raw) return true;
-    if (c.path.replace(/\.kcl$/i, "") === bare) return true;
-    if (c.path.endsWith(`/${bare}.kcl`) || c.path.endsWith(`/${bare}/main.kcl`)) return true;
-    if (toZooKclPath(c.path) === zooKey || fromZooKclPath(c.path) === fromZoo) return true;
-    return false;
-  });
+  return [...doc.components]
+    .sort((a, b) =>
+      doc.engine === "build123d"
+        ? Number(isPythonCadComponent(b)) - Number(isPythonCadComponent(a))
+        : 0,
+    )
+    .find((c) => {
+      if (c.kind !== kind) return false;
+      if (c.path === raw || c.path === zooKey || c.path === fromZoo) return true;
+      if (c.name === bare || c.name === raw) return true;
+      if (c.path.replace(/\.(?:kcl|py)$/i, "") === bare) return true;
+      if (
+        ["kcl", "py"].some(
+          (ext) => c.path.endsWith(`/${bare}.${ext}`) || c.path.endsWith(`/${bare}/main.${ext}`),
+        )
+      )
+        return true;
+      if (toZooKclPath(c.path) === zooKey || fromZooKclPath(c.path) === fromZoo) return true;
+      return false;
+    });
 }
 
 /** Resolve a CAD file by id, path, or name (any kind). */
@@ -82,15 +89,137 @@ function findAnyCadComponent(doc: CadDoc, key: string) {
   return undefined;
 }
 
-/** Mechanical CAD: parts, KCL scripts, Python CAD, and the product assembly. */
+/** Mechanical CAD: native Python parts, linked assemblies, and engineering sync. */
 export function buildCadTools(ctx: ToolContext, kit: ToolKit) {
   const { projectId, branchId } = ctx;
-  const { CAD_PART_MAX_ATTEMPTS, progress, takeProgressLog, verifyPartScript } = kit;
+  const { CAD_PART_MAX_ATTEMPTS, progress, takeProgressLog } = kit;
+  const mutateCad = (mutate: (doc: CadDoc) => CadDoc) =>
+    mutateModel3dDoc(projectId, branchId, ctx.userId, mutate, ctx.runId);
+
+  const readCadDoc = async () => {
+    const row = await prisma.designDoc.findUnique({
+      where: { projectId_branchId_kind: { projectId, branchId, kind: "MODEL3D" } },
+    });
+    return normalizeCadDoc(row?.data ?? null);
+  };
+  const nativePath = (base: CadDoc, key?: string) => {
+    const existing = key ? findAnyCadComponent(base, key) : undefined;
+    if (existing && isPythonCadComponent(existing)) return existing.path;
+    const target = key?.replace(/\.kcl$/i, ".py");
+    const candidate = upsertPythonPart(base, target, "");
+    return candidate.components.find((part) => part.id === candidate.activeId)!.path;
+  };
+  const verifyPythonDoc = async (doc: CadDoc, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    try {
+      const geometry = await evaluateCadComponent(doc, doc.activeId, projectId, signal);
+      signal?.throwIfAborted();
+      if (!geometry.valid || geometry.solidCount < 1)
+        return {
+          verified: false as const,
+          executeError: "build123d produced no valid solid geometry",
+        };
+      return {
+        verified: true as const,
+        boundingBoxMm: geometry.bbox,
+        solidCount: geometry.solidCount,
+        volumeMm3: geometry.volumeMm3,
+      };
+    } catch (error) {
+      signal?.throwIfAborted();
+      return {
+        verified: false as const,
+        executeError: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
+  const assertUnchanged = (before: CadDoc, current: CadDoc, paths: string[]) => {
+    for (const path of paths) {
+      if (
+        before.components.find((part) => part.path === path)?.content !==
+        current.components.find((part) => part.path === path)?.content
+      )
+        throw new Error(
+          `CAD source changed while validating ${path}. Read the current file before retrying.`,
+        );
+    }
+  };
+  const saveNativeSource = async (
+    script: string,
+    partName: string | undefined,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ) => {
+    const before = await readCadDoc();
+    const key = partName?.endsWith(".kcl") ? partName.replace(/\.kcl$/, ".py") : partName;
+    const candidate = upsertPythonCadContent(before, key, script);
+    const component = candidate.components.find((part) => part.id === candidate.activeId)!;
+    const verdict =
+      component.kind === "instructions"
+        ? { verified: "UNVERIFIED" as const, reason: "instructions are not geometry" }
+        : await verifyPythonDoc(candidate, signal);
+    if (verdict.verified === false)
+      return {
+        error: `Python CAD failed local execution; nothing saved: ${verdict.executeError}`,
+        ...verdict,
+      };
+    signal?.throwIfAborted();
+    const data = await mutateCad((current) => {
+      assertUnchanged(before, current, [component.path]);
+      return upsertPythonCadContent(current, component.path, script);
+    });
+    const staleStages = await touchStage(ctx, workspaceId, "ENGINEER");
+    return {
+      ok: true,
+      engine: "build123d",
+      language: component.kind === "instructions" ? "markdown" : "python",
+      path: component.path,
+      sourceChars: script.length,
+      ...verdict,
+      verificationState: "UNVERIFIED",
+      staleStages,
+      paths: data.components.map((part) => part.path),
+      hint: "Editable source saved. Local solid validity does not establish assembly fit or manufacturing readiness.",
+    };
+  };
 
   return {
+    get_engineering_status: {
+      description:
+        "Read the connected schematic → PCB → CAD → assembly workflow, local readiness issues, and current fingerprint. Call before sync_pcb_to_cad or build_linked_assembly. Current means synchronized only; it is not manufacturing verification.",
+      inputSchema: z.object({}),
+      execute: async () => guard(ctx, "project.read", () => getEngineeringStatus(ctx)),
+    },
+
+    sync_pcb_to_cad: {
+      description:
+        "Update mechanical board parts from every saved PCB using stable board IDs, real outlines and mounting holes. Preserves user-edited files by reporting conflicts. Requires the current fingerprint from get_engineering_status. Then inspect readiness and build_linked_assembly.",
+      inputSchema: z.object({ expectedFingerprint: z.string().length(64) }),
+      execute: async (input: { expectedFingerprint: string }) =>
+        guard(ctx, "mechanical.edit", () =>
+          updateEngineering(ctx, { ...input, action: "sync_pcb_to_cad" }),
+        ),
+    },
+
+    build_linked_assembly: {
+      description:
+        "Build assembly/product.py by importing the ACTUAL manufacturing parts and applying editable instance positions in mm and global XYZ rotations in degrees. Explicitly replaces the product preview. First sync boards to CAD. Omit instances to retain placements and add missing parts at the origin; origin placement is UNVERIFIED, never solved mates. Call get_engineering_status for fingerprint and component IDs.",
+      inputSchema: z.object({
+        expectedFingerprint: z.string().length(64),
+        instances: assemblyInstanceSchema.array().max(200).optional(),
+      }),
+      execute: async (input: {
+        expectedFingerprint: string;
+        instances?: z.infer<typeof assemblyInstanceSchema>[];
+      }) =>
+        guard(ctx, "mechanical.edit", () =>
+          updateEngineering(ctx, { ...input, action: "build_linked_assembly" }),
+        ),
+    },
+
     create_cad_component: {
       description:
-        "Add one or more components to Engineer > Model in a single call (parts, assembly KCL, or instructions markdown). Prefer one batched call with components:[…] over many parallel calls — same result, fewer round trips. Assembly kind ALWAYS creates/updates assembly/product.kcl (never another assembly path).",
+        "Add one or more components to Engineer > Model in a single call (Python parts, native Python assembly, or instructions markdown). Prefer one batched call with components:[…] over many parallel calls — same result, fewer round trips. Assembly kind ALWAYS creates/updates assembly/product.py (never another assembly path).",
       inputSchema: z
         .object({
           name: z.string().min(1).max(64).optional(),
@@ -111,26 +240,54 @@ export function buildCadTools(ctx: ToolContext, kit: ToolKit) {
         .refine((v) => Boolean(v.components?.length || (v.name && v.kind)), {
           message: "Provide components[] or name+kind",
         }),
-      execute: async (input: {
-        name?: string;
-        kind?: "part" | "assembly" | "instructions";
-        content?: string;
-        components?: {
-          name: string;
-          kind: "part" | "assembly" | "instructions";
+      execute: async (
+        input: {
+          name?: string;
+          kind?: "part" | "assembly" | "instructions";
           content?: string;
-        }[];
-      }) =>
+          components?: {
+            name: string;
+            kind: "part" | "assembly" | "instructions";
+            content?: string;
+          }[];
+        },
+        options?: { abortSignal?: AbortSignal },
+      ) =>
         guard(ctx, "mechanical.edit", async (workspaceId) => {
+          options?.abortSignal?.throwIfAborted();
           const items =
             input.components ??
             (input.name && input.kind
               ? [{ name: input.name, kind: input.kind, content: input.content }]
               : []);
-          const beforePaths = new Set<string>();
-          const data = await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) => {
-            for (const c of base.components) beforePaths.add(c.path);
-            return addCadComponents(base, items);
+          const before = await readCadDoc();
+          const beforePaths = new Set(before.components.map((part) => part.path));
+          const candidate = addCadComponents({ ...before, engine: "build123d" }, items);
+          for (const part of candidate.components) {
+            const changed =
+              before.components.find((existing) => existing.path === part.path)?.content !==
+              part.content;
+            if (
+              !changed ||
+              part.kind === "instructions" ||
+              !items.some((item) => item.content?.trim())
+            )
+              continue;
+            if (isCadStarterComponent(part)) continue;
+            const verdict = await verifyPythonDoc(
+              { ...candidate, activeId: part.id },
+              options?.abortSignal,
+            );
+            if (!verdict.verified)
+              return { error: `${part.path}: ${verdict.executeError}. Nothing saved.` };
+          }
+          options?.abortSignal?.throwIfAborted();
+          const data = await mutateCad((current) => {
+            if (JSON.stringify(current) !== JSON.stringify(before))
+              throw new Error(
+                "CAD changed while validating new components. Read the current project before retrying.",
+              );
+            return candidate;
           });
           const created = data.components.filter((c) => !beforePaths.has(c.path));
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
@@ -145,13 +302,13 @@ export function buildCadTools(ctx: ToolContext, kit: ToolKit) {
 
     delete_cad_component: {
       description:
-        "Delete CAD files from Engineer > Model (parts/*.kcl, assembly/*.kcl, docs/*.md). Prefer paths or ids from get_project_state.cad.components. Use when the user asks to remove a part, scrap a failed generation, or clear an assembly file. After deleting parts referenced by assembly/product.kcl, call add_part_to_assembly again if the assembly should still exist.",
+        "Delete CAD files from Engineer > Model (parts/*.py, assembly/*.py, docs/*.md; legacy .kcl files stay addressable). Prefer paths or ids from get_project_state.cad.components. Use when the user asks to remove a part, scrap a failed generation, or clear an assembly file. After deleting parts referenced by assembly/product.py, call add_part_to_assembly again if the assembly should still exist.",
       inputSchema: z.object({
         paths: z
           .array(z.string().min(1).max(200))
           .max(40)
           .optional()
-          .describe("Paths or names, e.g. parts/lid.kcl, lid, assembly/product.kcl"),
+          .describe("Paths or names, e.g. parts/lid/main.py, lid, assembly/product.py"),
         ids: z
           .array(z.string())
           .max(40)
@@ -184,7 +341,7 @@ export function buildCadTools(ctx: ToolContext, kit: ToolKit) {
           const needles = (nameContains ?? []).map((n) => n.toLowerCase());
           const pathKeys = paths ?? [];
           let deleted: { id: string; path: string; kind: string; name: string }[] = [];
-          const data = await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) => {
+          const data = await mutateCad((base) => {
             const toDrop = new Set<string>();
             for (const c of base.components) {
               if (idSet.has(c.id)) toDrop.add(c.id);
@@ -220,294 +377,209 @@ export function buildCadTools(ctx: ToolContext, kit: ToolKit) {
 
     text_to_cad: {
       description:
-        "Generate parametric KCL parts via Zoo Zookeeper (Agent API) and save them into the CAD workspace (parts/*). Prefer this for new geometry. To model several independent parts (enclosure + lid + bracket), pass parts:[{partName,prompt}…] — they generate concurrently and each lands in its own file, which is much faster than one call per part. Each part is then engine-verified independently (verified/executeError per part) — fix only failing parts. Single-part form: prompt + optional partName (defaults to parts/main.kcl). Each generation can take several minutes. After success, call render_model_views. NEVER invent zooOpId — omit it for new jobs; only pass a zooOpId copied exactly from a prior tool error (legacy REST resume). Fall back to save_cad_script only if Zoo failed.",
+        "Generate editable Python/build123d CAD with GPT-6 Astra. Each part is executed locally through OpenCascade before saving its .py source. Use parts:[{partName,prompt}…] for independent parts in parallel; only successful parts are saved. Units are mm; use named dimension parameters and assign the final Shape or Builder to result. One focused repair is attempted on execution failure. Existing KCL remains preserved; new source uses Python. No Zoo calls are made.",
       inputSchema: z
         .object({
-          prompt: z
-            .string()
-            .min(10)
-            .max(4000)
-            .optional()
-            .describe(
-              "Detailed mechanical description of the part to generate (mm). Required for new jobs.",
-            ),
+          prompt: z.string().min(10).max(4000).optional(),
           partName: z
             .string()
             .min(1)
-            .max(64)
+            .max(128)
             .optional()
-            .describe("Part name or path (e.g. enclosure or parts/lid.kcl). Defaults to main."),
+            .describe(
+              "Name or Python path, e.g. enclosure or parts/lid/main.py. Defaults to main.",
+            ),
           parts: z
             .array(
               z.object({
-                partName: z
-                  .string()
-                  .min(1)
-                  .max(64)
-                  .describe("Part name or path — must be unique within the call."),
-                prompt: z
-                  .string()
-                  .min(10)
-                  .max(4000)
-                  .describe("Detailed mechanical description of this part (mm)."),
+                partName: z.string().min(1).max(128),
+                prompt: z.string().min(10).max(4000),
               }),
             )
             .min(1)
             .max(6)
-            .optional()
-            .describe(
-              "Independent parts to generate concurrently. Use when no part's geometry depends on another's output.",
-            ),
-          zooOpId: z
-            .string()
-            .uuid()
-            .optional()
-            .describe(
-              "ONLY a Zoo op id from a previous text_to_cad timeout/cancel error. Never invent placeholders like 1111…/4444…. Omit for new generation. Single-part form only.",
-            ),
+            .optional(),
         })
-        .refine((v) => Boolean(v.parts?.length || v.zooOpId || v.prompt), {
-          message: "Provide parts[], prompt, or zooOpId",
+        .refine((value) => Boolean(value.parts?.length || value.prompt), {
+          message: "Provide parts[] or prompt",
         }),
       execute: async (
         input: {
           prompt?: string;
           partName?: string;
           parts?: { partName: string; prompt: string }[];
-          zooOpId?: string;
         },
         { abortSignal, toolCallId }: { abortSignal?: AbortSignal; toolCallId: string },
       ) =>
         guard(ctx, "mechanical.edit", async (workspaceId) => {
-          let cad;
-          try {
-            cad = getCad();
-          } catch (err) {
-            return { error: err instanceof Error ? err.message : String(err) };
-          }
-
-          const { zooOpId } = input;
-          const resumeId = zooOpId && isPlausibleZooOpId(zooOpId) ? zooOpId : undefined;
-          if (zooOpId && !resumeId) {
-            createLogger("tool").warn("ignoring invented zooOpId", {
-              tool: "text_to_cad",
-              zooOpId,
-            });
-          }
-
-          const jobs: { partName?: string; prompt: string }[] = input.parts?.length
-            ? input.parts
-            : [{ partName: input.partName, prompt: input.prompt ?? "" }];
-
-          progress(toolCallId, "generate");
-
-          type PartVerdict = Awaited<ReturnType<typeof verifyPartScript>>;
-          type JobOutcome = {
-            job: { partName?: string; prompt: string };
-            generated?: { script: string; operationId: string; attempts: number };
-            verdict?: PartVerdict;
-            failure?: string;
-          };
-
-          // Each part is a self-healing agent: generate, engine-verify, and on
-          // a verification failure regenerate once with the engine error fed
-          // back into the prompt — all parts run concurrently.
-          const runJob = async (job: {
-            partName?: string;
-            prompt: string;
-          }): Promise<JobOutcome> => {
+          if (abortSignal?.aborted) return { error: "CAD generation cancelled" };
+          const cad = getPythonCad();
+          const before = await readCadDoc();
+          const jobs = (
+            input.parts?.length
+              ? input.parts
+              : [{ partName: input.partName, prompt: input.prompt ?? "" }]
+          ).map((job) => ({ ...job, path: nativePath(before, job.partName) }));
+          if (new Set(jobs.map((job) => job.path)).size !== jobs.length)
+            return { error: "Each generated part must have a distinct Python file path." };
+          const contextFiles = Object.fromEntries(
+            before.components.filter(isPythonCadComponent).map((part) => [part.path, part.content]),
+          );
+          type Verdict = Awaited<ReturnType<typeof verifyPythonDoc>>;
+          const runJob = async (job: (typeof jobs)[number]) => {
             const label = jobs.length > 1 ? `${job.partName ?? "main"}: ` : "";
-            let lastError: string | undefined;
-            let lastKcl: string | undefined;
+            let lastError = "CAD generation failed";
+            let failedScript: string | undefined;
+            let generationMs = 0;
+            let verificationMs = 0;
+            let attempts = 0;
             for (let attempt = 1; attempt <= CAD_PART_MAX_ATTEMPTS; attempt += 1) {
               if (abortSignal?.aborted) break;
-              const genOptions = {
-                projectName: projectId,
-                signal: abortSignal,
-                onProgress: (note: string) =>
-                  progress(
-                    toolCallId,
-                    "generate",
-                    `${label}${attempt > 1 ? `(retry ${attempt - 1}) ` : ""}${note}`,
-                  ),
-              };
-              // Retries with a failing script iterate on it (edit_kcl_code)
-              // instead of regenerating the whole part from an empty project.
-              const result =
-                attempt > 1 && lastKcl && lastError
-                  ? await cad.iterateCad(
-                      lastKcl,
-                      buildFixIteratePrompt(job.prompt, lastError),
-                      genOptions,
-                    )
-                  : await cad.textToCad(
-                      attempt > 1 && lastError
-                        ? buildRegeneratePrompt(job.prompt, lastError)
-                        : withKclGuardrails(job.prompt),
-                      {
-                        ...genOptions,
-                        // Resume only applies to the single-part, first-attempt form.
-                        existingOpId: jobs.length === 1 && attempt === 1 ? resumeId : undefined,
-                      },
-                    );
+              attempts = attempt;
+              const prompt = failedScript
+                ? `${job.prompt}\n\nRepair the supplied Python/build123d file using this exact execution error:\n${lastError}\nPreserve intended dimensions and unrelated working features. Return the complete corrected source at ${job.path}.`
+                : job.prompt;
+              const generationStarted = Date.now();
+              const result = await cad
+                .generate(prompt, {
+                  projectName: projectId,
+                  focusPath: job.path,
+                  files: { ...contextFiles, ...(failedScript ? { [job.path]: failedScript } : {}) },
+                  signal: abortSignal,
+                  onDraft: (file: { path: string; content: string }) => {
+                    if (file.path === job.path && !abortSignal?.aborted)
+                      ctx.onCadDraft?.({ toolCallId, ...file });
+                  },
+                  onProgress: (note: string) =>
+                    progress(
+                      toolCallId,
+                      "generate",
+                      `${label}${attempt > 1 ? "Repairing: " : ""}${note}`,
+                    ),
+                })
+                .catch((error: unknown) => ({
+                  ok: false as const,
+                  error: error instanceof Error ? error.message : String(error),
+                }));
+              generationMs += Date.now() - generationStarted;
+              if (abortSignal?.aborted) break;
               if (!result.ok) {
                 lastError = result.error;
-                // Deadline/cancel exhausted the budget — retrying can't help.
-                if (/cancelled|timed out/i.test(result.error)) break;
-                if (attempt < CAD_PART_MAX_ATTEMPTS) {
-                  progress(toolCallId, "generate", `${label}retrying after: ${result.error}`);
-                }
+                if (/cancelled|timed out/i.test(lastError)) break;
                 continue;
               }
-              if (!result.data.kcl.trim()) {
-                lastError = "Zoo returned empty KCL — retry with a simpler prompt";
+              const script = result.data.files[job.path];
+              if (!script?.trim()) {
+                lastError = `Astra returned no Python source for ${job.path}`;
                 continue;
               }
-              progress(toolCallId, "execute", `${label}verifying in the engine`);
-              const verdict = await verifyPartScript(result.data.kcl).catch((): PartVerdict => ({
-                verified: "UNVERIFIED",
-                reason: "verification errored",
-              }));
-              if (verdict.verified === false && attempt < CAD_PART_MAX_ATTEMPTS) {
+              const candidate = upsertPythonPart(before, job.path, script);
+              progress(toolCallId, "execute", `${label}checking local build123d geometry`);
+              const verificationStarted = Date.now();
+              let verdict: Verdict;
+              try {
+                verdict = await verifyPythonDoc(candidate, abortSignal);
+              } catch (error) {
+                if (abortSignal?.aborted) break;
+                throw error;
+              }
+              const elapsed = Date.now() - verificationStarted;
+              verificationMs += elapsed;
+              if (abortSignal?.aborted) break;
+              if (!verdict.verified) {
                 lastError = verdict.executeError;
-                lastKcl = result.data.kcl;
+                failedScript = script;
+                const canRepair =
+                  attempt < CAD_PART_MAX_ATTEMPTS && !/cancelled|timed out/i.test(lastError);
                 progress(
                   toolCallId,
-                  "generate",
-                  `${label}KCL failed execute — iterating on it with the error`,
+                  canRepair ? "generate" : "execute",
+                  `${label}Python execution failed (${(elapsed / 1000).toFixed(1)}s); ${canRepair ? "repairing the source with the execution error" : "not saved; existing part preserved"}`,
                 );
+                if (!canRepair) break;
                 continue;
               }
               progress(
                 toolCallId,
                 "execute",
-                verdict.verified === true
-                  ? `${label}KCL executes clean`
-                  : verdict.verified === false
-                    ? `${label}${verdict.executeError}`
-                    : `${label}saved unverified (${verdict.reason})`,
+                `${label}build123d geometry is valid (${(elapsed / 1000).toFixed(1)}s)`,
               );
-              // Stream the part into the workspace the moment it exists, so
-              // open viewports render it while the other parts still generate.
-              // mutateModel3dDoc serializes writers, so concurrent jobs are safe.
-              await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
-                upsertPartScripts(base, [{ partName: job.partName, script: result.data.kcl }]),
-              )
-                .then(() => progress(toolCallId, "saved", `${label}part saved to the workspace`))
-                .catch(() => undefined);
               return {
                 job,
-                generated: {
-                  script: result.data.kcl,
-                  operationId: result.data.id,
-                  attempts: attempt,
-                },
+                script,
+                operationId: result.data.id,
                 verdict,
+                generationMs,
+                verificationMs,
+                attempts,
               };
             }
-            return { job, failure: lastError ?? "CAD generation failed" };
-          };
-
-          const outcomes = await Promise.all(jobs.map(runJob));
-
-          const generated: { partName?: string; script: string }[] = [];
-          const succeeded: {
-            partName?: string;
-            operationId: string;
-            kclChars: number;
-            attempts: number;
-          }[] = [];
-          const failed: { partName?: string; error: string; zooOpId?: string; hint?: string }[] =
-            [];
-          const verdicts = new Map<string | undefined, PartVerdict>();
-
-          for (const outcome of outcomes) {
-            if (!outcome.generated) {
-              const error = outcome.failure ?? "CAD generation failed";
-              const fromErr = /zooOpId=([0-9a-f-]{36})/i.exec(error)?.[1];
-              const realFromErr = fromErr && isPlausibleZooOpId(fromErr) ? fromErr : undefined;
-              failed.push({
-                partName: outcome.job.partName,
-                error,
-                ...(realFromErr ? { zooOpId: realFromErr } : {}),
-                ...(/ObjectNotFound|status=404|invent/i.test(error)
-                  ? {
-                      hint: "Call text_to_cad again with only prompt (no zooOpId) to start a new Zoo job.",
-                    }
-                  : {}),
-              });
-              continue;
-            }
-            generated.push({ partName: outcome.job.partName, script: outcome.generated.script });
-            succeeded.push({
-              partName: outcome.job.partName,
-              operationId: outcome.generated.operationId,
-              kclChars: outcome.generated.script.length,
-              attempts: outcome.generated.attempts,
-            });
-            if (outcome.verdict) verdicts.set(outcome.job.partName, outcome.verdict);
-          }
-
-          if (generated.length === 0) {
-            const first = failed[0];
-            const log = takeProgressLog(toolCallId);
             return {
-              error: failed.map((f) => `${f.partName ?? "main"}: ${f.error}`).join("; "),
-              ...(first?.zooOpId ? { zooOpId: first.zooOpId } : {}),
-              ...(first?.hint ? { hint: first.hint } : {}),
-              ...(log ? { progressLog: log } : {}),
+              job,
+              error: abortSignal?.aborted ? "CAD generation cancelled" : lastError,
+              generationMs,
+              verificationMs,
+              attempts,
             };
-          }
-
-          const verifyOf = (partName?: string) =>
-            verdicts.get(partName) ?? {
-              verified: "UNVERIFIED" as const,
-              reason: "verification errored",
-            };
-
-          // One locked read-modify-write for every generated part, so parallel
-          // results can't overwrite each other.
-          const data = await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
-            upsertPartScripts(base, generated),
-          );
-          const staled = await touchStage(ctx, workspaceId, "ENGINEER");
-          const active = data.components.find((c) => c.id === data.activeId);
-          const pathOf = (partName?: string) => {
-            const key = partName?.trim();
-            if (!key) return "parts/main.kcl";
-            return (
-              data.components.find(
-                (c) =>
-                  c.kind === "part" &&
-                  (c.path === key || c.name === key || c.path.endsWith(`/${key}.kcl`)),
-              )?.path ?? key
-            );
           };
-
+          progress(toolCallId, "generate", "Generating Python CAD with Astra");
+          const outcomes = await Promise.all(jobs.map(runJob));
+          const successful = outcomes.filter(
+            (outcome) => "script" in outcome && typeof outcome.script === "string",
+          );
+          const failed = outcomes
+            .filter((outcome) => "error" in outcome)
+            .map((outcome) => ({
+              partName: outcome.job.partName,
+              error: outcome.error,
+              attempts: outcome.attempts,
+              generationMs: outcome.generationMs,
+              verificationMs: outcome.verificationMs,
+            }));
+          if (!successful.length)
+            return {
+              error: failed.map((part) => `${part.partName ?? "main"}: ${part.error}`).join("; "),
+              failed,
+              progressLog: takeProgressLog(toolCallId),
+            };
+          abortSignal?.throwIfAborted();
+          const data = await mutateCad((current) => {
+            assertUnchanged(
+              before,
+              current,
+              successful.map((part) => part.job.path),
+            );
+            return upsertPythonParts(
+              current,
+              successful.map((part) => ({ partName: part.job.path, script: part.script! })),
+            );
+          });
+          const staleStages = await touchStage(ctx, workspaceId, "ENGINEER");
           return {
             ok: true,
-            engine: "zoo",
-            generated: succeeded.length,
-            parts: succeeded.map((part) => ({
-              ...part,
-              path: pathOf(part.partName),
-              ...verifyOf(part.partName),
+            engine: "build123d",
+            language: "python",
+            generated: successful.length,
+            parts: successful.map((part) => ({
+              partName: part.job.partName,
+              path: part.job.path,
+              operationId: part.operationId,
+              sourceChars: part.script!.length,
+              attempts: part.attempts,
+              ...part.verdict,
+              generationMs: part.generationMs,
+              verificationMs: part.verificationMs,
             })),
-            ...(failed.length > 0 ? { failed } : {}),
-            operationId: succeeded[0]?.operationId,
-            path: active?.path,
-            kclChars: succeeded.reduce((sum, part) => sum + part.kclChars, 0),
-            staleStages: staled,
-            hint:
-              failed.length > 0
-                ? "Some parts failed — retry those with a shorter prompt or save_cad_script, then render_model_views."
-                : [...verdicts.values()].some((v) => v.verified === false)
-                  ? "Some parts saved but still fail engine execute after a self-heal retry (see executeError) — fix just those with patch_cad_script or python_cad, then render_model_views."
-                  : "Call render_model_views to inspect, or save_cad_script / create_cad_component for more parts.",
-            ...(() => {
-              const log = takeProgressLog(toolCallId);
-              return log ? { progressLog: log } : {};
-            })(),
+            ...(failed.length ? { failed } : {}),
+            operationId: successful[0]?.operationId,
+            path: data.components.find((part) => part.id === data.activeId)?.path,
+            sourceChars: successful.reduce((sum, part) => sum + part.script!.length, 0),
+            verificationState: "UNVERIFIED",
+            staleStages,
+            hint: failed.length
+              ? "Retry only failed parts; their existing source was preserved."
+              : "Editable Python saved and local geometry built. Use build_linked_assembly with actual parts; inspect fit separately.",
+            progressLog: takeProgressLog(toolCallId),
           };
         }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
       toModelOutput: stripProgressLogForModel,
@@ -515,335 +587,173 @@ export function buildCadTools(ctx: ToolContext, kit: ToolKit) {
 
     save_cad_script: {
       description:
-        "Write Zoo KCL (or instructions markdown) into the CAD workspace. Millimetres for KCL. Prefer text_to_cad for brand-new parts; use this to patch. Pass partName/path for non-main components (e.g. lid, docs/assembly-instructions.md). Assembly content MUST use path assembly/product.kcl (any other assembly/* path is rewritten there). Declare key dimensions as top-level bindings (`width = 60`) for visual controls.",
+        "Write editable Python/build123d CAD (.py), or assembly instructions markdown. Geometry must execute locally before it is saved. Units are mm; assign a Shape/Builder to result and declare named dimensions. Use parts/name/main.py for parts and assembly/product.py for assembly source. Legacy KCL is retained; write Python to a .py path.",
       inputSchema: z.object({
-        script: z.string().min(8).max(40_000).describe("KCL or markdown source"),
-        partName: z
-          .string()
-          .min(1)
-          .max(64)
-          .optional()
-          .describe("Component name or path (default parts/main.kcl)."),
+        script: z.string().min(8).max(40_000),
+        partName: z.string().min(1).max(128).optional(),
       }),
-      execute: async ({ script, partName }: { script: string; partName?: string }) =>
-        guard(ctx, "mechanical.edit", async (workspaceId) => {
-          const data = await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
-            upsertCadContent(base, partName, script),
-          );
-          const staled = await touchStage(ctx, workspaceId, "ENGINEER");
-          const saved = data.components.find((c) => c.id === data.activeId);
-          const verdict =
-            saved?.kind === "part"
-              ? await verifyPartScript(script)
-              : ({ verified: "UNVERIFIED", reason: "not a standalone part" } as const);
-          return {
-            ok: true,
-            engine: "zoo",
-            path: saved?.path,
-            kclChars: script.length,
-            ...verdict,
-            staleStages: staled,
-            hint:
-              verdict.verified === false
-                ? "Saved, but the KCL fails engine execute (see executeError) — fix it before rendering."
-                : "Call render_model_views to inspect the result from multiple angles.",
-          };
-        }),
+      execute: async (
+        { script, partName }: { script: string; partName?: string },
+        options?: { abortSignal?: AbortSignal },
+      ) =>
+        guard(ctx, "mechanical.edit", (workspaceId) =>
+          saveNativeSource(script, partName, workspaceId, options?.abortSignal),
+        ),
     },
 
     patch_cad_script: {
       description:
-        "Apply small, high-confidence text edits to an existing CAD file without a Zoo round-trip (seconds, not minutes) — e.g. change a dimension binding, rename a variable, tweak a fillet. Each edit's `find` must match the current content exactly once. Part edits are verified by real engine execute BEFORE saving; a failing patch is rejected and nothing changes. For new geometry or big rewrites use text_to_cad / save_cad_script instead.",
+        "Apply exact text edits to a saved Python CAD file or markdown instructions. Each find must match exactly once. Changed geometry is executed locally before saving; invalid edits leave the existing source untouched. Read the current .py path first. Legacy KCL must be converted to Python instead.",
       inputSchema: z.object({
-        partName: z
-          .string()
-          .min(1)
-          .max(64)
-          .describe("Component name or path (e.g. enclosure or parts/lid.kcl)."),
+        partName: z.string().min(1).max(128),
         edits: z
-          .array(
-            z.object({
-              find: z
-                .string()
-                .min(1)
-                .max(2000)
-                .describe("Exact substring of the current content — must occur exactly once."),
-              replace: z.string().max(2000),
-            }),
-          )
+          .array(z.object({ find: z.string().min(1).max(2000), replace: z.string().max(2000) }))
           .min(1)
           .max(10),
       }),
       execute: async (
         input: { partName: string; edits: { find: string; replace: string }[] },
-        { toolCallId }: { toolCallId: string },
+        { toolCallId, abortSignal }: { toolCallId: string; abortSignal?: AbortSignal },
       ) =>
         guard(ctx, "mechanical.edit", async (workspaceId) => {
-          const row = await prisma.designDoc.findUnique({
-            where: { projectId_branchId_kind: { projectId, branchId, kind: "MODEL3D" } },
-          });
-          const doc = row?.data ? normalizeCadDoc(row.data) : null;
-          const key = input.partName.trim();
-          const component = doc?.components.find(
-            (c) => c.path === key || c.name === key || c.path.endsWith(`/${key}.kcl`),
-          );
-          if (!component) {
+          const before = await readCadDoc();
+          const component = findAnyCadComponent(before, input.partName);
+          if (!component)
             return {
               error: `No CAD component matches "${input.partName}" — check get_project_state.cad.components.`,
             };
-          }
-
+          if (component.kind !== "instructions" && !isPythonCadComponent(component))
+            return {
+              error:
+                "Legacy KCL is preserved. Regenerate this part with text_to_cad or save converted Python to a .py path.",
+            };
           const patched = applyKclEdits(component.content, input.edits);
           if (!patched.ok) return { error: patched.error };
-
-          // Verify the patched script before it can land: this tool exists for
-          // edits the model is confident in, so a failing execute means reject.
-          let verdict: Awaited<ReturnType<typeof verifyPartScript>> = {
-            verified: "UNVERIFIED",
-            reason: "not a standalone part",
-          };
-          if (component.kind === "part") {
-            progress(toolCallId, "execute", `${component.path}: verifying patched KCL`);
-            verdict = await verifyPartScript(patched.content);
-            if (verdict.verified === false) {
-              return {
-                error: `Patched KCL fails engine execute — nothing saved: ${verdict.executeError}`,
-                hint: "Adjust the edit, or fall back to save_cad_script / text_to_cad.",
-              };
-            }
-          }
-
-          const data = await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
-            upsertCadContent(base, component.path, patched.content),
-          );
-          const staled = await touchStage(ctx, workspaceId, "ENGINEER");
+          const candidate = upsertPythonCadContent(before, component.path, patched.content);
+          const verdict =
+            component.kind === "instructions"
+              ? { verified: "UNVERIFIED" as const, reason: "instructions are not geometry" }
+              : await verifyPythonDoc(candidate, abortSignal);
+          if (verdict.verified === false)
+            return {
+              error: `Patched Python fails local execution — nothing saved: ${verdict.executeError}`,
+            };
+          abortSignal?.throwIfAborted();
+          const data = await mutateCad((current) => {
+            assertUnchanged(before, current, [component.path]);
+            return upsertPythonCadContent(current, component.path, patched.content);
+          });
+          const staleStages = await touchStage(ctx, workspaceId, "ENGINEER");
           return {
             ok: true,
-            engine: "zoo",
-            path: data.components.find((c) => c.id === data.activeId)?.path,
+            engine: "build123d",
+            path: data.components.find((part) => part.id === data.activeId)?.path,
             editsApplied: input.edits.length,
-            kclChars: patched.content.length,
+            sourceChars: patched.content.length,
             ...verdict,
-            staleStages: staled,
-            hint: "Call render_model_views if the change should be visually confirmed.",
+            verificationState: "UNVERIFIED",
+            staleStages,
           };
         }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
     },
 
     python_cad: {
       description:
-        "Model a part in build123d (Python code-CAD, OCCT kernel) and import the exported STL mesh into the CAD workspace. Fast (seconds, local execution) and reliable for prismatic/geometric parts — a strong alternative when Zoo text_to_cad fails or loops. Millimetres. The script MUST assign the finished model to a variable named `result` (a build123d Part/Shape or builder, e.g. `with BuildPart() as bp: ...` then `result = bp.part`). Trade-off: the part lands as a mesh reference (UNVERIFIED import), not editable parametric KCL — prefer text_to_cad when in-viewport parametric editing matters.",
+        "Save native editable Python/build123d source after local OpenCascade execution. Units are mm. Import build123d and assign result to the final Shape or Builder. This saves a .py component with named parameters, not an STL-only proxy. Invalid geometry is rejected without overwriting the prior part. Use `print('BUILD123D_PROGRESS: <note>')` to stream progress while the kernel runs.",
       inputSchema: z.object({
-        partName: z.string().min(1).max(64).describe("Part name, e.g. rotary_knob"),
-        script: z
-          .string()
-          .min(20)
-          .max(40_000)
-          .describe(
-            "Python build123d source. No filesystem/network access; must set `result`. Use `print('BUILD123D_PROGRESS: <note>')` to stream progress to the user.",
-          ),
+        partName: z.string().min(1).max(128),
+        script: z.string().min(20).max(40_000),
       }),
       execute: async (
-        input: { partName: string; script: string },
+        { partName, script }: { partName: string; script: string },
         { toolCallId, abortSignal }: { toolCallId: string; abortSignal?: AbortSignal },
       ) =>
         guard(ctx, "mechanical.edit", async (workspaceId) => {
-          try {
-            progress(toolCallId, "execute", `${input.partName}: running build123d (OCCT)`);
-            const run = await runBuild123d(input.script, {
-              signal: abortSignal,
-              onProgress: (note) => progress(toolCallId, "execute", `${input.partName}: ${note}`),
-            });
-            if (!run.ok) {
-              const log = takeProgressLog(toolCallId);
-              return {
-                error: `build123d failed: ${run.error}`,
-                ...(log ? { progressLog: log } : {}),
-              };
-            }
-
-            const name = slugifyCadName(input.partName) || "python-part";
-            const filename = `${name}.stl`;
-            const path = importAssetPath(filename, "stl");
-            const key = `projects/${projectId}/cad/imports/${crypto.randomUUID()}-${filename}`;
-            progress(toolCallId, "execute", `${input.partName}: storing mesh + importing`);
-            const stored = await getObjectStorage().put(key, run.data.stl, "model/stl");
-
-            await prisma.artifact.create({
-              data: {
-                projectId,
-                branchId,
-                kind: "cad_import",
-                name: filename,
-                storageKey: stored.key,
-                sha256: stored.sha256,
-                mimeType: "model/stl",
-                sizeBytes: stored.sizeBytes,
-                verificationState: "UNVERIFIED",
-                createdById: ctx.userId,
-              },
-            });
-
-            const data = await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
-              importMeshAsPart(base, {
-                name,
-                path,
-                format: "stl",
-                storageKey: stored.key,
-                sizeBytes: stored.sizeBytes,
-                lengthUnit: "mm",
-              }),
-            );
-            const staled = await touchStage(ctx, workspaceId, "ENGINEER");
-            return {
-              ok: true,
-              engine: "build123d",
-              partPath: data.components.find((c) => c.id === data.activeId)?.path,
-              assetPath: path,
-              boundingBoxMm: run.data.bbox,
-              sizeBytes: stored.sizeBytes,
-              verificationState: "UNVERIFIED",
-              staleStages: staled,
-              hint: "Mesh import — solid geometry built by OCCT (bbox above), but not parametric KCL. Call render_model_views to inspect it.",
-              ...(() => {
-                const log = takeProgressLog(toolCallId);
-                return log ? { progressLog: log } : {};
-              })(),
-            };
-          } finally {
-            ctx.onCadProgressEnd?.(toolCallId);
-          }
-        }),
+          progress(toolCallId, "execute", `${partName}: checking build123d geometry`);
+          return saveNativeSource(script, partName, workspaceId, abortSignal);
+        }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
       toModelOutput: stripProgressLogForModel,
     },
 
     add_part_to_assembly: {
       description:
-        "Generate assembly/product.kcl (the ONLY valid assembly path) as a product PREVIEW via Zoo Zookeeper text-to-CAD. Attaches manufacturing parts under parts/* as reference (dims/form) — Zoo does NOT have to import them; prefer named solids in the preview matching part names. parts/* stay manufacturing/fab files; assembly/product.kcl is the visual product for Engineer > Assembly. Includes parts/pcb when a PCB exists. Use when the user asks to assemble / preview the product.",
+        "Add existing native Python manufacturing parts to a linked assembly/product.py. Retains existing native instance poses; newly added instances begin at the origin and remain UNVERIFIED. Does not redraw or approximate parts. For explicit placement use build_linked_assembly. Optional prose intent is retained as a note, never treated as solved placement.",
       inputSchema: z.object({
-        parts: z
-          .array(z.string().min(1).max(128))
-          .min(1)
-          .max(20)
-          .describe("Names or paths of manufacturing parts, e.g. enclosure or parts/lid.kcl"),
-        includePcb: z
-          .boolean()
-          .optional()
-          .default(true)
-          .describe(
-            "Include the PCB board (parts/pcb.kcl) as a manufacturing reference when a PCB doc exists.",
-          ),
-        prompt: z
-          .string()
-          .min(8)
-          .max(4000)
-          .optional()
-          .describe(
-            "Optional product-preview intent for Zoo (how the finished product should look). Omit for the default preview prompt.",
-          ),
+        parts: z.array(z.string().min(1).max(128)).min(1).max(20),
+        includePcb: z.boolean().optional().default(true),
+        prompt: z.string().min(8).max(4000).optional(),
       }),
       execute: async (
-        {
-          parts,
-          includePcb,
-          prompt,
-        }: {
-          parts: string[];
-          includePcb?: boolean;
-          prompt?: string;
-        },
+        { parts, includePcb, prompt }: { parts: string[]; includePcb?: boolean; prompt?: string },
         { abortSignal, toolCallId }: { abortSignal?: AbortSignal; toolCallId: string },
       ) =>
-        guard(ctx, "mechanical.edit", async (workspaceId) => {
-          let cad;
-          try {
-            cad = getCad();
-          } catch (err) {
-            return { error: err instanceof Error ? err.message : String(err) };
-          }
-
-          const modelRow = await prisma.designDoc.findUnique({
-            where: { projectId_branchId_kind: { projectId, branchId, kind: "MODEL3D" } },
-          });
-          const base = normalizeCadDoc(modelRow?.data ?? null);
-          const target =
-            base.components.find(
-              (c) => c.kind === "assembly" && c.path === "assembly/product.kcl",
-            ) ?? base.components.find((c) => c.kind === "assembly");
-          if (!target) {
+        guard(ctx, "mechanical.edit", async () => {
+          abortSignal?.throwIfAborted();
+          let state = await getEngineeringStatus(ctx);
+          const selected = parts.map((key) => findCadComponent(state.cad, key, "part"));
+          const missing = parts.filter((_key, index) => !selected[index]);
+          if (missing.length)
+            return { error: `No matching manufacturing parts: ${missing.join(", ")}` };
+          if (selected.some((part) => !isPythonCadComponent(part!)))
             return {
               error:
-                "The CAD workspace has no assembly/product.kcl yet. Create it with create_cad_component({ name: 'product', kind: 'assembly' }).",
+                "Convert or regenerate the selected KCL parts to Python before adding them to a native assembly. Original source remains preserved.",
             };
-          }
-
-          const resolvedParts = [];
-          const missing: string[] = [];
-          for (const key of parts) {
-            const part = findCadComponent(base, key, "part");
-            if (!part) missing.push(key);
-            else resolvedParts.push(part);
-          }
-          if (resolvedParts.length === 0) {
-            return {
-              error: `No matching parts. Missing: ${missing.join(", ") || "(none)"}. Call get_project_state for paths.`,
-            };
-          }
-
-          let pcb = null;
           if (includePcb !== false) {
-            const pcbRow = await prisma.designDoc.findUnique({
+            const pcb = await prisma.designDoc.findUnique({
               where: { projectId_branchId_kind: { projectId, branchId, kind: "PCB" } },
             });
-            if (pcbRow?.data) pcb = normalizePcbDoc(pcbRow.data);
+            if (pcb?.data)
+              state = await updateEngineering(ctx, {
+                action: "sync_pcb_to_cad",
+                expectedFingerprint: state.fingerprint,
+              });
           }
-
-          let assembled;
-          try {
-            progress(toolCallId, "assemble");
-            assembled = await assembleProductWithZooMcp({
-              cad,
-              doc: base,
-              assembly: target,
-              parts: resolvedParts,
-              pcb,
-              prompt,
-              signal: abortSignal,
-              onProgress: (note) => progress(toolCallId, "assemble", note),
-            });
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            const sourceRangeBug = /source range out of bounds/i.test(message);
+          abortSignal?.throwIfAborted();
+          const nativeParts = state.cad.components.filter(
+            (part) => part.kind === "part" && isPythonCadComponent(part),
+          );
+          const ids = new Set(selected.map((part) => part!.id));
+          if (includePcb !== false)
+            nativeParts
+              .filter((part) => part.source?.kind === "pcb")
+              .forEach((part) => ids.add(part.id));
+          const instances = [...(state.cad.assembly?.instances ?? [])];
+          if (
+            instances.some(
+              (instance) => !nativeParts.some((part) => part.id === instance.componentId),
+            )
+          )
             return {
-              error: message,
-              hint: sourceRangeBug
-                ? "Zoo client bug — retry add_part_to_assembly once."
-                : "Retry add_part_to_assembly once with a shorter preview prompt, or report the error. Do not invent poses with save_cad_script.",
-              retryable: true,
-              ...(() => {
-                const log = takeProgressLog(toolCallId);
-                return log ? { progressLog: log } : {};
-              })(),
+              error:
+                "The saved assembly still references legacy or missing parts. Convert those parts and update their instance references before adding native parts. Existing placement is unchanged.",
             };
+          for (const id of ids) {
+            if (instances.some((instance) => instance.componentId === id)) continue;
+            instances.push({
+              id: `instance-${id}`,
+              componentId: id,
+              translationMm: { x: 0, y: 0, z: 0 },
+              rotationDeg: { x: 0, y: 0, z: 0 },
+              visible: true,
+              fixed: false,
+            });
           }
-
-          await mutateModel3dDoc(projectId, branchId, ctx.userId, () => assembled.doc);
-          const staled = await touchStage(ctx, workspaceId, "ENGINEER");
+          progress(toolCallId, "assemble", "Linking actual Python manufacturing geometry");
+          const result = await updateEngineering(ctx, {
+            action: "build_linked_assembly",
+            expectedFingerprint: state.fingerprint,
+            instances,
+          });
           return {
             ok: true,
-            assembly: assembled.assemblyPath,
-            preview: true,
-            manufacturingRefs: assembled.placed,
-            zooOpId: assembled.zooOpId,
-            zooExecute: assembled.executeMessage,
-            ...(assembled.warnings.length ? { warnings: assembled.warnings } : {}),
-            ...(missing.length ? { missing } : {}),
-            staleStages: staled,
-            hint: "Call render_model_views to inspect the product preview. Manufacturing parts under parts/ are unchanged.",
-            ...(() => {
-              const log = takeProgressLog(toolCallId);
-              return log ? { progressLog: log } : {};
-            })(),
+            engine: "build123d",
+            assembly: PYTHON_ASSEMBLY_PATH,
+            verificationState: "UNVERIFIED",
+            instances: result.cad.assembly?.instances,
+            ...(prompt ? { intent: prompt } : {}),
+            hint: "Native part geometry is linked. Retained poses were preserved; new instances are at the origin. Review explicit placement and fit before treating this as assembled.",
+            progressLog: takeProgressLog(toolCallId),
           };
         }).finally(() => ctx.onCadProgressEnd?.(toolCallId)),
       toModelOutput: stripProgressLogForModel,

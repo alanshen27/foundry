@@ -6,6 +6,7 @@ import { stageRouter } from "./stage";
 import { artifactRouter } from "./artifact";
 import { ideateRouter } from "./ideate";
 import { engineerRouter } from "./engineer";
+import { engineeringRouter } from "./engineering";
 import { verifyRouter } from "./verify";
 import { launchRouter } from "./launch";
 import { designRouter } from "./design";
@@ -28,6 +29,7 @@ export const appRouter = router({
   artifact: artifactRouter,
   ideate: ideateRouter,
   engineer: engineerRouter,
+  engineering: engineeringRouter,
   verify: verifyRouter,
   launch: launchRouter,
   design: designRouter,

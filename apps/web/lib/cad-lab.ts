@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Dev-only CAD Lab (/dev/cad-lab): request contract for exercising Zoo ML
+ * Dev-only CAD Lab (/dev/cad-lab): request contract for exercising Astra generation
  * text-to-CAD, Zoo MCP KCL tools, and arbitrary stdio CAD MCP servers.
  */
 

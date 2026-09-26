@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export const CAD_IMPORT_ACCEPT =
-  ".kcl,.step,.stp,.ste,.stl,.obj,.gltf,.glb,.ply,.fbx,.sat,.sab,.smb,.smt,.catpart,.catproduct,.prt,.asm,.g,.neu,.ipt,.iam,.x_t,.x_b,.sldprt,.sldasm,.f3d,.cam360,.ige,.iges,.igs,.3mf,.3dm,.skp,.dwg,.dxf,.svg,.jt,.tsm,.wire,.123dx,.sch,.brd,.kicad_sch,.kicad_pcb,.kicad_pro,.kicad_prl";
+  ".py,.kcl,.step,.stp,.ste,.brep,.stl,.obj,.gltf,.glb,.ply,.fbx,.sat,.sab,.smb,.smt,.catpart,.catproduct,.prt,.asm,.g,.neu,.ipt,.iam,.x_t,.x_b,.sldprt,.sldasm,.f3d,.cam360,.ige,.iges,.igs,.3mf,.3dm,.skp,.dwg,.dxf,.svg,.jt,.tsm,.wire,.123dx,.sch,.brd,.kicad_sch,.kicad_pcb,.kicad_pro,.kicad_prl";
 
 export type CadImportUnit = "mm" | "cm" | "m" | "in" | "ft" | "yd";
 
@@ -73,7 +73,7 @@ export function CadImportDialog({
               Import into project
             </h2>
             <p id="cad-import-description" className="text-muted-foreground mt-0.5 text-xs">
-              Open KCL, translate supported geometry, or preserve native design sources.
+              Open Python CAD, import geometry, or preserve original design sources.
             </p>
           </div>
           <Button
@@ -107,8 +107,8 @@ export function CadImportDialog({
               {pending ? "Importing file…" : "Drop a design file here"}
             </p>
             <p className="text-muted-foreground mt-1 max-w-xs text-xs leading-relaxed">
-              Every import is added to Parts. Supported solids preview directly; source-only files
-              receive a visibly unverified proxy that can be positioned in an assembly.
+              Python opens as editable source. STEP and BREP import as solids; STL and GLB preview
+              locally. Other formats remain attached for conversion.
             </p>
             <Button
               className="mt-4"
@@ -150,23 +150,23 @@ export function CadImportDialog({
           <div className="space-y-2">
             <ImportKind
               icon={Box}
-              title="Direct 3D preview"
-              detail="STEP, STL, OBJ, GLB/GLTF, PLY, FBX, ACIS, CATIA, Creo, Inventor, Parasolid, SolidWorks Part"
+              title="3D geometry"
+              detail="STEP and BREP import into Python CAD. STL and GLB display directly in the viewport."
             />
             <ImportKind
               icon={FileCode2}
               title="Native editable"
-              detail="KCL opens as a new editable parametric part."
+              detail="Python (.py) with build123d. Legacy KCL is preserved and needs conversion to preview."
             />
             <ImportKind
               icon={FileArchive}
               title="Preserved source"
-              detail="Fusion, IGES, 3MF, Rhino, SketchUp, drawings, assemblies, Alias, and JT remain attached."
+              detail="Other CAD, mesh, drawing, and assembly formats remain attached for conversion."
             />
             <ImportKind
               icon={CircuitBoard}
               title="Electronics reference"
-              detail="SCH, BRD, and KiCad project files appear in Parts and can be placed as board proxies."
+              detail="SCH, BRD, and KiCad project files remain attached as references."
             />
             <p className="text-muted-foreground px-1 pt-1 text-[10px] leading-relaxed">
               Proprietary feature trees stay downloadable but are not presented as decoded geometry.

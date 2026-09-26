@@ -26,12 +26,14 @@ export function ShareButton({
   projectId,
   projectName,
   variant = "share",
+  appearance = "default",
 }: {
   workspaceId: string;
   workspaceName: string;
   projectId?: string;
   projectName?: string;
   variant?: "share" | "invite";
+  appearance?: "default" | "outline";
 }) {
   const [copied, setCopied] = useState(false);
   const [email, setEmail] = useState("");
@@ -69,7 +71,11 @@ export function ShareButton({
     <Dialog>
       <DialogTrigger
         render={
-          <Button size="sm" className="gap-1.5">
+          <Button
+            size="sm"
+            variant={appearance}
+            className="gap-1.5 rounded-none font-mono text-[10px] tracking-[0.08em] uppercase"
+          >
             <TriggerIcon className="size-3.5" /> {triggerLabel}
           </Button>
         }

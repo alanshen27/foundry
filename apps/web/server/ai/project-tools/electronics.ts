@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import { prisma, type Prisma } from "@foundry/db";
+import { prisma } from "@foundry/db";
 import {
   PART_TYPES,
   normalizeCircuitDoc,
@@ -24,8 +24,7 @@ import { buildModelIndex } from "@/lib/sim/models";
 import { validatePartSpec, type PartSpec } from "@/lib/sim/part-spec";
 import { circuitForGroup } from "@/lib/circuit/groups";
 import { recordAudit } from "../../audit";
-import { mutateModel3dDoc } from "../../cad-doc";
-import { syncPcbCadPart } from "../../assemble-product";
+import { writeDesignWithCollaboration } from "../../collab-write";
 import { type ToolContext, type ToolKit, guard, touchStage } from "./shared";
 
 const driveEnum = z.enum(["float", "pulldown", "pullup", "low", "high"]);
@@ -98,9 +97,39 @@ const circuitSchema = z.object({
         id: z.string(),
         from: z.object({ part: z.string(), pin: z.string() }),
         to: z.object({ part: z.string(), pin: z.string() }),
+        label: z.string().max(80).nullable().optional(),
       }),
     )
     .max(200),
+  groups: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(60),
+        label: z.string().min(1).max(80),
+        x: z.number(),
+        y: z.number(),
+        w: z.number().positive(),
+        h: z.number().positive(),
+        color: z.string().max(32).optional(),
+      }),
+    )
+    .max(40)
+    .optional()
+    .describe("Board regions. Omit to retain existing regions."),
+  sketchFileId: z
+    .string()
+    .min(1)
+    .max(60)
+    .nullable()
+    .optional()
+    .describe("Simulator code file. Omit to retain; null clears it."),
+  removedPartIds: z
+    .array(z.string().min(1).max(60))
+    .max(80)
+    .optional()
+    .describe(
+      "Existing part IDs intentionally removed. Keep stable IDs for all retained parts; omitted existing parts require explicit removal here.",
+    ),
   models: z
     .record(z.string(), partSpecSchema)
     .optional()
@@ -146,6 +175,14 @@ const pcbSchema = z.object({
         yMm: z.number().describe("Centre Y from top-left of Edge.Cuts, mm"),
         rotationDeg: z.number().min(0).max(359).default(0),
         side: z.enum(["front", "back"]).default("front"),
+        bodyHeightMm: z
+          .number()
+          .positive()
+          .max(500)
+          .optional()
+          .describe(
+            "Known package height above the board in mm. Omit when unknown; do not estimate.",
+          ),
         partId: z
           .string()
           .max(60)
@@ -249,16 +286,13 @@ export function buildElectronicsTools(ctx: ToolContext, _kit: ToolKit) {
       execute: async () =>
         guard(ctx, "electronics.edit", async (workspaceId) => {
           const data = { version: 2, parts: [], wires: [] };
-          await prisma.designDoc.upsert({
-            where: { projectId_branchId_kind: { projectId, branchId, kind: "CIRCUIT" } },
-            create: {
-              projectId,
-              branchId,
-              kind: "CIRCUIT",
-              data: data as unknown as Prisma.InputJsonValue,
-              updatedById: ctx.userId,
-            },
-            update: { data: data as unknown as Prisma.InputJsonValue, updatedById: ctx.userId },
+          await writeDesignWithCollaboration({
+            projectId,
+            branchId,
+            userId: ctx.userId,
+            runId: ctx.runId,
+            kind: "CIRCUIT",
+            data,
           });
           await recordAudit({
             type: "DesignDocUpdated",
@@ -275,7 +309,7 @@ export function buildElectronicsTools(ctx: ToolContext, _kit: ToolKit) {
     },
 
     save_circuit: {
-      description: `Replace the circuit schematic (Engineer > Schematic view) with realistic Wokwi parts. Same conventions as wokwi.com: parts are wokwi-* element types and wires connect named pins (e.g. LED A/C, resistor 1/2, Arduino Uno GND.1/5V/A0/13, ESP32 DevKit GND.1/VIN/D2). Lay parts out with generous spacing (~150px grid) on a 1200x800 canvas. ONLY these part types render with real graphics — use them exclusively, substituting the closest supported part for anything else (e.g. wokwi-dht22 for any climate/BME/SHT sensor, wokwi-ntc-temperature-sensor for analog temperature, wokwi-ssd1306 for small I2C displays): ${PART_TYPES.join(", ")}.`,
+      description: `Replace the circuit schematic (Engineer > Schematic view) with realistic Wokwi parts. Keep every retained part's existing id; to remove a part, list its id in removedPartIds. Omitted board regions, simulator binding, and unchanged wire labels are retained. Same conventions as wokwi.com: parts are wokwi-* element types and wires connect named pins (e.g. LED A/C, resistor 1/2, Arduino Uno GND.1/5V/A0/13, ESP32 DevKit GND.1/VIN/D2). Lay parts out with generous spacing (~150px grid) on a 1200x800 canvas. ONLY these part types render with real graphics — use them exclusively, substituting the closest supported part for anything else (e.g. wokwi-dht22 for any climate/BME/SHT sensor, wokwi-ntc-temperature-sensor for analog temperature, wokwi-ssd1306 for small I2C displays): ${PART_TYPES.join(", ")}.`,
       inputSchema: circuitSchema,
       execute: async (doc: CircuitInput) =>
         guard(ctx, "electronics.edit", async (workspaceId) => {
@@ -293,25 +327,66 @@ export function buildElectronicsTools(ctx: ToolContext, _kit: ToolKit) {
               error: `These part specs are not usable: ${specProblems.join("; ")}. Pin names in a spec must match the pins the wires reference.`,
             };
           }
-          const data = {
+          const previous = await prisma.designDoc.findUnique({
+            where: { projectId_branchId_kind: { projectId, branchId, kind: "CIRCUIT" } },
+          });
+          const prior = normalizeCircuitDoc(previous?.data);
+          const partIds = new Set(doc.parts.map((part) => part.id));
+          if (partIds.size !== doc.parts.length)
+            return { error: "Schematic part IDs must be unique." };
+          const removed = new Set(doc.removedPartIds ?? []);
+          const omitted = prior.parts.filter(
+            (part) => !partIds.has(part.id) && !removed.has(part.id),
+          );
+          if (omitted.length)
+            return {
+              error: `Keep existing part IDs or explicitly remove them with removedPartIds: ${omitted.map((part) => part.id).join(", ")}`,
+            };
+          if ([...removed].some((id) => partIds.has(id)))
+            return { error: "A removed part ID cannot also appear in parts." };
+          if (
+            doc.wires.some((wire) => !partIds.has(wire.from.part) || !partIds.has(wire.to.part))
+          ) {
+            return { error: "Every wire endpoint must name an existing schematic part ID." };
+          }
+          const endpointKey = (wire: {
+            from: { part: string; pin: string };
+            to: { part: string; pin: string };
+          }) => [JSON.stringify(wire.from), JSON.stringify(wire.to)].sort().join("|");
+          const priorLabels = new Map(
+            prior.wires.filter((wire) => wire.label).map((wire) => [endpointKey(wire), wire.label]),
+          );
+          const data = normalizeCircuitDoc({
             version: 2,
             parts: doc.parts,
-            wires: doc.wires,
-            ...(doc.models ? { models: doc.models } : {}),
-          };
-          await prisma.designDoc.upsert({
-            where: { projectId_branchId_kind: { projectId, branchId, kind: "CIRCUIT" } },
-            create: {
-              projectId,
-              branchId,
-              kind: "CIRCUIT",
-              data: data as unknown as Prisma.InputJsonValue,
-              updatedById: ctx.userId,
-            },
-            update: { data: data as unknown as Prisma.InputJsonValue, updatedById: ctx.userId },
+            wires: doc.wires.map((wire) => ({
+              ...wire,
+              label: wire.label === undefined ? priorLabels.get(endpointKey(wire)) : wire.label,
+            })),
+            groups: doc.groups ?? prior.groups,
+            sketchFileId: doc.sketchFileId === undefined ? prior.sketchFileId : doc.sketchFileId,
+            models: doc.models ?? prior.models,
+          });
+          await writeDesignWithCollaboration({
+            projectId,
+            branchId,
+            userId: ctx.userId,
+            runId: ctx.runId,
+            kind: "CIRCUIT",
+            data,
+            baseData: previous?.data ?? null,
+          });
+          await recordAudit({
+            type: "DesignDocUpdated",
+            workspaceId,
+            projectId,
+            branchId,
+            actorId: ctx.userId,
+            actorType: "AGENT",
+            payload: { kind: "CIRCUIT" },
           });
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
-          const unmodelled = buildModelIndex(normalizeCircuitDoc(data)).unmodelled;
+          const unmodelled = buildModelIndex(data).unmodelled;
           return {
             ok: true,
             parts: doc.parts.length,
@@ -342,16 +417,13 @@ export function buildElectronicsTools(ctx: ToolContext, _kit: ToolKit) {
             return { error: "diagram has no parts array" };
           }
           const doc = wokwiDiagramToDoc(parsed);
-          await prisma.designDoc.upsert({
-            where: { projectId_branchId_kind: { projectId, branchId, kind: "CIRCUIT" } },
-            create: {
-              projectId,
-              branchId,
-              kind: "CIRCUIT",
-              data: doc as unknown as Prisma.InputJsonValue,
-              updatedById: ctx.userId,
-            },
-            update: { data: doc as unknown as Prisma.InputJsonValue, updatedById: ctx.userId },
+          await writeDesignWithCollaboration({
+            projectId,
+            branchId,
+            userId: ctx.userId,
+            runId: ctx.runId,
+            kind: "CIRCUIT",
+            data: doc,
           });
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
           const generic = unsupportedWokwiTypes(doc.parts);
@@ -393,9 +465,14 @@ export function buildElectronicsTools(ctx: ToolContext, _kit: ToolKit) {
 
           const doc = normalizeCircuitDoc(existing.data);
           const merged = { ...doc, models: { ...(doc.models ?? {}), ...models } };
-          await prisma.designDoc.update({
-            where: { projectId_branchId_kind: { projectId, branchId, kind: "CIRCUIT" } },
-            data: { data: merged as unknown as Prisma.InputJsonValue, updatedById: ctx.userId },
+          await writeDesignWithCollaboration({
+            projectId,
+            branchId,
+            userId: ctx.userId,
+            runId: ctx.runId,
+            kind: "CIRCUIT",
+            data: merged,
+            baseData: existing.data,
           });
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
           return {
@@ -414,16 +491,13 @@ export function buildElectronicsTools(ctx: ToolContext, _kit: ToolKit) {
       execute: async () =>
         guard(ctx, "electronics.edit", async (workspaceId) => {
           const data = emptyPcbSet();
-          await prisma.designDoc.upsert({
-            where: { projectId_branchId_kind: { projectId, branchId, kind: "PCB" } },
-            create: {
-              projectId,
-              branchId,
-              kind: "PCB",
-              data: data as unknown as Prisma.InputJsonValue,
-              updatedById: ctx.userId,
-            },
-            update: { data: data as unknown as Prisma.InputJsonValue, updatedById: ctx.userId },
+          await writeDesignWithCollaboration({
+            projectId,
+            branchId,
+            userId: ctx.userId,
+            runId: ctx.runId,
+            kind: "PCB",
+            data,
           });
           await recordAudit({
             type: "DesignDocUpdated",
@@ -471,7 +545,18 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             name: input.boardName ?? previous?.name,
             groupId: input.groupId ?? previous?.groupId,
             board: input.board,
-            footprints: input.footprints,
+            footprints: input.footprints.map((footprint) => {
+              const prior = previous?.footprints.find(
+                (entry) => entry.id === footprint.id && entry.libraryId === footprint.libraryId,
+              );
+              return {
+                ...footprint,
+                bodyHeightMm: footprint.bodyHeightMm ?? prior?.bodyHeightMm,
+                pinMap:
+                  footprint.pinMap ??
+                  (prior?.partId === footprint.partId ? prior?.pinMap : undefined),
+              };
+            }),
             tracks: input.tracks ?? previous?.tracks ?? [],
             vias: input.vias ?? previous?.vias ?? [],
             zones: input.zones ?? previous?.zones ?? [],
@@ -483,21 +568,15 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             ? set.boards.map((b) => (b.id === targetId ? data : b))
             : [...set.boards, data];
           const nextSet = { version: 2 as const, boards, activeBoardId: targetId };
-          await prisma.designDoc.upsert({
-            where: { projectId_branchId_kind: { projectId, branchId, kind: "PCB" } },
-            create: {
-              projectId,
-              branchId,
-              kind: "PCB",
-              data: nextSet as unknown as Prisma.InputJsonValue,
-              updatedById: ctx.userId,
-            },
-            update: { data: nextSet as unknown as Prisma.InputJsonValue, updatedById: ctx.userId },
+          await writeDesignWithCollaboration({
+            projectId,
+            branchId,
+            userId: ctx.userId,
+            runId: ctx.runId,
+            kind: "PCB",
+            data: nextSet,
+            baseData: existing?.data ?? null,
           });
-          // Keep parts/pcb/main.kcl in sync so Assembly can import the board as a CAD part.
-          await mutateModel3dDoc(projectId, branchId, ctx.userId, (base) =>
-            syncPcbCadPart(base, data),
-          );
           await recordAudit({
             type: "DesignDocUpdated",
             workspaceId,
@@ -509,7 +588,6 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
               kind: "PCB",
               footprints: data.footprints.length,
               board: data.board,
-              cadPart: "parts/pcb/main.kcl",
             },
           });
           const staled = await touchStage(ctx, workspaceId, "ENGINEER");
@@ -540,7 +618,8 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             boards: boards.length,
             board: data.board,
             footprints: data.footprints.length,
-            cadPart: "parts/pcb/main.kcl",
+            nextStep:
+              "Call sync_pcb_to_cad to update all board references in CAD, then inspect the assembly.",
             tracks: data.tracks.length,
             vias: data.vias.length,
             zones: data.zones.length,

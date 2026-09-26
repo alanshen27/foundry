@@ -1,4 +1,5 @@
 export {
+  markCancelledAssistantMessages,
   markFailedAssistantMessages,
   pairToolCallsWithResults,
   pruneEmptyAssistantMessages,

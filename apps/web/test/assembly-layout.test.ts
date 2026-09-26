@@ -101,7 +101,7 @@ describe("pcbPartKcl", () => {
     expect(kcl).toContain("width = 80");
     expect(kcl).toContain("depth = 50");
     expect(kcl).toContain("thickness = 1.6");
-    expect(kcl).toContain("board = extrude(");
+    expect(kcl).toContain("boardBlank = extrude(");
     expect(kcl.trim().endsWith("board")).toBe(true);
     expect(kcl).not.toContain("fp0");
   });

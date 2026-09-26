@@ -63,7 +63,7 @@ const CompanionViewport = dynamic(
   },
 );
 
-// The real Zoo WebRTC viewport (same component as the Engineer stage).
+// The same local Three.js viewport used by the Engineer stage.
 const CadViewport = dynamic(
   () => import("@/components/engineer/cad-viewport").then((m) => m.CadViewport),
   {
@@ -71,8 +71,6 @@ const CadViewport = dynamic(
     loading: () => <DotMatrixLoader className="absolute inset-0" label="Loading CAD" />,
   },
 );
-
-export type DemoEngineSession = { token: string; baseUrl?: string };
 
 type DemoComponent = {
   id: string;
@@ -371,7 +369,7 @@ function ProcessFooterDemo() {
   );
 }
 
-export function EngineerDemo({ engine }: { engine: DemoEngineSession | null }) {
+export function EngineerDemo({ livePreview = true }: { livePreview?: boolean }) {
   const { theme } = useTheme();
   const monacoTheme = monacoThemeFor(theme.mode);
 
@@ -508,7 +506,7 @@ export function EngineerDemo({ engine }: { engine: DemoEngineSession | null }) {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="pointer-events-none absolute inset-0">
             <InteractiveDotField gap={16} radius={52} />
@@ -621,10 +619,10 @@ export function EngineerDemo({ engine }: { engine: DemoEngineSession | null }) {
                       {active.content}
                     </article>
                   </div>
-                ) : engine ? (
+                ) : livePreview ? (
                   <>
                     {zooSubmit ? (
-                      <CadViewport script={zooSubmit.script} engine={engine} />
+                      <CadViewport script={zooSubmit.script} />
                     ) : (
                       <div className="text-muted-foreground absolute inset-0 flex items-center justify-center">
                         <span className="animate-pulse font-mono text-[11px] tracking-[0.08em] uppercase">

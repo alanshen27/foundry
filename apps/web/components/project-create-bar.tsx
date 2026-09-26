@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Folder, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { SignalGlowBackdrop } from "@/components/signal-glow-backdrop";
 import { folderBreadcrumbs, type FolderRef } from "@/lib/workspace-folders";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { projectKickoffs } from "@/lib/copilot/project-kickoff";
 
 /** sessionStorage key — the workbench PipelineKickoff reads this once after create. */
 export const PROJECT_KICKOFF_KEY = "foundry:project-kickoff";
@@ -57,6 +58,7 @@ export function ProjectCreateBar({
   const [targetFolderId, setTargetFolderId] = useState<string>(defaultFolderId ?? "");
   const [showOptions, setShowOptions] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submittedPrompt = useRef<string | null>(null);
 
   useEffect(() => {
     setTargetFolderId(defaultFolderId ?? "");
@@ -66,26 +68,34 @@ export function ProjectCreateBar({
 
   const create = trpc.project.create.useMutation({
     onSuccess: (project) => {
-      const text = prompt.trim();
+      const text = (submittedPrompt.current ?? prompt).trim();
       if (text) {
+        // Copilot consumes this on every project route; workbench PipelineKickoff
+        // still reads the unscoped session key once after create.
+        projectKickoffs.save(project.id, text);
         try {
           sessionStorage.setItem(PROJECT_KICKOFF_KEY, text);
         } catch {
           // Private mode / quota — the workbench still opens; user can retype.
         }
       }
+      submittedPrompt.current = null;
       setPrompt("");
       setNameOverride("");
       setError(null);
-      router.push(`/w/${workspaceSlug}/projects/${project.slug}/engineer`);
+      router.push(`/w/${workspaceSlug}/projects/${project.slug}/engineer?view=assembly`);
       router.refresh();
     },
-    onError: (err) => setError(err.message),
+    onError: (err) => {
+      submittedPrompt.current = null;
+      setError(err.message);
+    },
   });
 
   function submit() {
-    if (!prompt.trim() || create.isPending) return;
+    if (!prompt.trim() || create.isPending || submittedPrompt.current !== null) return;
     const name = nameOverride.trim() || nameFromPrompt(prompt);
+    submittedPrompt.current = prompt;
     create.mutate({
       workspaceId,
       name,

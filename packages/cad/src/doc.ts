@@ -1,4 +1,21 @@
-import type { CadAsset, CadAssetFormat, CadComponent, CadComponentKind, CadDoc } from "./port";
+import type {
+  CadAsset,
+  CadAssetFormat,
+  CadComponent,
+  CadComponentKind,
+  CadDoc,
+  CadAssemblyInstance,
+  CadLinkedAssembly,
+} from "./port";
+import {
+  PYTHON_ASSEMBLY_PATH,
+  PYTHON_PART_STARTER,
+  PYTHON_ASSEMBLY_STARTER,
+  isPythonCadComponent,
+  pythonPartPath,
+  pythonModuleName,
+  isPythonProjectPath,
+} from "./python-project";
 
 export type { CadAsset, CadAssetFormat };
 
@@ -123,14 +140,16 @@ export function displayNameFromCadPath(path: string): string {
   const file = segs[segs.length - 1] ?? path;
   // Zoo stores named parts as parts/<slug>/main.kcl — use the folder, not "main".
   // parts/main.kcl is the root part (only two segments); keep stem "main".
-  if (file.toLowerCase() === "main.kcl" && segs.length >= 3) {
+  if (/^main\.(kcl|py)$/i.test(file) && segs.length >= 3) {
     return segs[segs.length - 2]!;
   }
-  return file.replace(/\.(kcl|md)$/i, "") || "part";
+  return file.replace(/\.(kcl|py|md)$/i, "") || "part";
 }
 
 function mirrorScript(components: CadComponent[], activeId: string): string {
   const active = components.find((c) => c.id === activeId);
+  if (active && active.kind !== "instructions" && isPythonCadComponent(active))
+    return active.content;
   if (active && (active.kind === "part" || active.kind === "assembly") && active.content.trim()) {
     return active.content;
   }
@@ -152,6 +171,8 @@ function withMirror(doc: Omit<CadDoc, "script">): CadDoc {
 
 const ASSET_FORMATS = new Set<CadAssetFormat>([
   "kcl",
+  "py",
+  "brep",
   "stl",
   "step",
   "stp",
@@ -236,10 +257,12 @@ const ELECTRONICS_FORMATS = new Set<CadAssetFormat>([
   "kicad_prl",
 ]);
 
-export type CadAssetImportMode = "native-kcl" | "engine" | "reference" | "electronics";
+export type CadAssetImportMode =
+  "native-kcl" | "native-python" | "engine" | "reference" | "electronics";
 
 export function cadAssetImportMode(format: CadAssetFormat): CadAssetImportMode {
   if (format === "kcl") return "native-kcl";
+  if (format === "py") return "native-python";
   if (ENGINE_IMPORT_FORMATS.has(format)) return "engine";
   if (ELECTRONICS_FORMATS.has(format)) return "electronics";
   return "reference";
@@ -360,44 +383,66 @@ export function fromZooKclPath(path: string): string {
   return `${m[1]}/${m[2]}.kcl`;
 }
 
-/** Rewrite `.kcl` module import paths on import lines (leaves STL/STEP alone). */
+type KclModuleReference = { path: string; alias: string; start: number; end: number };
+
+/** Keep source offsets while ignoring comments and import-like text inside string values. */
+function kclModuleReferences(kcl: string): KclModuleReference[] {
+  const masked = kcl.replace(
+    /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
+    (token) =>
+      token.startsWith("//") || token.startsWith("/*")
+        ? token.replace(/[^\r\n]/g, " ")
+        : token[0] + " ".repeat(token.length - 2) + token.at(-1),
+  );
+  // KCL supports whole modules, named symbols (including aliases), and re-exports.
+  const imports =
+    /^[\t ]*(?:export\s+)?import\s+(?:(?<symbols>[A-Za-z_]\w*(?:\s+as\s+[A-Za-z_]\w*)?(?:\s*,\s*[A-Za-z_]\w*(?:\s+as\s+[A-Za-z_]\w*)?)*\s*,?)\s+from\s+)?(?<quote>["'])(?<path>[^"'\r\n]*)\k<quote>(?:\s+as\s+(?<alias>[A-Za-z_]\w*))?/gim;
+  return [...masked.matchAll(imports)].flatMap((match) => {
+    const {
+      quote,
+      alias,
+      symbols,
+      path: maskedPath,
+    } = match.groups as {
+      path: string;
+      quote: string;
+      alias?: string;
+      symbols?: string;
+    };
+    const start = match.index! + match[0].indexOf(quote) + 1;
+    const end = start + maskedPath.length;
+    const path = kcl.slice(start, end);
+    if (!/\.kcl$/i.test(path)) return [];
+    const file = path.split("/").pop() ?? path;
+    const fallback = slugifyCadName(file.replace(/\.kcl$/i, "")).replace(/-/g, "_") || "part";
+    const firstSymbol = symbols
+      ?.split(",")[0]
+      ?.trim()
+      .split(/\s+as\s+/i)
+      .at(-1);
+    return [{ path, alias: alias ?? firstSymbol ?? fallback, start, end }];
+  });
+}
+
+/** Rewrite only real `.kcl` import paths; retain formatting, comments and foreign imports. */
 export function rewriteKclModuleImportPaths(
   kcl: string,
   mapPath: (path: string) => string = toZooKclPath,
 ): string {
-  return kcl
-    .split("\n")
-    .map((line) => {
-      if (!/^\s*(export\s+)?import\s+/i.test(line)) return line;
-      return line.replace(
-        /(["'])([^"']+\.kcl)\1/g,
-        (_m, q: string, p: string) => `${q}${mapPath(p)}${q}`,
-      );
-    })
-    .join("\n");
+  let rewritten = kcl;
+  for (const ref of kclModuleReferences(kcl).reverse()) {
+    rewritten = rewritten.slice(0, ref.start) + mapPath(ref.path) + rewritten.slice(ref.end);
+  }
+  return rewritten;
 }
 
 function modulePathsEqual(a: string, b: string): boolean {
   return a === b || toZooKclPath(a) === toZooKclPath(b) || fromZooKclPath(a) === fromZooKclPath(b);
 }
 
-/** KCL module import: `import "parts/foo.kcl" as foo` (and bare import). */
+/** Whole-module and named KCL imports, including re-exports and trailing comments. */
 export function parseKclModuleImports(kcl: string): { path: string; alias: string }[] {
-  const out: { path: string; alias: string }[] = [];
-  const withAs = /^\s*import\s+["']([^"']+\.kcl)["']\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/gim;
-  let m: RegExpExecArray | null;
-  while ((m = withAs.exec(kcl)) !== null) {
-    out.push({ path: m[1]!, alias: m[2]! });
-  }
-  const bare = /^\s*import\s+["']([^"']+\.kcl)["']\s*$/gim;
-  while ((m = bare.exec(kcl)) !== null) {
-    const path = m[1]!;
-    if (out.some((i) => i.path === path)) continue;
-    const file = path.split("/").pop() ?? path;
-    const alias = slugifyCadName(file.replace(/\.kcl$/, "")).replace(/-/g, "_") || "part";
-    out.push({ path, alias });
-  }
-  return out;
+  return kclModuleReferences(kcl).map(({ path, alias }) => ({ path, alias }));
 }
 
 export function partModuleAlias(part: Pick<CadComponent, "name" | "path">): string {
@@ -447,6 +492,11 @@ export function insertPartIntoAssembly(doc: CadDoc, assemblyId: string, partId: 
     return doc;
   }
 
+  if (isPythonCadComponent(assembly)) return insertPythonPartIntoAssembly(doc, assembly, part);
+  if (isPythonCadComponent(part))
+    throw new Error(
+      "Create or open a native Python assembly before placing this Python part; legacy KCL source is preserved",
+    );
   const alias = partModuleAlias(part);
   const already = parseKclModuleImports(assembly.content).find((i) =>
     modulePathsEqual(i.path, part.path),
@@ -478,8 +528,8 @@ export type KclProjectBuild = {
 /**
  * Build a multi-file KCL project for the Zoo executor.
  * Remaps `parts/foo.kcl` → `parts/foo/main.kcl` so subdirectory imports satisfy
- * Zoo's main.kcl-only rule. Mesh-only parts imported by the entry become small
- * proxy solids (browser KCL can't resolve STL inside modules).
+ * Zoo's main.kcl-only rule. The server materializes referenced foreign assets;
+ * imported manufacturing geometry must never be replaced by proxy boxes.
  */
 export function buildKclProject(doc: CadDoc, entryPath: string): KclProjectBuild {
   const files: Record<string, string> = {};
@@ -487,24 +537,32 @@ export function buildKclProject(doc: CadDoc, entryPath: string): KclProjectBuild
   const assetsByPath = new Map((doc.assets ?? []).map((a) => [a.path, a]));
   const entry = doc.components.find((c) => c.path === entryPath);
   const zooEntry = toZooKclPath(entryPath);
-  const importedLogical = new Set(
-    parseKclModuleImports(entry?.content ?? "").map((i) => fromZooKclPath(i.path)),
-  );
+  const reachable = new Map<string, CadComponent>();
+  const visit = (component: CadComponent) => {
+    if (reachable.has(component.id)) return;
+    reachable.set(component.id, component);
+    for (const ref of parseKclModuleImports(component.content)) {
+      const dependency = doc.components.find(
+        (c) => c.kind !== "instructions" && modulePathsEqual(c.path, ref.path),
+      );
+      if (!dependency)
+        throw new Error(`Missing imported KCL module: ${ref.path} (in ${component.path})`);
+      visit(dependency);
+    }
+  };
+  if (entry) visit(entry);
 
-  for (const c of doc.components) {
+  // Unrelated drafts must not change the render request or evict a valid mesh cache entry.
+  for (const c of [...reachable.values()].sort((a, b) => a.path.localeCompare(b.path))) {
     if (c.kind === "instructions") continue;
     const foreign = parseForeignImports(c.content);
     for (const f of foreign) {
       const asset = assetsByPath.get(f.path);
-      if (asset && !meshAssets.some((a) => a.id === asset.id)) meshAssets.push(asset);
+      if (!asset) throw new Error(`Missing imported CAD asset: ${f.path} (in ${c.path})`);
+      if (!meshAssets.some((a) => a.id === asset.id)) meshAssets.push(asset);
     }
 
-    let content = c.content;
-    if (c.kind === "part" && importedLogical.has(c.path) && foreign.length > 0) {
-      content = meshPartProxyKcl(c.name);
-    } else {
-      content = rewriteKclModuleImportPaths(content);
-    }
+    const content = rewriteKclModuleImportPaths(c.content);
     // Empty modules deserialize as null Program and crash Zoo multi-file submit.
     if (!content.trim() && c.path !== entryPath) continue;
     files[toZooKclPath(c.path)] = content;
@@ -543,7 +601,21 @@ export function importMeshAsPart(
   const withAsset = addCadAsset(doc, assetInput);
   const asset = (withAsset.assets ?? []).find((a) => a.path === assetInput.path)!;
   const partName = slugifyCadName(asset.name) || "imported";
-  return upsertPartScript(withAsset, partName, kclForForeignImport(asset));
+  if (doc.engine === "build123d" && ["step", "stp", "ste", "brep"].includes(asset.format)) {
+    const importer = asset.format === "brep" ? "import_brep" : "import_step";
+    return upsertPythonPart(
+      withAsset,
+      partName,
+      `# Imported exact geometry; original feature history is not reconstructed.\nfrom build123d import ${importer}\nresult = ${importer}(${JSON.stringify(asset.path)})\n`,
+    );
+  }
+  // Existing foreign-mesh wrappers retain their legacy representation for direct preview.
+  const imported = upsertPartScript(
+    { ...withAsset, engine: "zoo" },
+    partName,
+    kclForForeignImport(asset),
+  );
+  return { ...imported, engine: doc.engine };
 }
 
 function normalizeAsset(raw: unknown): CadAsset | null {
@@ -615,8 +687,211 @@ export function cadDoc(script: string): CadDoc {
   });
 }
 
+/** New CAD stores editable Python source and starts without pretend product geometry. */
+export function pythonCadDoc(script = PYTHON_PART_STARTER): CadDoc {
+  const partId = newId();
+  return withMirror({
+    version: 5,
+    engine: "build123d",
+    activeId: partId,
+    components: [
+      { id: partId, name: "main", path: "parts/main.py", kind: "part", content: script },
+      {
+        id: newId(),
+        name: "product",
+        path: PYTHON_ASSEMBLY_PATH,
+        kind: "assembly",
+        content: PYTHON_ASSEMBLY_STARTER,
+      },
+      {
+        id: newId(),
+        name: "assembly-instructions",
+        path: "docs/assembly-instructions.md",
+        kind: "instructions",
+        content:
+          "# Assembly instructions\n\nUNVERIFIED — add manufacturing parts, place instances, then check fit and fastening.\n",
+      },
+    ],
+  });
+}
+
+/** Explicit native write. Existing legacy source is retained; names never overwrite KCL. */
+export function upsertPythonPart(
+  doc: CadDoc,
+  pathOrName: string | undefined,
+  script: string,
+): CadDoc {
+  const key = pathOrName?.trim() || "parts/main.py";
+  const path = key.endsWith(".py") ? key : pythonPartPath(key);
+  if (!isPythonProjectPath(path)) throw new Error(`Invalid Python CAD module path: ${path}`);
+  return upsertPythonCadContent(doc, path, script);
+}
+
+export function upsertPythonParts(
+  doc: CadDoc,
+  parts: { partName?: string; script: string }[],
+): CadDoc {
+  return parts.reduce((next, part) => upsertPythonPart(next, part.partName, part.script), doc);
+}
+
+export function upsertPythonCadContent(
+  doc: CadDoc,
+  pathOrName: string | undefined,
+  content: string,
+): CadDoc {
+  const key = pathOrName?.trim() || "parts/main.py";
+  const kind: CadComponentKind =
+    key.startsWith("docs/") || key.endsWith(".md")
+      ? "instructions"
+      : key.startsWith("assembly/") || key === "product"
+        ? "assembly"
+        : "part";
+  const path =
+    kind === "instructions"
+      ? key
+      : key.endsWith(".py")
+        ? key
+        : kind === "assembly"
+          ? PYTHON_ASSEMBLY_PATH
+          : pythonPartPath(key);
+  if (kind !== "instructions" && !isPythonProjectPath(path))
+    throw new Error(`Invalid Python CAD module path: ${path}`);
+  const existing = doc.components.find((c) => c.path === path);
+  const id = existing?.id ?? newId();
+  const component: CadComponent = {
+    ...existing,
+    id,
+    name: existing?.name ?? displayNameFromCadPath(path),
+    path,
+    kind,
+    content,
+  };
+  return withMirror({
+    ...doc,
+    engine: "build123d",
+    activeId: id,
+    components: existing
+      ? doc.components.map((c) => (c.id === id ? component : c))
+      : [...doc.components, component],
+  });
+}
+
+function addPythonComponents(
+  doc: CadDoc,
+  inputs: { name: string; kind: CadComponentKind; content?: string }[],
+): CadDoc {
+  let next = doc;
+  for (const input of inputs) {
+    if (input.kind === "assembly") {
+      next = upsertPythonCadContent(
+        next,
+        PYTHON_ASSEMBLY_PATH,
+        input.content ??
+          next.components.find((c) => c.path === PYTHON_ASSEMBLY_PATH)?.content ??
+          PYTHON_ASSEMBLY_STARTER,
+      );
+      continue;
+    }
+    const base =
+      input.kind === "instructions"
+        ? `docs/${slugifyCadName(input.name)}.md`
+        : pythonPartPath(input.name);
+    let path = base;
+    let index = 2;
+    while (next.components.some((c) => c.path === path))
+      path = base.replace(/\.(py|md)$/, `_${index++}.$1`);
+    next = upsertPythonCadContent(
+      next,
+      path,
+      input.content ?? (input.kind === "part" ? PYTHON_PART_STARTER : DEFAULT_INSTRUCTIONS_MD),
+    );
+  }
+  return next;
+}
+
+function insertPythonPartIntoAssembly(
+  doc: CadDoc,
+  assembly: CadComponent,
+  part: CadComponent,
+): CadDoc {
+  if (!isPythonCadComponent(part))
+    throw new Error(
+      "Regenerate or convert this legacy KCL part to Python before placing it in a native assembly",
+    );
+  if (isCadStarterComponent(part))
+    throw new Error("Generate this manufacturing part before placing it in an assembly");
+  const suffix =
+    doc.components.length + (assembly.content.match(/foundry_insert_part/g)?.length ?? 0);
+  const alias = `foundry_insert_part_${suffix}`;
+  const previous = isCadStarterComponent(assembly) ? "result = None\n" : assembly.content;
+  const content = `${previous.trimEnd()}\n\n# UNVERIFIED explicit placement at the origin.\nfrom copy import deepcopy as _foundry_copy\nfrom build123d import Compound, Builder\nfrom ${pythonModuleName(part.path)} import result as ${alias}\nif isinstance(${alias}, Builder):\n    ${alias} = ${alias}.part\nif isinstance(result, Builder):\n    result = result.part\nresult = Compound(children=([_foundry_copy(result)] if result is not None else []) + [_foundry_copy(${alias})])\n`;
+  return setActiveComponent(updateComponentContent(doc, assembly.id, content), assembly.id);
+}
+
 export function getActiveComponent(doc: CadDoc): CadComponent {
   return doc.components.find((c) => c.id === doc.activeId) ?? doc.components[0]!;
+}
+
+/** Exact shipped starter sources only; edited dimensions or custom source stay real data. */
+export function isCadStarterComponent(component: Pick<CadComponent, "kind" | "content">): boolean {
+  if (component.kind === "instructions") return false;
+  const source = component.content.trim();
+  if (!source || source === PYTHON_PART_STARTER.trim() || source === PYTHON_ASSEMBLY_STARTER.trim())
+    return true;
+  return component.kind === "part"
+    ? source === DEFAULT_KCL.trim()
+    : source === DEFAULT_ASSEMBLY_KCL.trim() || source === ASSEMBLY_STARTER_KCL.trim();
+}
+
+/** Preserve explicit selections, but stop an untouched starter pinning newly saved geometry. */
+export function selectCadComponentId(
+  doc: CadDoc,
+  currentId?: string | null,
+  focusComponentId?: string | null,
+): string {
+  const focused = doc.components.find((component) => component.id === focusComponentId);
+  if (focused) return focused.id;
+  const current = doc.components.find((component) => component.id === currentId);
+  if (current && !isCadStarterComponent(current)) return current.id;
+  const active = doc.components.find((component) => component.id === doc.activeId);
+  if (active && active.kind !== "instructions" && !isCadStarterComponent(active)) return active.id;
+  const savedGeometry = doc.components.find(
+    (component) => component.kind !== "instructions" && !isCadStarterComponent(component),
+  );
+  return savedGeometry?.id ?? current?.id ?? active?.id ?? doc.components[0]?.id ?? "";
+}
+
+/** A saved part is useful before assembly exists; a shipped envelope is not an assembly. */
+export function pickCadAssemblyPreview(
+  doc: CadDoc,
+): { component: CadComponent; mode: "assembly" | "part" } | null {
+  const assemblies = doc.components.filter(
+    (component) =>
+      component.kind === "assembly" &&
+      !isCadStarterComponent(component) &&
+      (doc.engine !== "build123d" || isPythonCadComponent(component)),
+  );
+  const assembly =
+    assemblies.find(
+      (component) =>
+        component.path ===
+          (doc.engine === "build123d" ? PYTHON_ASSEMBLY_PATH : PRODUCT_ASSEMBLY_PATH) ||
+        component.path === "assembly/product/main.kcl" ||
+        component.name === "product",
+    ) ?? assemblies[0];
+  if (assembly) return { component: assembly, mode: "assembly" };
+  const parts = doc.components.filter(
+    (component) => component.kind === "part" && !isCadStarterComponent(component),
+  );
+  const part =
+    (doc.engine === "build123d"
+      ? (parts.find(
+          (component) => component.id === doc.activeId && isPythonCadComponent(component),
+        ) ?? parts.find(isPythonCadComponent))
+      : undefined) ??
+    parts.find((component) => component.id === doc.activeId) ??
+    parts[0];
+  return part ? { component: part, mode: "part" } : null;
 }
 
 export function listComponentsByKind(doc: CadDoc, kind: CadComponentKind): CadComponent[] {
@@ -634,6 +909,14 @@ export function setActiveComponent(doc: CadDoc, activeId: string): CadDoc {
  */
 export function assemblyDropTargetId(doc: CadDoc, activeId = doc.activeId): string | null {
   const active = doc.components.find((component) => component.id === activeId);
+  if (doc.engine === "build123d")
+    return (
+      (active?.kind === "assembly" && isPythonCadComponent(active)
+        ? active.id
+        : doc.components.find(
+            (component) => component.kind === "assembly" && isPythonCadComponent(component),
+          )?.id) ?? null
+    );
   if (active?.kind === "assembly") return active.id;
   return doc.components.find((component) => component.kind === "assembly")?.id ?? null;
 }
@@ -666,6 +949,7 @@ export function addCadComponents(
   inputs: { name: string; kind: CadComponentKind; content?: string }[],
 ): CadDoc {
   if (inputs.length === 0) return doc;
+  if (doc.engine === "build123d") return addPythonComponents(doc, inputs);
   let components = [...doc.components];
   let activeId = doc.activeId;
   const used = new Set(components.map((c) => c.path));
@@ -675,7 +959,7 @@ export function addCadComponents(
     if (input.kind === "assembly") {
       const existing =
         components.find((c) => c.path === PRODUCT_ASSEMBLY_PATH) ??
-        components.find((c) => c.kind === "assembly");
+        components.find((c) => c.kind === "assembly" && !isPythonCadComponent(c));
       const content = input.content?.trim() || existing?.content || DEFAULT_ASSEMBLY_KCL;
       if (existing) {
         components = components.map((c) =>
@@ -764,13 +1048,22 @@ export function upsertPartScript(
   pathOrName: string | undefined,
   script: string,
 ): CadDoc {
+  if (doc.engine === "build123d" && !pathOrName?.endsWith(".kcl"))
+    return upsertPythonPart(doc, pathOrName, script);
   const key = (pathOrName ?? "parts/main.kcl").trim();
-  const byPath = matchComponent(doc, key, "part");
+  const byPath = matchComponent(
+    { ...doc, components: doc.components.filter((c) => !isPythonCadComponent(c)) },
+    key,
+    "part",
+  );
   if (byPath) {
     return setActiveComponent(updateComponentContent(doc, byPath.id, script), byPath.id);
   }
   const name = key.includes("/") ? displayNameFromCadPath(key) : key.replace(/\.kcl$/, "");
-  return addCadComponent(doc, { name, kind: "part", content: script });
+  return {
+    ...addCadComponent({ ...doc, engine: "zoo" }, { name, kind: "part", content: script }),
+    engine: doc.engine,
+  };
 }
 
 /**
@@ -798,6 +1091,8 @@ export function upsertCadContent(
   pathOrName: string | undefined,
   content: string,
 ): CadDoc {
+  if (pathOrName?.endsWith(".py") || (doc.engine === "build123d" && !pathOrName?.endsWith(".kcl")))
+    return upsertPythonCadContent(doc, pathOrName, content);
   const key = (pathOrName ?? "parts/main.kcl").trim();
   let kind: CadComponentKind = "part";
   if (key.startsWith("assembly/") || key.includes("assembly") || key === "product") {
@@ -811,7 +1106,7 @@ export function upsertCadContent(
   const existing =
     kind === "assembly"
       ? (matchComponent(doc, PRODUCT_ASSEMBLY_PATH, "assembly") ??
-        doc.components.find((c) => c.kind === "assembly"))
+        doc.components.find((c) => c.kind === "assembly" && !isPythonCadComponent(c)))
       : (matchComponent(doc, resolveKey) ?? matchComponent(doc, resolveKey, kind));
   if (existing) {
     const updated =
@@ -833,16 +1128,22 @@ export function upsertCadContent(
     );
   }
   if (kind === "assembly") {
-    return addCadComponent(doc, { name: "product", kind: "assembly", content });
+    return {
+      ...addCadComponent({ ...doc, engine: "zoo" }, { name: "product", kind: "assembly", content }),
+      engine: doc.engine,
+    };
   }
   const name = key.includes("/") ? displayNameFromCadPath(key) : key.replace(/\.(kcl|md)$/, "");
-  return addCadComponent(doc, { name, kind, content });
+  return {
+    ...addCadComponent({ ...doc, engine: "zoo" }, { name, kind, content }),
+    engine: doc.engine,
+  };
 }
 
 function isV5(raw: Record<string, unknown>): boolean {
   return (
     raw.version === 5 &&
-    raw.engine === "zoo" &&
+    (raw.engine === "zoo" || raw.engine === "build123d") &&
     typeof raw.activeId === "string" &&
     Array.isArray(raw.components)
   );
@@ -860,23 +1161,95 @@ function normalizeComponent(raw: unknown): CadComponent | null {
   // Only parts need the …/main.kcl layout. Assemblies stay at assembly/*.kcl
   // (MCP copies the entry to root main.kcl for execute).
   const path = kind === "part" ? toZooKclPath(c.path) : c.path;
-  const rewritten = kind === "instructions" ? c.content : rewriteKclModuleImportPaths(c.content);
+  const python = /\.py$/i.test(path);
+  const rewritten =
+    kind === "instructions" || python ? c.content : rewriteKclModuleImportPaths(c.content);
   // Older or interrupted saves can leave a structurally valid v5 component
   // with blank KCL. Never hand an empty program to the Zoo executor.
   const content =
-    kind === "part" && !rewritten.trim()
+    kind === "part" && !python && !rewritten.trim()
       ? DEFAULT_KCL
-      : kind === "assembly" && !rewritten.trim()
+      : kind === "assembly" && !python && !rewritten.trim()
         ? DEFAULT_ASSEMBLY_KCL
         : rewritten;
   const name =
     kind === "part" && path !== c.path && c.name === "main" ? displayNameFromCadPath(path) : c.name;
+  const source =
+    c.source && typeof c.source === "object" ? (c.source as Record<string, unknown>) : null;
+  const pcbSource =
+    kind === "part" &&
+    source?.kind === "pcb" &&
+    typeof source.boardId === "string" &&
+    typeof source.sourceHash === "string" &&
+    typeof source.generatedHash === "string"
+      ? {
+          kind: "pcb" as const,
+          boardId: source.boardId,
+          sourceHash: source.sourceHash,
+          generatedHash: source.generatedHash,
+        }
+      : undefined;
   return {
     id: c.id,
     name,
     path,
     kind,
     content,
+    ...(pcbSource ? { source: pcbSource } : {}),
+  };
+}
+
+function normalizeLinkedAssembly(raw: unknown): CadLinkedAssembly | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  if (
+    value.version !== 1 ||
+    !Array.isArray(value.instances) ||
+    typeof value.sourceHash !== "string" ||
+    typeof value.generatedHash !== "string"
+  )
+    return undefined;
+  const vector = (raw: unknown): CadAssemblyInstance["translationMm"] | undefined => {
+    if (!raw || typeof raw !== "object") return undefined;
+    const v = raw as Record<string, unknown>;
+    if (![v.x, v.y, v.z].every((n) => typeof n === "number" && Number.isFinite(n)))
+      return undefined;
+    return { x: v.x as number, y: v.y as number, z: v.z as number };
+  };
+  const instances: CadAssemblyInstance[] = [];
+  const ids = new Set<string>();
+  for (const rawInstance of value.instances) {
+    if (!rawInstance || typeof rawInstance !== "object") continue;
+    const item = rawInstance as Record<string, unknown>;
+    const translationMm = vector(item.translationMm);
+    const rotationDeg = vector(item.rotationDeg);
+    if (
+      typeof item.id !== "string" ||
+      !item.id ||
+      ids.has(item.id) ||
+      typeof item.componentId !== "string" ||
+      !item.componentId ||
+      typeof item.visible !== "boolean" ||
+      typeof item.fixed !== "boolean" ||
+      !translationMm ||
+      !rotationDeg
+    )
+      continue;
+    ids.add(item.id);
+    instances.push({
+      id: item.id,
+      componentId: item.componentId,
+      translationMm,
+      rotationDeg,
+      visible: item.visible,
+      fixed: item.fixed,
+    });
+  }
+  return {
+    version: 1,
+    instances,
+    sourceHash: value.sourceHash,
+    generatedHash: value.generatedHash,
   };
 }
 
@@ -896,22 +1269,23 @@ export function normalizeCadDoc(raw: unknown): CadDoc {
         const assets = Array.isArray(doc.assets)
           ? (doc.assets as unknown[]).map(normalizeAsset).filter((a): a is CadAsset => a !== null)
           : undefined;
+        const assembly = normalizeLinkedAssembly(doc.assembly);
         return withMirror({
           version: 5,
-          engine: "zoo",
+          engine: doc.engine === "build123d" ? "build123d" : "zoo",
           activeId,
           components,
           ...(assets?.length ? { assets } : {}),
+          ...(assembly ? { assembly } : {}),
         });
       }
     }
 
+    if (doc.engine === "build123d" && typeof doc.script === "string")
+      return pythonCadDoc(doc.script);
+
     // v4 single-script Zoo docs
-    if (
-      (doc.version === 4 || doc.engine === "zoo") &&
-      typeof doc.script === "string" &&
-      doc.script.trim()
-    ) {
+    if ((doc.version === 4 || doc.engine === "zoo") && typeof doc.script === "string") {
       return cadDoc(doc.script);
     }
 
@@ -926,5 +1300,5 @@ export function normalizeCadDoc(raw: unknown): CadDoc {
       );
     }
   }
-  return cadDoc(DEFAULT_KCL);
+  return pythonCadDoc();
 }

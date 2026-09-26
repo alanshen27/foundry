@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
+  ArrowUp,
+  ArrowUpRight,
   AtSign,
   Camera,
   ChevronDown,
@@ -21,7 +23,6 @@ import {
   ListChecks,
   Loader2,
   Package,
-  Send,
   Sparkles,
   Square,
   Wrench,
@@ -29,7 +30,6 @@ import {
 } from "lucide-react";
 import type { UIMessage } from "ai";
 import { usePathname } from "next/navigation";
-import { AnimatedSignalGlyph } from "@/components/animated-signal-glyph";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -48,7 +48,17 @@ import {
   type CadProgressLogEntry,
 } from "@/lib/copilot/cad-progress";
 import { useCadProgress, useCadProgressLog } from "./cad-progress-context";
-import { isAssistantFailureText } from "@/lib/copilot/messages";
+import { CANCELLED_TOOL_ERROR_TEXT, isAssistantFailureText } from "@/lib/copilot/messages";
+import { shouldShowStandaloneChatError } from "@/lib/copilot/failure-banner";
+import {
+  CHAT_SIDEBAR_DEFAULT_WIDTH,
+  CHAT_SIDEBAR_MIN_WIDTH,
+  CHAT_SIDEBAR_STORAGE_KEY,
+  clampChatSidebarWidth,
+  keyboardChatSidebarWidth,
+  maxChatSidebarWidth,
+  readChatSidebarWidth,
+} from "@/lib/copilot/sidebar-width";
 import {
   isMessageDeleted,
   isOwnUserMessage,
@@ -74,6 +84,24 @@ const TOOL_META: Record<
   string,
   { doing: string; done: string; failed: string; icon: typeof Sparkles }
 > = {
+  get_engineering_status: {
+    doing: "Checking connected design",
+    done: "Checked design readiness",
+    failed: "Could not check design readiness",
+    icon: ClipboardCheck,
+  },
+  sync_pcb_to_cad: {
+    doing: "Updating CAD from boards",
+    done: "Updated board geometry",
+    failed: "Board geometry needs review",
+    icon: CircuitBoard,
+  },
+  build_linked_assembly: {
+    doing: "Building linked assembly",
+    done: "Built linked assembly",
+    failed: "Assembly needs review",
+    icon: Boxes,
+  },
   get_project_state: {
     doing: "Reading project",
     done: "Read project state",
@@ -177,7 +205,7 @@ const TOOL_META: Record<
     icon: Boxes,
   },
   text_to_cad: {
-    doing: "Generating CAD (Zoo)",
+    doing: "Generating CAD (Astra)",
     done: "Generated the 3D model",
     failed: "CAD generation failed",
     icon: Boxes,
@@ -320,11 +348,16 @@ function toolPartRunning(part: ToolPart): boolean {
 }
 
 function toolPartFailed(part: ToolPart): boolean {
+  if (toolPartCancelled(part)) return false;
   if (part.state === "output-error") return true;
   return (
     part.state === "output-available" &&
     typeof (part.output as Record<string, unknown> | undefined)?.error === "string"
   );
+}
+
+function toolPartCancelled(part: ToolPart): boolean {
+  return part.state === "output-error" && part.errorText === CANCELLED_TOOL_ERROR_TEXT;
 }
 
 /** Compact detail line for an edit confirmation, derived from tool output. */
@@ -409,25 +442,21 @@ function toolImages(part: ToolPart): string[] {
  */
 export function CopilotThinkingRow({ className }: { className?: string }) {
   return (
-    <div className={cn("text-muted-foreground flex items-center gap-2.5", className)}>
-      <AnimatedSignalGlyph
-        seed="copilot-thinking"
-        rows={3}
-        cols={16}
-        fontSize={8}
-        color="currentColor"
-        className="opacity-80"
-      />
-      <span className="animate-pulse font-mono text-[11px] tracking-[0.08em] uppercase">
-        thinking…
-      </span>
+    <div
+      className={cn(
+        "text-muted-foreground flex items-center gap-2 font-mono text-[10px] tracking-[0.08em] uppercase",
+        className,
+      )}
+    >
+      <Loader2 className="size-3 animate-spin" aria-hidden />
+      <span>Thinking…</span>
     </div>
   );
 }
 
 /**
- * Phase + ticking elapsed + Zoo's latest narration for a running CAD tool.
- * Zoo generations take minutes; a bare spinner is indistinguishable from a
+ * Phase + ticking elapsed + Astra's latest progress for a running CAD tool.
+ * Astra generations take minutes; a bare spinner is indistinguishable from a
  * hung request.
  */
 function CadProgressLine({ toolCallId }: { toolCallId: string | undefined }) {
@@ -445,9 +474,9 @@ function CadProgressLine({ toolCallId }: { toolCallId: string | undefined }) {
   if (!progress) return null;
 
   return (
-    <span className="text-muted-foreground/80 block text-[11px]">
+    <span className="text-muted-foreground mt-0.5 block text-[11px] leading-relaxed">
       <span className="font-mono tabular-nums">
-        {CAD_PHASE_LABEL[progress.phase]} · {formatElapsed(now - progress.startedAt)}
+        {CAD_PHASE_LABEL[progress.phase]} · {formatElapsed(now - progress.startedAt)} total
       </span>
       {progress.note ? (
         <span className="block truncate" title={progress.note}>
@@ -472,10 +501,11 @@ function CadProgressTimeline({ entries }: { entries: CadProgressLogEntry[] }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="text-muted-foreground/70 hover:text-foreground/80 flex items-center gap-0.5 font-mono text-[10px] tracking-[0.06em] uppercase"
+        aria-expanded={open}
+        className="text-muted-foreground hover:text-foreground focus-visible:ring-ring flex items-center gap-0.5 rounded-none py-0.5 font-mono text-[10px] tracking-[0.04em] uppercase outline-none focus-visible:ring-2"
       >
         <Chevron className="size-3" />
-        timeline ({entries.length})
+        Timeline ({entries.length})
       </button>
       {open ? (
         <ol
@@ -483,9 +513,12 @@ function CadProgressTimeline({ entries }: { entries: CadProgressLogEntry[] }) {
           style={{ scrollbarWidth: "thin", scrollbarColor: "var(--border) transparent" }}
         >
           {entries.map((entry, i) => (
-            <li key={`${entry.at}-${i}`} className="text-muted-foreground/80 text-[10px]">
+            <li
+              key={`${entry.at}-${i}`}
+              className="text-muted-foreground text-[11px] leading-relaxed"
+            >
               <span className="font-mono tabular-nums">+{formatElapsed(entry.at - t0)}</span>{" "}
-              <span className="text-foreground/60">{CAD_PHASE_LABEL[entry.phase]}</span>
+              <span className="text-foreground/80">{CAD_PHASE_LABEL[entry.phase]}</span>
               {entry.note ? (
                 <span className="block break-words text-foreground/60">
                   <Markdown text={entry.note} />
@@ -509,7 +542,7 @@ function LiveCadProgressTimeline({ toolCallId }: { toolCallId: string | undefine
 /** Tool rows stay unboxed; failures are red text only (no card / tint fill). */
 function toolRowClass(failed: boolean): string {
   return cn(
-    "flex flex-col gap-1.5 py-1.5 pl-0.5 text-xs",
+    "flex flex-col gap-1 py-1.5 text-xs leading-relaxed",
     failed ? "text-destructive" : "text-muted-foreground",
   );
 }
@@ -532,19 +565,26 @@ export function ToolCard({ part }: { part: ToolPart }) {
       ? String((part.output as Record<string, unknown>).error)
       : null;
   const failed = toolPartFailed(part);
+  const cancelled = toolPartCancelled(part);
   const detail =
     part.state === "output-error"
       ? (part.errorText ?? "failed")
       : (softError ?? toolDetail(name, part));
   const images = toolImages(part);
-  const title = running ? meta.doing : failed ? meta.failed : meta.done;
+  const title = running
+    ? meta.doing
+    : cancelled
+      ? `Stopped: ${name.replaceAll("_", " ")}`
+      : failed
+        ? meta.failed
+        : meta.done;
 
   return (
     <div className={toolRowClass(failed)}>
       <div className="flex items-center gap-2">
         <Icon className="size-3.5 shrink-0 opacity-70" />
         <div className="min-w-0 flex-1">
-          <span className={cn("font-medium", !failed && "text-foreground/70")}>{title}</span>
+          <span className={cn(!failed && "text-foreground/75")}>{title}</span>
           {detail ? (
             <span
               className={cn(
@@ -573,6 +613,8 @@ export function ToolCard({ part }: { part: ToolPart }) {
         </div>
         {running ? (
           <Loader2 className="size-3.5 shrink-0 animate-spin opacity-60" />
+        ) : cancelled ? (
+          <Square className="size-3.5 shrink-0 opacity-60" />
         ) : failed ? (
           <XCircle className="size-3.5 shrink-0" />
         ) : (
@@ -603,13 +645,27 @@ export function ToolCallGroup({ parts }: { parts: ToolPart[] }) {
   // Single tool keeps the detailed card; batches collapse to one summary row.
   if (parts.length === 1) return <ToolCard part={parts[0]!} />;
 
-  const running = parts.some(toolPartRunning);
+  const runningCount = parts.filter(toolPartRunning).length;
+  const running = runningCount > 0;
   const failedCount = parts.filter(toolPartFailed).length;
+  const cancelledCount = parts.filter(toolPartCancelled).length;
   const images = parts.flatMap(toolImages);
   const n = parts.length;
 
   let title: string;
-  if (running) title = `Working ${n} tools`;
+  if (running) {
+    const doneCount = n - runningCount - failedCount - cancelledCount;
+    title = [
+      `${runningCount} running`,
+      doneCount ? `${doneCount} done` : null,
+      failedCount ? `${failedCount} failed` : null,
+      cancelledCount ? `${cancelledCount} stopped` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  } else if (cancelledCount === n) title = `Stopped ${n} tools`;
+  else if (cancelledCount > 0)
+    title = `Worked ${n - cancelledCount} tool${n - cancelledCount === 1 ? "" : "s"} · ${cancelledCount} stopped${failedCount ? ` · ${failedCount} failed` : ""}`;
   else if (failedCount === n) title = `Failed ${n} tools`;
   else if (failedCount > 0) title = `Worked ${n} tools · ${failedCount} failed`;
   else title = `Worked ${n} tools`;
@@ -619,21 +675,29 @@ export function ToolCallGroup({ parts }: { parts: ToolPart[] }) {
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center gap-2 text-left"
+        aria-expanded={expanded}
+        className="hover:text-foreground focus-visible:ring-ring flex w-full items-center gap-2 rounded-none text-left outline-none focus-visible:ring-2"
       >
         <Wrench className="size-3.5 shrink-0 opacity-70" />
-        <span
-          className={cn("min-w-0 flex-1 font-medium", failedCount === 0 && "text-foreground/70")}
-        >
+        <span className={cn("min-w-0 flex-1", failedCount === 0 && "text-foreground/75")}>
           {title}
         </span>
         {running ? (
           <Loader2 className="size-3.5 shrink-0 animate-spin opacity-60" />
+        ) : cancelledCount > 0 ? (
+          <Square className="size-3.5 shrink-0 opacity-60" />
         ) : failedCount > 0 ? (
           <XCircle className="size-3.5 shrink-0" />
         ) : (
           <CheckCircle2 className="size-3.5 shrink-0 opacity-50" />
         )}
+        <ChevronDown
+          className={cn(
+            "size-3 shrink-0 opacity-60 transition-transform",
+            expanded && "rotate-180",
+          )}
+          aria-hidden
+        />
       </button>
       {!expanded && running
         ? parts
@@ -646,7 +710,7 @@ export function ToolCallGroup({ parts }: { parts: ToolPart[] }) {
             ))
         : null}
       {expanded ? (
-        <div className="border-border/60 ml-1.5 flex flex-col border-l pl-0.5">
+        <div className="border-border ml-1.5 flex flex-col border-l border-dotted pl-3">
           {parts.map((part, i) => (
             <ToolCard
               key={
@@ -702,14 +766,14 @@ export function Message({
     return (
       <div className={cn("group relative flex flex-col gap-1", own ? "items-end" : "items-start")}>
         {!own ? (
-          <span className="text-muted-foreground px-0.5 font-mono text-[10px] tracking-[0.04em]">
+          <span className="text-muted-foreground px-0.5 font-mono text-[10px] tracking-[0.08em] uppercase">
             {authorName}
             {meta.editedAt && !deleted ? " · edited" : ""}
           </span>
         ) : meta.editedAt && !deleted ? (
           <span className="text-muted-foreground px-0.5 font-mono text-[10px]">edited</span>
         ) : null}
-        <div className="relative max-w-[92%]">
+        <div className="relative max-w-[94%]">
           {!deleted ? (
             <MessageActionBar
               message={message}
@@ -732,16 +796,16 @@ export function Message({
               }}
             />
           ) : deleted ? (
-            <div className="bg-muted/40 text-muted-foreground rounded-none px-3.5 py-2.5 text-sm italic">
+            <div className="bg-muted/25 text-muted-foreground rounded-none border border-dotted px-3 py-2 text-[13px] italic">
               Message deleted
             </div>
           ) : (
             <div
               className={cn(
-                "rounded-none px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
+                "text-foreground rounded-none border px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap",
                 own
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted/70 text-foreground border-border border",
+                  ? "border-border border-l-2 border-l-foreground/40 bg-muted/25"
+                  : "border-border bg-card/60",
               )}
             >
               {message.parts.map((part, i) =>
@@ -751,10 +815,7 @@ export function Message({
                       seg.kind === "mention" ? (
                         <span
                           key={j}
-                          className={cn(
-                            "inline-flex items-center rounded-none px-1 font-medium",
-                            own ? "bg-primary-foreground/20" : "bg-primary/15 text-primary",
-                          )}
+                          className="bg-primary/10 text-primary inline-flex items-center rounded-none px-0.5 font-medium"
                         >
                           {seg.text}
                         </span>
@@ -786,7 +847,7 @@ export function Message({
   const showFailed = Boolean(failed) || stampedFailed;
 
   return (
-    <div className="group relative flex max-w-[95%] flex-col gap-1.5">
+    <div className="group relative flex min-w-0 flex-col gap-1.5">
       {!deleted ? (
         <MessageActionBar
           message={message}
@@ -814,7 +875,7 @@ export function Message({
           return (
             <div
               key={block.key}
-              className="bg-muted/60 text-foreground rounded-none px-3.5 py-2.5 text-sm leading-relaxed"
+              className="text-foreground min-w-0 py-1 text-[13px] leading-relaxed"
             >
               <Markdown text={block.part.text} />
             </div>
@@ -830,9 +891,7 @@ export function Message({
             Failed
           </p>
         ) : (
-          <div className="bg-muted/60 text-muted-foreground rounded-none px-3.5 py-2.5 text-xs">
-            Working…
-          </div>
+          <div className="text-muted-foreground py-1 text-xs">Working…</div>
         )
       ) : showFailed && !stampedFailed ? (
         <p className="text-destructive flex items-center gap-1.5 text-[11px]">
@@ -883,27 +942,30 @@ export function ChatSidebar() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const [width, setWidth] = useState(400);
+  const [width, setWidth] = useState(CHAT_SIDEBAR_DEFAULT_WIDTH);
+  const [viewportWidth, setViewportWidth] = useState(1440);
   const [isResizing, setIsResizing] = useState(false);
+  const [hasResized, setHasResized] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem("foundry:chat-width");
-    if (saved) {
-      const parsed = parseInt(saved, 10);
-      if (!isNaN(parsed) && parsed >= 300 && parsed <= 1200) {
-        setWidth(parsed);
-      }
+    try {
+      setWidth(readChatSidebarWidth(localStorage.getItem(CHAT_SIDEBAR_STORAGE_KEY)));
+    } catch {
+      // The sidebar remains usable when the browser blocks local storage.
     }
+    const onResize = () => setViewportWidth(document.documentElement.clientWidth);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   useEffect(() => {
     if (!isResizing) return;
 
     function onMouseMove(e: MouseEvent) {
-      const newWidth = document.documentElement.clientWidth - e.clientX;
-      if (newWidth >= 300 && newWidth <= 1200) {
-        setWidth(newWidth);
-      }
+      const viewport = document.documentElement.clientWidth;
+      setWidth(clampChatSidebarWidth(viewport - e.clientX, viewport));
+      setHasResized(true);
     }
 
     function onMouseUp() {
@@ -920,10 +982,16 @@ export function ChatSidebar() {
   }, [isResizing]);
 
   useEffect(() => {
-    if (!isResizing) {
-      localStorage.setItem("foundry:chat-width", width.toString());
+    // Save only deliberate resizing. Loading or narrowing the window must not
+    // overwrite a preferred width before it has been restored from storage.
+    if (!isResizing && hasResized) {
+      try {
+        localStorage.setItem(CHAT_SIDEBAR_STORAGE_KEY, width.toString());
+      } catch {
+        // Resizing still works for this session without persistent storage.
+      }
     }
-  }, [isResizing, width]);
+  }, [hasResized, isResizing, width]);
 
   // Notes (no @AI) stay sendable; Stop only appears while an @AI run is busy.
   const canSend = Boolean(input.trim()) && !busy;
@@ -959,7 +1027,7 @@ export function ChatSidebar() {
 
   function trySend() {
     if (!canSend) return;
-    send(input, replyingTo ? { replyToId: replyingTo.id } : undefined);
+    if (!send(input, replyingTo ? { replyToId: replyingTo.id } : undefined)) return;
     setInput("");
     setCaret(0);
   }
@@ -1006,69 +1074,85 @@ export function ChatSidebar() {
     <aside
       aria-label="AI copilot"
       className={cn(
-        "bg-card/40 relative flex shrink-0 flex-col border-l backdrop-blur-sm",
+        "bg-background border-border absolute inset-y-0 right-0 z-30 flex max-w-[min(600px,calc(100vw_-_24px))] shrink-0 flex-col border-l shadow-lg lg:relative lg:z-auto lg:max-w-[min(44vw,600px)] lg:shadow-none",
         isResizing && "select-none",
       )}
       style={{ width }}
     >
       <div
-        className="absolute top-0 bottom-0 left-0 z-50 w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-primary/50"
+        role="separator"
+        tabIndex={0}
+        aria-label="Resize chat sidebar"
+        aria-orientation="vertical"
+        aria-valuemin={Math.min(CHAT_SIDEBAR_MIN_WIDTH, maxChatSidebarWidth(viewportWidth))}
+        aria-valuemax={maxChatSidebarWidth(viewportWidth)}
+        aria-valuenow={clampChatSidebarWidth(width, viewportWidth)}
+        className="hover:bg-primary/50 focus-visible:bg-primary/50 absolute top-0 bottom-0 left-0 z-50 w-1.5 -translate-x-1/2 cursor-col-resize outline-none transition-colors"
         onMouseDown={() => setIsResizing(true)}
+        onKeyDown={(event) => {
+          const nextWidth = keyboardChatSidebarWidth(
+            width,
+            event.key,
+            document.documentElement.clientWidth,
+          );
+          if (nextWidth === null) return;
+          event.preventDefault();
+          setWidth(nextWidth);
+          setHasResized(true);
+        }}
       />
-      <div className="relative z-10 flex h-9 shrink-0 items-center gap-2 border-b px-2.5">
+      <div className="border-border relative z-10 flex h-10 shrink-0 items-center gap-2 border-b px-2.5">
         <ChannelSwitcher />
         <ProposalInboxTrigger projectId={projectId} branchId={branchId} />
+        <span className="text-muted-foreground ml-auto flex shrink-0 items-center gap-1.5 font-mono text-[10px] tracking-[0.08em] uppercase">
+          <span
+            aria-hidden
+            className={cn("size-1.5", busy ? "bg-primary animate-pulse" : "bg-muted-foreground/45")}
+          />
+          {busy ? "Working" : "Ready"}
+        </span>
         <Button
           type="button"
           variant="ghost"
           size="icon-sm"
-          className="ml-auto size-7"
+          className="text-muted-foreground size-7"
           onClick={() => openChatPopout(pathname)}
           aria-label="Open chat in a new window"
           title="Open in a new window"
         >
           <ExternalLink className="size-3.5" />
         </Button>
-        <span className="text-muted-foreground shrink-0 font-mono text-[11px] tracking-[0.04em]">
-          {busy ? "working…" : "ready"}
-        </span>
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+        <div
+          ref={scrollRef}
+          className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-5"
+        >
           {messages.length === 0 ? (
-            <div className="mt-6 flex flex-col items-center gap-4 text-center">
-              <div className="bg-primary relative flex h-20 w-full items-center justify-center overflow-hidden">
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute inset-0 opacity-30"
-                  style={{
-                    backgroundImage: "radial-gradient(circle, #faf9f5 0.55px, transparent 0.65px)",
-                    backgroundSize: "3.5px 3.5px",
-                  }}
-                />
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-70">
-                  <AnimatedSignalGlyph seed="copilot-idle" rows={9} cols={34} fontSize={7} />
-                </div>
-                <Sparkles className="relative z-10 size-5 text-[#faf9f5]" />
+            <div className="mt-4 flex flex-col items-start gap-4">
+              <div className="border-border flex size-9 items-center justify-center rounded-none border bg-[radial-gradient(var(--border)_0.75px,transparent_0.75px)] bg-[size:4px_4px]">
+                <Sparkles className="text-primary size-4" />
               </div>
               <div>
-                <p className="font-mono text-sm font-medium tracking-[0.04em]">Foundry Copilot</p>
-                <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
-                  Mention <span className="text-foreground font-medium">@AI</span> to ask the
-                  copilot — it fills out the brief, requirements, BOM, circuit, 3D model, and
-                  checks.
+                <p className="font-mono text-[11px] font-medium tracking-[0.1em] uppercase">
+                  Build with Copilot
+                </p>
+                <p className="text-muted-foreground mt-1.5 text-xs leading-relaxed">
+                  Mention <span className="text-primary font-medium">@AI</span> to ask the copilot
+                  to design, build, or check your project.
                 </p>
               </div>
-              <div className="flex w-full flex-col gap-2">
+              <div className="border-border flex w-full flex-col divide-y divide-dotted border-y border-dotted">
                 {SUGGESTIONS.map((s) => (
                   <button
                     key={s}
                     type="button"
                     disabled={busy}
                     onClick={() => send(s)}
-                    className="border-border/70 hover:bg-muted/50 rounded-none border px-3 py-2 text-left text-xs transition-colors disabled:pointer-events-none disabled:opacity-50"
+                    className="text-muted-foreground hover:text-foreground hover:bg-muted/40 focus-visible:ring-ring flex items-center gap-3 px-1 py-3 text-left text-xs leading-relaxed outline-none transition-colors focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50"
                   >
-                    {s}
+                    <span className="flex-1">{s.replace(/^@AI /, "")}</span>
+                    <ArrowUpRight className="size-3.5 shrink-0" aria-hidden />
                   </button>
                 ))}
               </div>
@@ -1093,7 +1177,7 @@ export function ChatSidebar() {
           {busy && messages[messages.length - 1]?.role === "user" ? (
             <CopilotThinkingRow className="py-1" />
           ) : null}
-          {error ? (
+          {error && shouldShowStandaloneChatError(messages, error) ? (
             <p className="text-destructive text-xs leading-relaxed">
               {error.message.includes("OPENAI_API_KEY") || error.message.includes("not configured")
                 ? "AI is not configured. Add OPENAI_API_KEY to the root .env and restart the dev server."
@@ -1104,7 +1188,7 @@ export function ChatSidebar() {
           ) : null}
         </div>
 
-        <form onSubmit={onSubmit} className="shrink-0 border-t p-3">
+        <form onSubmit={onSubmit} className="border-border shrink-0 border-t border-dotted p-3">
           <div className="relative">
             {replyingTo ? (
               <ReplyPreviewBar message={replyingTo} onClear={() => setReplyingTo(null)} />
@@ -1113,7 +1197,7 @@ export function ChatSidebar() {
               <div
                 role="listbox"
                 aria-label="Mentions"
-                className="bg-popover absolute bottom-full left-0 z-20 mb-2 w-full overflow-hidden rounded-none border shadow-lg"
+                className="bg-background absolute bottom-full left-0 z-20 mb-2 w-full overflow-hidden rounded-none border shadow-md"
               >
                 {mentionOptions.map((option, i) => (
                   <button
@@ -1126,11 +1210,11 @@ export function ChatSidebar() {
                       applyMention(option);
                     }}
                     className={cn(
-                      "flex w-full items-center gap-2 px-3 py-2 text-left text-sm",
-                      i === mentionIndex ? "bg-muted" : "hover:bg-muted/60",
+                      "flex w-full items-center gap-2 px-3 py-2 text-left text-[13px]",
+                      i === mentionIndex ? "bg-primary/10" : "hover:bg-muted/40",
                     )}
                   >
-                    <AtSign className="text-primary size-3.5 shrink-0" />
+                    <AtSign className="text-muted-foreground size-3.5 shrink-0" />
                     <span className="min-w-0 flex-1">
                       <span className="font-medium">{option.label}</span>
                       <span className="text-muted-foreground ml-2 text-xs">
@@ -1145,7 +1229,7 @@ export function ChatSidebar() {
               </div>
             ) : null}
 
-            <div className="bg-background focus-within:border-ring focus-within:ring-ring/50 flex items-end gap-2 rounded-none border p-2 focus-within:ring-3">
+            <div className="bg-background border-foreground/25 focus-within:border-foreground focus-within:ring-foreground/10 flex items-end gap-2 rounded-none border p-2.5 transition-colors focus-within:ring-1">
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -1159,32 +1243,39 @@ export function ChatSidebar() {
                 onKeyDown={onKeyDown}
                 placeholder={
                   busy
-                    ? "Draft next message… stop to cancel the reply"
+                    ? "Draft your next message…"
                     : replyingTo
                       ? `Reply to ${messageDisplayName(replyingTo)}`
-                      : "Message… type @ to mention AI"
+                      : "Message or @AI…"
                 }
                 rows={2}
-                className="placeholder:text-muted-foreground max-h-40 flex-1 resize-none bg-transparent text-sm outline-none"
+                className="placeholder:text-muted-foreground max-h-40 min-w-0 flex-1 resize-none bg-transparent text-[13px] leading-relaxed outline-none"
                 aria-label="Copilot message"
               />
               {busy ? (
                 <Button
                   type="button"
                   size="icon-sm"
-                  variant="default"
+                  variant="outline"
+                  className="border-foreground/30 text-foreground size-7 shrink-0 rounded-none"
                   onClick={(e) => {
                     e.preventDefault();
                     stop();
                   }}
                   aria-label="Stop stream"
-                  title="Stop"
+                  title="Stop reply"
                 >
                   <Square className="size-3 fill-current" />
                 </Button>
               ) : (
-                <Button type="submit" size="icon-sm" disabled={!canSend} aria-label="Send">
-                  <Send className="size-3.5" />
+                <Button
+                  type="submit"
+                  size="icon-sm"
+                  className="size-7 shrink-0 rounded-none"
+                  disabled={!canSend}
+                  aria-label="Send"
+                >
+                  <ArrowUp className="size-3.5" />
                 </Button>
               )}
             </div>

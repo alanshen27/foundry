@@ -17,7 +17,7 @@ const PLACEHOLDER =
   "Describe a part or assembly, e.g. “A 40mm x 40mm x 10mm mounting bracket with four 4mm corner holes”";
 
 const PHASE_LABEL: Record<CadLabPhase, string> = {
-  generate: "Generating on Zoo",
+  generate: "Generating with Astra",
   execute: "Executing KCL in the engine",
   snapshot: "Rendering snapshots",
 };
@@ -27,7 +27,7 @@ type Run = {
   prompt: string;
   startedAt: number;
   phase: CadLabPhase;
-  /** Latest narration from Zoo, so a long run shows what it is doing. */
+  /** Latest progress from Astra, so a long run shows what it is doing. */
   note?: string;
   result?: CadLabResponse;
 };
@@ -218,9 +218,9 @@ export function CadLabClient() {
         <Badge variant="outline">DEV ONLY</Badge>
       </div>
       <p className="text-sm text-muted-foreground">
-        One prompt → Zoo ML text-to-CAD → engine-rendered snapshots. Requires{" "}
-        <code>ZOO_API_TOKEN</code> and <code>uvx</code> on PATH. Output is raw engine/ML output —
-        UNVERIFIED, not engineering evidence.
+        One prompt → GPT-6 Astra generates KCL → engine-rendered snapshots. Requires{" "}
+        <code>OPENAI_API_KEY</code>, <code>ZOO_API_TOKEN</code>, and <code>uvx</code> on PATH.
+        Generated output is UNVERIFIED, not engineering evidence.
       </p>
 
       <div className="space-y-2">

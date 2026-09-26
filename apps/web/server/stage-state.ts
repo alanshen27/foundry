@@ -1,5 +1,12 @@
 import { prisma } from "@foundry/db";
-import { canTransitionStage, STAGES, type Stage, type StageStatus } from "@foundry/domain";
+import {
+  canTransitionStage,
+  STAGES,
+  VERIFICATION_RERUN_STATUSES,
+  verificationResetForEngineeringChange,
+  type Stage,
+  type StageStatus,
+} from "@foundry/domain";
 import { recordAudit } from "./audit";
 import { createLogger } from "@foundry/observability";
 
@@ -34,7 +41,10 @@ export async function setStageStatus(params: {
 
   await prisma.stageState.update({
     where: { id: state.id },
-    data: { status: params.to },
+    data: {
+      status: params.to,
+      ...(params.to !== "APPROVED" ? { approvedById: null, approvedAt: null } : {}),
+    },
   });
   await recordAudit({
     type: "StageStatusChanged",
@@ -45,6 +55,27 @@ export async function setStageStatus(params: {
     payload: { stage: params.stage, from, to: params.to },
   });
   return true;
+}
+
+/** An approved snapshot must be reviewed again after its own content changes. */
+export async function invalidateStageApproval(params: {
+  workspaceId: string;
+  projectId: string;
+  branchId: string;
+  stage: Stage;
+  actorId: string;
+}): Promise<boolean> {
+  const state = await prisma.stageState.findUnique({
+    where: {
+      projectId_branchId_stage: {
+        projectId: params.projectId,
+        branchId: params.branchId,
+        stage: params.stage,
+      },
+    },
+  });
+  if (state?.status !== "APPROVED") return false;
+  return setStageStatus({ ...params, to: "STALE" });
 }
 
 /**
@@ -86,6 +117,31 @@ export async function markDownstreamStale(params: {
   changedStage: Stage;
   actorId: string;
 }): Promise<Stage[]> {
+  if (params.changedStage === "ENGINEER") {
+    const reset = await prisma.validationCheck.updateMany({
+      where: {
+        projectId: params.projectId,
+        branchId: params.branchId,
+        OR: [{ status: { in: [...VERIFICATION_RERUN_STATUSES] } }, { waived: true }],
+      },
+      data: verificationResetForEngineeringChange(),
+    });
+    if (reset.count > 0) {
+      await recordAudit({
+        type: "ValidationCheckUpdated",
+        workspaceId: params.workspaceId,
+        projectId: params.projectId,
+        branchId: params.branchId,
+        actorId: params.actorId,
+        payload: {
+          action: "source_changed",
+          changedStage: "ENGINEER",
+          resetCount: reset.count,
+          status: "PENDING",
+        },
+      });
+    }
+  }
   const downstream = STAGES.slice(STAGES.indexOf(params.changedStage) + 1);
   if (downstream.length === 0) return [];
 

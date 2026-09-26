@@ -46,6 +46,12 @@ importers:
       '@hocuspocus/server':
         specifier: ^2.15.2
         version: 2.15.3(y-protocols@1.0.7(yjs@13.6.31))(yjs@13.6.31)
+      lib0:
+        specifier: ^0.2.114
+        version: 0.2.117
+      yjs:
+        specifier: ^13.6.31
+        version: 13.6.31
     devDependencies:
       '@types/node':
         specifier: ^22.10.5
@@ -59,6 +65,9 @@ importers:
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(jsdom@25.0.1)(lightningcss@1.32.0)
 
   apps/web:
     dependencies:
@@ -307,6 +316,9 @@ importers:
       ws:
         specifier: ^8.21.1
         version: 8.21.1
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^22.10.5
@@ -322,6 +334,25 @@ importers:
         version: 2.1.9(@types/node@22.20.1)(jsdom@25.0.1)(lightningcss@1.32.0)
 
   packages/collaboration:
+    dependencies:
+      '@foundry/config':
+        specifier: workspace:*
+        version: link:../config
+      '@foundry/db':
+        specifier: workspace:*
+        version: link:../db
+      '@foundry/domain':
+        specifier: workspace:*
+        version: link:../domain
+      diff:
+        specifier: ^8.0.4
+        version: 8.0.4
+      ioredis:
+        specifier: ^5.11.1
+        version: 5.11.1
+      yjs:
+        specifier: ^13.6.31
+        version: 13.6.31
     devDependencies:
       '@types/node':
         specifier: ^22.10.5

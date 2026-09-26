@@ -56,7 +56,7 @@ the task explicitly changes them.
 - `packages/storage`: Supabase object storage
 - `packages/realtime`: Supabase presence
 - `packages/collaboration`: Yjs persistence and document helpers
-- `packages/cad`: Zoo/KittyCAD and KCL integration
+- `packages/cad`: Astra Python generation and sandboxed build123d/OpenCascade geometry
 - `packages/media`: product image/video generation
 - `packages/sites`: v0 storefront generation and deployment
 - `packages/commerce`: Shopify Storefront integration
@@ -76,7 +76,9 @@ the task explicitly changes them.
 
 - Presence uses Supabase Realtime behind `RealtimePort`.
 - `NEXT_PUBLIC_REALTIME_MODE=off` disables remote presence.
-- Engineer > Code uses Yjs/Hocuspocus multiplayer Monaco.
+- Code, schematic, PCB, CAD/assembly metadata, and design notes use durable Yjs/Hocuspocus documents.
+- API and AI writes must update CRDT state and the SQL read model atomically through the collaboration bridge; never replace SQL behind a live room.
+- Apply the additive CollaborationDocument migration before running updated web/worker/realtime services, even when websocket collaboration is disabled.
 - Without `NEXT_PUBLIC_COLLAB_URL`, the editor falls back to single-player
   autosave.
 
@@ -89,11 +91,20 @@ the task explicitly changes them.
 
 ### Mechanical CAD
 
-- Zoo/KittyCAD is isolated behind `CadPort`; live use requires `ZOO_API_TOKEN`.
-- KCL is the source representation for parts and assemblies.
-- `parts/*` contains manufacturing/fabrication KCL.
-- `assembly/product.kcl` is the product preview.
-- Assembly generation may use Zoo MCP through `uvx zoo-mcp`.
+- Native generation uses `createPythonCadAdapter`; local evaluation uses `runPythonCad`.
+- Generation requires `OPENAI_API_KEY`; `CAD_MODEL` defaults to `gpt-6-astra`.
+- Zoo is disabled in application entry points, regardless of old configured tokens.
+- Preserve existing KCL source. New parts use identifier-safe `parts/name/main.py` paths;
+  linked assemblies use `assembly/product.py`. Never relabel KCL as Python.
+- The final `result` is a build123d Shape or Builder. Validate nonempty OCCT solids
+  before saving generated source; STEP comes directly from the exact shape.
+- The Three.js viewport renders local STL, or canonical imported STL/GLB directly.
+- Authorization must precede geometry caches and private asset reads. Keep Python
+  execution inside the OS sandbox; unsupported hosts fail closed.
+- Draft Python streams through collaboration but never executes while incomplete.
+- Linked assemblies import actual native parts with explicit instance transforms;
+  origin placement does not solve mates or establish fit. Report excluded legacy parts.
+- See `docs/runbooks/native-python-cad.md` for limits and local runtime setup.
 
 ### Launch media
 

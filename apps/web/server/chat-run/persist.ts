@@ -7,7 +7,13 @@
  */
 import { prisma, type Prisma } from "@foundry/db";
 import { readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai";
-import { markFailedAssistantMessages } from "@/lib/copilot/messages";
+import {
+  ASSISTANT_CANCELLED_TEXT,
+  CANCELLED_TOOL_ERROR_TEXT,
+  markCancelledAssistantMessages,
+  markFailedAssistantMessages,
+  mergeTranscriptPreferringUserTurns,
+} from "@/lib/copilot/messages";
 import {
   historyRowToUIMessage,
   readChatMeta,
@@ -200,14 +206,40 @@ export function messagePartsScore(parts: unknown): number {
   return score;
 }
 
-function preferIncomingParts(existing: unknown, incoming: unknown): boolean {
-  return messagePartsScore(incoming) >= messagePartsScore(existing);
+function mergeMessageParts(message: UIMessage, existing: unknown): UIMessage["parts"] {
+  if (!Array.isArray(existing)) return message.parts;
+  const completed = new Map(
+    message.parts.flatMap((part) =>
+      (part.type.startsWith("tool-") || part.type === "dynamic-tool") &&
+      "state" in part &&
+      part.state === "output-available" &&
+      "toolCallId" in part
+        ? [[part.toolCallId, part] as const]
+        : [],
+    ),
+  );
+  const stored = {
+    ...message,
+    parts: (existing as UIMessage["parts"]).map((part) =>
+      "toolCallId" in part && "errorText" in part && part.errorText === CANCELLED_TOOL_ERROR_TEXT
+        ? (completed.get(part.toolCallId) ?? part)
+        : part,
+    ),
+  };
+  // Keep completed tools even when a later checkpoint contains a longer draft.
+  const merged = mergeTranscriptPreferringUserTurns([stored], [message])[0] ?? stored;
+  const hasStopped = merged.parts.some(
+    (part) => part.type === "text" && part.text === ASSISTANT_CANCELLED_TEXT,
+  );
+  // A checkpoint can arrive after cancellation with a newly started tool that
+  // wasn't in the cancellation snapshot. A stopped message stays stopped.
+  return hasStopped ? markCancelledAssistantMessages([merged])[0]!.parts : merged.parts;
 }
 
 /**
- * Authoritative write from the chat worker (and client safety net): create or
- * update message parts, but NEVER replace a richer stored body with a thinner
- * one. Also backfills author/reply when the stored row is missing them.
+ * Insert missing messages without overwriting concurrent writes, then merge
+ * against the exact stored body. Compare-and-swap prevents an older checkpoint
+ * that read before cancellation from reviving pending tools afterwards.
  */
 export async function persistRunMessages(
   scope: ChannelScope,
@@ -216,60 +248,65 @@ export async function persistRunMessages(
   const rows = messages.filter((message) => message.id && message.parts.length > 0);
   if (rows.length === 0) return 0;
 
-  const ids = rows.map((m) => m.id);
-  const existing = await prisma.chatMessage.findMany({
-    where: { id: { in: ids } },
-    select: { id: true, parts: true, authorUserId: true, replyToId: true },
-  });
-  const existingById = new Map(existing.map((row) => [row.id, row]));
-
-  const now = Date.now();
-  const ops = [];
-  for (let index = 0; index < rows.length; index++) {
-    const message = rows[index]!;
-    const prev = existingById.get(message.id);
-    const { authorUserId, replyToId } = metaFromMessage(message);
-    if (prev !== undefined && !preferIncomingParts(prev.parts, message.parts)) {
-      // Still backfill authorship if the richer row lacks it.
-      if (authorUserId && !prev.authorUserId) {
-        ops.push(
-          prisma.chatMessage.update({
-            where: { id: message.id },
-            data: {
-              authorUserId,
-              ...(replyToId && !prev.replyToId ? { replyToId } : {}),
-            },
-          }),
-        );
-      }
-      continue;
+  let count = await saveNewMessages(scope, rows);
+  let pending = new Map(rows.map((message) => [message.id, message]));
+  for (let attempt = 0; pending.size > 0 && attempt < 4; attempt++) {
+    const existing = await prisma.chatMessage.findMany({
+      where: { ...scope, id: { in: [...pending.keys()] } },
+      select: { id: true, parts: true, authorUserId: true, replyToId: true },
+    });
+    const writes = [];
+    const attempted: UIMessage[] = [];
+    for (const previous of existing) {
+      const message = pending.get(previous.id)!;
+      const parts = mergeMessageParts(message, previous.parts);
+      const { authorUserId, replyToId } = metaFromMessage(message);
+      const fillAuthor = authorUserId && !previous.authorUserId;
+      const fillReply = replyToId && !previous.replyToId;
+      if (JSON.stringify(parts) === JSON.stringify(previous.parts) && !fillAuthor && !fillReply)
+        continue;
+      attempted.push(message);
+      writes.push(
+        prisma.chatMessage.updateMany({
+          where: {
+            id: message.id,
+            ...scope,
+            parts: { equals: previous.parts as Prisma.InputJsonValue },
+            authorUserId: previous.authorUserId,
+            replyToId: previous.replyToId,
+          },
+          data: {
+            parts: parts as unknown as Prisma.InputJsonValue,
+            ...(fillAuthor ? { authorUserId } : {}),
+            ...(fillReply ? { replyToId } : {}),
+          },
+        }),
+      );
     }
-    ops.push(
-      prisma.chatMessage.upsert({
-        where: { id: message.id },
-        create: {
-          id: message.id,
-          projectId: scope.projectId,
-          branchId: scope.branchId,
-          channelId: scope.channelId,
-          role: message.role,
-          parts: message.parts as unknown as Prisma.InputJsonValue,
-          authorUserId,
-          replyToId,
-          createdAt: new Date(now + index),
-        },
-        update: {
-          parts: message.parts as unknown as Prisma.InputJsonValue,
-          ...(authorUserId ? { authorUserId } : {}),
-          ...(replyToId ? { replyToId } : {}),
-        },
-      }),
-    );
+    if (writes.length === 0) return count;
+    const results = await prisma.$transaction(writes);
+    const retry = new Map<string, UIMessage>();
+    results.forEach((result, index) => {
+      if (result.count > 0) count += result.count;
+      else {
+        const message = attempted[index]!;
+        retry.set(message.id, message);
+      }
+    });
+    pending = retry;
   }
+  if (pending.size > 0)
+    throw new Error("Chat history changed during persistence; retry the checkpoint.");
+  return count;
+}
 
-  if (ops.length === 0) return 0;
-  await prisma.$transaction(ops);
-  return ops.length;
+export async function persistCancelledRunFromEvents(params: {
+  runId: string;
+  scope: ChannelScope;
+  inputMessages: UIMessage[];
+}): Promise<number> {
+  const rebuilt = await rebuildUiMessagesFromRunEvents(params.runId, params.inputMessages);
+  return persistRunMessages(params.scope, markCancelledAssistantMessages(rebuilt));
 }
 
 export async function persistFailedRunFromEvents(params: {
@@ -288,10 +325,62 @@ export async function checkpointRunMessages(params: {
   scope: ChannelScope;
   inputMessages: UIMessage[];
 }): Promise<UIMessage[]> {
-  const rebuilt = await rebuildUiMessagesFromRunEvents(params.runId, params.inputMessages);
+  let rebuilt = await rebuildUiMessagesFromRunEvents(params.runId, params.inputMessages);
+  const run = await prisma.chatRun.findUnique({
+    where: { id: params.runId },
+    select: { status: true, error: true },
+  });
+  if (run?.status === "CANCELLED") rebuilt = markCancelledAssistantMessages(rebuilt);
+  else if (run?.status === "ERROR")
+    rebuilt = markFailedAssistantMessages(rebuilt, run.error ?? "Run failed");
   if (rebuilt === params.inputMessages) return rebuilt;
   await persistRunMessages(params.scope, rebuilt);
   return rebuilt;
+}
+
+function toolCallIds(parts: unknown): string[] {
+  if (!Array.isArray(parts)) return [];
+  return parts.flatMap((part: unknown) => {
+    if (!part || typeof part !== "object") return [];
+    const value = part as Record<string, unknown>;
+    return typeof value.type === "string" &&
+      (value.type.startsWith("tool-") || value.type === "dynamic-tool") &&
+      typeof value.toolCallId === "string" &&
+      value.toolCallId
+      ? [value.toolCallId]
+      : [];
+  });
+}
+
+async function legacyAssistantMessageId(runId: string, message: UIMessage): Promise<string> {
+  const fallback = `assistant_${runId}`;
+  const replayedIds = toolCallIds(message.parts);
+  if (replayedIds.length === 0) return fallback;
+  const run = await prisma.chatRun.findUnique({
+    where: { id: runId },
+    select: { projectId: true, channelId: true },
+  });
+  if (!run) return fallback;
+  // Old SDK streams omitted messageId, while the browser later saved its own
+  // ID. Reuse that row only when the tool-call IDs identify it unambiguously.
+  const candidates = await prisma.chatMessage.findMany({
+    where: {
+      projectId: run.projectId,
+      channelId: run.channelId,
+      role: "assistant",
+      deletedAt: null,
+      parts: { array_contains: [{ toolCallId: replayedIds[0]! }] },
+    },
+    select: { id: true, parts: true },
+  });
+  const matches = candidates.filter((candidate) => {
+    const storedIds = toolCallIds(candidate.parts);
+    if (storedIds.length === 0) return false;
+    const shorter = storedIds.length < replayedIds.length ? storedIds : replayedIds;
+    const longer = storedIds.length < replayedIds.length ? replayedIds : storedIds;
+    return shorter.every((id, index) => longer[index] === id);
+  });
+  return matches.length === 1 ? matches[0]!.id : fallback;
 }
 
 export async function rebuildUiMessagesFromRunEvents(
@@ -323,11 +412,12 @@ export async function rebuildUiMessagesFromRunEvents(
       last = message;
     }
   } catch (err) {
-    log.error("rebuild from events failed", { runId, err });
-    return originalMessages;
+    log.warn("rebuild from events failed", { runId, err });
+    // A malformed final chunk must not erase valid text/tool work replayed so far.
   }
 
   if (!last || last.parts.length === 0) return originalMessages;
+  if (!last.id) last = { ...last, id: await legacyAssistantMessageId(runId, last) };
 
   const tail = originalMessages[originalMessages.length - 1];
   if (tail?.role === "assistant" && tail.id === last.id) {

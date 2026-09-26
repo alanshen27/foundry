@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import {
+  ArrowUp,
   Boxes,
   CheckCircle2,
   Combine,
@@ -14,12 +15,11 @@ import {
   ExternalLink,
   Hash,
   Loader2,
-  Send,
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
-import { AnimatedSignalGlyph } from "@/components/animated-signal-glyph";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export type DemoToolName = "get_project_state" | "text_to_cad" | "add_part_to_assembly";
 
@@ -46,18 +46,9 @@ const TOOL_META: Record<DemoToolName, { doing: string; done: string; icon: Lucid
 
 function ThinkingRow() {
   return (
-    <div className="text-muted-foreground flex items-center gap-2.5 py-1">
-      <AnimatedSignalGlyph
-        seed="copilot-thinking"
-        rows={3}
-        cols={16}
-        fontSize={8}
-        color="currentColor"
-        className="opacity-80"
-      />
-      <span className="animate-pulse font-mono text-[11px] tracking-[0.08em] uppercase">
-        thinking…
-      </span>
+    <div className="text-muted-foreground flex items-center gap-2 py-1 font-mono text-[10px] tracking-[0.08em] uppercase">
+      <Loader2 className="size-3 animate-spin" aria-hidden />
+      <span>Thinking…</span>
     </div>
   );
 }
@@ -86,11 +77,11 @@ function ToolRow({ item }: { item: Extract<DemoChatItem, { kind: "tool" }> }) {
   const Icon = meta.icon;
   const running = item.state === "running";
   return (
-    <div className="text-muted-foreground flex flex-col gap-1.5 py-1.5 pl-0.5 text-xs">
+    <div className="text-muted-foreground flex flex-col gap-1 py-1.5 text-xs leading-relaxed">
       <div className="flex items-center gap-2">
         <Icon className="size-3.5 shrink-0 opacity-70" />
         <div className="min-w-0 flex-1">
-          <span className="text-foreground/70 font-medium">{running ? meta.doing : meta.done}</span>
+          <span className="text-foreground/75">{running ? meta.doing : meta.done}</span>
           {item.detail && !running ? (
             <span className="text-muted-foreground block truncate" title={item.detail}>
               {item.detail}
@@ -137,55 +128,52 @@ export function DemoChatSidebar({
   return (
     <aside
       aria-label="AI copilot (simulated)"
-      className="bg-card/40 relative flex w-[400px] shrink-0 flex-col border-l backdrop-blur-sm"
+      className="bg-background border-border absolute inset-y-0 right-0 z-30 flex w-[352px] max-w-[min(600px,calc(100vw_-_24px))] shrink-0 flex-col border-l shadow-lg lg:relative lg:z-auto lg:max-w-[min(44vw,600px)] lg:shadow-none"
     >
-      <div className="relative z-10 flex h-9 shrink-0 items-center gap-2 border-b px-2.5">
+      <div className="relative z-10 flex h-10 shrink-0 items-center gap-2 border-b px-2.5">
         <button
           type="button"
-          className="hover:bg-muted flex h-7 items-center gap-1.5 rounded-none px-2 text-[13px] font-medium"
+          className="hover:bg-muted flex h-7 items-center gap-1.5 rounded-none px-2 font-mono text-[11px] font-medium tracking-[0.08em] uppercase"
         >
           <Hash className="text-muted-foreground size-3.5" />
-          general
+          General
         </button>
+        <span className="text-muted-foreground ml-auto flex shrink-0 items-center gap-1.5 font-mono text-[10px] tracking-[0.08em] uppercase">
+          <span
+            aria-hidden
+            className={cn("size-1.5", busy ? "bg-primary animate-pulse" : "bg-muted-foreground/45")}
+          />
+          {busy ? "Working" : "Ready"}
+        </span>
         <Button
           type="button"
           variant="ghost"
           size="icon-sm"
-          className="ml-auto size-7"
+          className="text-muted-foreground size-7"
           aria-label="Open chat in a new window"
           title="Open in a new window"
         >
           <ExternalLink className="size-3.5" />
         </Button>
-        <span className="text-muted-foreground shrink-0 font-mono text-[11px] tracking-[0.04em]">
-          {busy ? "working…" : "ready"}
-        </span>
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+        <div
+          ref={scrollRef}
+          className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-5"
+        >
           {items.length === 0 ? (
-            <div className="mt-6 flex flex-col items-center gap-4 text-center">
-              <div className="bg-primary relative flex h-20 w-full items-center justify-center overflow-hidden">
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute inset-0 opacity-30"
-                  style={{
-                    backgroundImage: "radial-gradient(circle, #faf9f5 0.55px, transparent 0.65px)",
-                    backgroundSize: "3.5px 3.5px",
-                  }}
-                />
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-70">
-                  <AnimatedSignalGlyph seed="copilot-idle" rows={9} cols={34} fontSize={7} />
-                </div>
-                <Sparkles className="relative z-10 size-5 text-[#faf9f5]" />
+            <div className="mt-4 flex flex-col items-start gap-4">
+              <div className="border-border flex size-9 items-center justify-center rounded-none border bg-[radial-gradient(var(--border)_0.75px,transparent_0.75px)] bg-[size:4px_4px]">
+                <Sparkles className="text-primary size-4" />
               </div>
               <div>
-                <p className="font-mono text-sm font-medium tracking-[0.04em]">Foundry Copilot</p>
-                <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
-                  Mention <span className="text-foreground font-medium">@AI</span> to ask the
-                  copilot — it fills out the brief, requirements, BOM, circuit, 3D model, and
-                  checks.
+                <p className="font-mono text-[11px] font-medium tracking-[0.1em] uppercase">
+                  Build with Copilot
+                </p>
+                <p className="text-muted-foreground mt-1.5 text-xs leading-relaxed">
+                  Mention <span className="text-primary font-medium">@AI</span> to ask the copilot
+                  to design, build, or check your project.
                 </p>
               </div>
             </div>
@@ -194,13 +182,13 @@ export function DemoChatSidebar({
               if (item.kind === "user") {
                 return (
                   <div key={item.id} className="group relative flex flex-col items-end gap-1">
-                    <div className="relative max-w-[92%]">
-                      <div className="bg-primary text-primary-foreground rounded-none px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
+                    <div className="relative max-w-[94%]">
+                      <div className="border-border border-l-foreground/40 bg-muted/25 text-foreground rounded-none border border-l-2 px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap">
                         {item.text.split(/(@AI)/g).map((seg, i) =>
                           seg === "@AI" ? (
                             <span
                               key={i}
-                              className="bg-primary-foreground/20 inline-flex items-center rounded-none px-1 font-medium"
+                              className="bg-primary/10 text-primary inline-flex items-center rounded-none px-0.5 font-medium"
                             >
                               @AI
                             </span>
@@ -215,15 +203,15 @@ export function DemoChatSidebar({
               }
               if (item.kind === "assistant-text") {
                 return (
-                  <div key={item.id} className="group relative flex max-w-[95%] flex-col gap-1.5">
-                    <div className="bg-muted/60 text-foreground rounded-none px-3.5 py-2.5 text-sm leading-relaxed">
+                  <div key={item.id} className="group relative flex min-w-0 flex-col gap-1.5">
+                    <div className="text-foreground min-w-0 py-1 text-[13px] leading-relaxed">
                       <StreamedText text={item.text} />
                     </div>
                   </div>
                 );
               }
               return (
-                <div key={item.id} className="max-w-[95%]">
+                <div key={item.id} className="min-w-0">
                   <ToolRow item={item} />
                 </div>
               );
@@ -237,9 +225,9 @@ export function DemoChatSidebar({
             e.preventDefault();
             trySend();
           }}
-          className="shrink-0 border-t p-3"
+          className="border-border shrink-0 border-t border-dotted p-3"
         >
-          <div className="bg-background focus-within:border-ring focus-within:ring-ring/50 flex items-end gap-2 rounded-none border p-2 focus-within:ring-3">
+          <div className="bg-background border-foreground/25 focus-within:border-foreground focus-within:ring-foreground/10 flex items-end gap-2 rounded-none border p-2.5 transition-colors focus-within:ring-1">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -249,17 +237,19 @@ export function DemoChatSidebar({
                   trySend();
                 }
               }}
-              placeholder={
-                busy
-                  ? "Draft next message… stop to cancel the reply"
-                  : "Message… type @ to mention AI"
-              }
+              placeholder="Write a note…"
               rows={2}
-              className="placeholder:text-muted-foreground max-h-40 flex-1 resize-none bg-transparent text-sm outline-none"
+              className="placeholder:text-muted-foreground max-h-40 min-w-0 flex-1 resize-none bg-transparent text-[13px] leading-relaxed outline-none"
               aria-label="Copilot message"
             />
-            <Button type="submit" size="icon-sm" disabled={!input.trim()} aria-label="Send">
-              <Send className="size-3.5" />
+            <Button
+              type="submit"
+              size="icon-sm"
+              className="size-7 shrink-0 rounded-none"
+              disabled={!input.trim()}
+              aria-label="Send"
+            >
+              <ArrowUp className="size-3.5" />
             </Button>
           </div>
         </form>

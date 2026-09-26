@@ -43,6 +43,8 @@ export type PcbPadDef = {
   shape: "rect" | "oval";
   /** Through-hole pads span both copper layers. */
   plated?: boolean;
+  /** Explicit finished hole diameter. Unknown diameters remain unset. */
+  drillMm?: number;
 };
 
 export type PcbFootprintDef = {
@@ -75,6 +77,8 @@ export type PcbFootprint = {
   /** Rotation clockwise in degrees (0 / 90 / 180 / 270 typical). */
   rotationDeg: number;
   side: PcbSide;
+  /** Known package body height above the board; omit when not specified. */
+  bodyHeightMm?: number;
   /**
    * Id of the CircuitPart this footprint physically realises. Set it to pull
    * the schematic's nets onto the board (see lib/pcb/netlist.ts); unset means
@@ -401,7 +405,9 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
     bodyHMm: 6.0,
     seatedHeightMm: 0,
     // Mechanical only — no pin, so it never joins a net.
-    pads: [{ pin: "", xMm: 0, yMm: 0, wMm: 3.2, hMm: 3.2, shape: "oval" }],
+    pads: [
+      { pin: "", xMm: 0, yMm: 0, wMm: 3.2, hMm: 3.2, shape: "oval", drillMm: 3.2, plated: false },
+    ],
   },
 ];
 
@@ -648,6 +654,13 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
       yMm: num(f.yMm, board.heightMm / 2, -50, board.heightMm + 50),
       rotationDeg: num(f.rotationDeg, 0, 0, 359),
       side,
+      bodyHeightMm:
+        typeof f.bodyHeightMm === "number" &&
+        Number.isFinite(f.bodyHeightMm) &&
+        f.bodyHeightMm > 0 &&
+        f.bodyHeightMm <= 500
+          ? f.bodyHeightMm
+          : undefined,
       partId:
         typeof f.partId === "string" && f.partId.trim() ? f.partId.trim().slice(0, 60) : undefined,
       pinMap: cleanPinMap(f.pinMap, libraryId),

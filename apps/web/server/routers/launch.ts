@@ -4,6 +4,7 @@ import { prisma, type Prisma } from "@foundry/db";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
 import { requireProjectCapability } from "../access";
+import { BLOCKING_CHECK_STATUSES } from "@/lib/verify-checks";
 
 export const launchRouter = router({
   listReleases: protectedProcedure
@@ -93,6 +94,18 @@ export const launchRouter = router({
           where: { projectId: input.projectId, branchId: input.branchId },
         }),
       ]);
+
+      // Recheck the captured checks too: an old stage approval is insufficient.
+      if (
+        checks.length === 0 ||
+        checks.some((check) => !check.waived && BLOCKING_CHECK_STATUSES.has(check.status))
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Verification needs at least one check and no unresolved, unwaived checks before creating a release",
+        });
+      }
 
       const brief = await prisma.projectBrief.findUnique({
         where: {

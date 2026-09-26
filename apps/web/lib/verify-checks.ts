@@ -6,7 +6,7 @@
  */
 
 /** Statuses that block Verify approval unless the check is waived. */
-export const BLOCKING_CHECK_STATUSES = new Set(["PENDING", "FAIL", "ERROR"]);
+export const BLOCKING_CHECK_STATUSES = new Set(["PENDING", "FAIL", "ERROR", "SIMULATED"]);
 
 export type GroupableCheck = {
   targetPath: string | null;

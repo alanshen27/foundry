@@ -14,6 +14,22 @@ const scope = z.object({ projectId: z.string(), branchId: z.string() });
 const refKey = z.string().trim().min(3).max(300);
 const edgeKind = z.enum(PRODUCT_EDGE_KINDS);
 
+async function emptyIfUnmigrated<T>(query: Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await query;
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code: unknown }).code === "P2021"
+    ) {
+      return fallback;
+    }
+    throw error;
+  }
+}
+
 /** Resolves a node by refKey within a branch, or 404s. */
 async function nodeByRefKey(projectId: string, branchId: string, key: string) {
   const node = await prisma.productNode.findUnique({
@@ -39,26 +55,29 @@ export const graphRouter = router({
    */
   staleNodes: protectedProcedure.input(scope).query(async ({ ctx, input }) => {
     await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
-    return prisma.productNode.findMany({
-      where: {
-        projectId: input.projectId,
-        branchId: input.branchId,
-        staleAt: { not: null },
-        reviewedAt: null,
-      },
-      select: {
-        id: true,
-        refKey: true,
-        refId: true,
-        kind: true,
-        label: true,
-        staleAt: true,
-        staleReason: true,
-        staleDepth: true,
-        staleConfidence: true,
-      },
-      orderBy: { staleAt: "desc" },
-    });
+    return emptyIfUnmigrated(
+      prisma.productNode.findMany({
+        where: {
+          projectId: input.projectId,
+          branchId: input.branchId,
+          staleAt: { not: null },
+          reviewedAt: null,
+        },
+        select: {
+          id: true,
+          refKey: true,
+          refId: true,
+          kind: true,
+          label: true,
+          staleAt: true,
+          staleReason: true,
+          staleDepth: true,
+          staleConfidence: true,
+        },
+        orderBy: { staleAt: "desc" },
+      }),
+      [],
+    );
   }),
 
   /** What a change to this node would affect, with the path that explains why. */
@@ -262,14 +281,17 @@ export const graphRouter = router({
     .input(scope.extend({ status: z.enum(["PENDING", "APPROVED", "REJECTED"]).optional() }))
     .query(async ({ ctx, input }) => {
       await requireProjectCapability(ctx.user.id, input.projectId, "project.read");
-      const proposals = await prisma.graphProposal.findMany({
-        where: {
-          projectId: input.projectId,
-          branchId: input.branchId,
-          status: input.status,
-        },
-        orderBy: { proposedAt: "desc" },
-      });
+      const proposals = await emptyIfUnmigrated(
+        prisma.graphProposal.findMany({
+          where: {
+            projectId: input.projectId,
+            branchId: input.branchId,
+            status: input.status,
+          },
+          orderBy: { proposedAt: "desc" },
+        }),
+        [],
+      );
       const userIds = [...new Set(proposals.map((p) => p.proposedById))];
       const users = userIds.length
         ? await prisma.user.findMany({

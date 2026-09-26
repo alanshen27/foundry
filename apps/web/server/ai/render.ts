@@ -7,6 +7,8 @@ import {
   type ProductImageResult,
   type RawImageCandidate,
 } from "./product-images";
+import { createPublicPageLoader, publicPageUrl, type PublicPageResponse } from "./public-page";
+import { productImagesFromHtml, rankProductImages } from "./product-image-metadata";
 
 export type { ProductImageCandidate, ProductImageResult } from "./product-images";
 
@@ -51,6 +53,7 @@ async function getBrowser(): Promise<Browser> {
   browserPromise ??= chromium
     .launch({
       headless: true,
+      timeout: 10_000,
       args: [
         // Keep the footprint tiny on 512MB dynos.
         "--disable-dev-shm-usage",
@@ -96,13 +99,16 @@ const isDeadBrowser = (err: unknown) =>
     err instanceof Error ? err.message : String(err),
   );
 
+type BrowserPage = Awaited<ReturnType<Browser["newPage"]>>;
+
 /**
  * Run one Playwright job under the global lock, then shut Chromium down if the
  * queue is idle so RSS returns to the Next.js baseline.
  */
 async function withBrowserPage<T>(
   viewport: { width: number; height: number },
-  fn: (page: Awaited<ReturnType<Browser["newPage"]>>) => Promise<T>,
+  fn: (page: BrowserPage) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   /**
    * A cached browser can be dead before we touch it: Chromium is single-process
@@ -111,25 +117,34 @@ async function withBrowserPage<T>(
    * more rather than failing a job for the previous job's crash.
    */
   const newPage = async () => {
+    signal?.throwIfAborted();
     const browser = await getBrowser();
-    if (!browser.isConnected()) {
+    const opts = { viewport, deviceScaleFactor: 1 as const, serviceWorkers: "block" as const };
+    if (typeof browser.isConnected === "function" && !browser.isConnected()) {
       await closeBrowser();
-      return (await getBrowser()).newPage({ viewport, deviceScaleFactor: 1 });
+      return (await getBrowser()).newPage(opts);
     }
     try {
-      return await browser.newPage({ viewport, deviceScaleFactor: 1 });
+      return await browser.newPage(opts);
     } catch (err) {
       if (!isDeadBrowser(err)) throw err;
       await closeBrowser();
-      return (await getBrowser()).newPage({ viewport, deviceScaleFactor: 1 });
+      return (await getBrowser()).newPage(opts);
     }
   };
 
   const run = async (): Promise<T> => {
+    signal?.throwIfAborted();
     const page = await newPage();
+    const cancel = () => {
+      void page.close().catch(() => undefined);
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
     try {
+      signal?.throwIfAborted();
       return await fn(page);
     } finally {
+      signal?.removeEventListener("abort", cancel);
       await page.close().catch(() => undefined);
     }
   };
@@ -142,7 +157,18 @@ async function withBrowserPage<T>(
   );
 
   try {
-    return await job;
+    if (!signal) return await job;
+    return await new Promise<T>((resolve, reject) => {
+      const cancel = () =>
+        reject(
+          new Error(
+            signal.reason?.name === "TimeoutError" ? "Rendering timed out" : "Rendering cancelled",
+          ),
+        );
+      signal.addEventListener("abort", cancel, { once: true });
+      if (signal.aborted) cancel();
+      job.then(resolve, reject).finally(() => signal.removeEventListener("abort", cancel));
+    });
   } finally {
     // If nothing else queued while we ran, release Chromium memory.
     const idle = queueTail;
@@ -160,31 +186,37 @@ export async function screenshotRenderPage(
     height,
     readyTimeout = 15_000,
     requireReady = false,
+    signal,
   }: {
     width: number;
     height: number;
     /**
-     * How long to wait for the page to report a painted canvas. A cold Zoo
+     * How long to wait for the page to report a painted canvas. A cold geometry
      * connection plus KCL execution can take well over the default.
      */
     readyTimeout?: number;
     /** Fail instead of capturing a half-drawn viewport. */
     requireReady?: boolean;
+    signal?: AbortSignal;
   },
 ): Promise<Buffer> {
-  return withBrowserPage({ width, height }, async (page) => {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
-    // Render pages set data-render-ready once canvases have painted.
-    const ready = await page
-      .waitForSelector("body[data-render-ready='1']", { timeout: readyTimeout })
-      .then(() => true)
-      .catch(() => false);
-    if (!ready && requireReady) {
-      throw new Error(`Viewport did not finish drawing within ${readyTimeout}ms`);
-    }
-    await page.addStyleTag({ content: HIDE_DEV_OVERLAY_CSS }).catch(() => undefined);
-    return await page.screenshot({ type: "png" });
-  });
+  return withBrowserPage(
+    { width, height },
+    async (page) => {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
+      // Render pages set data-render-ready once canvases have painted.
+      const ready = await page
+        .waitForSelector("body[data-render-ready='1']", { timeout: readyTimeout })
+        .then(() => true)
+        .catch(() => false);
+      if (!ready && requireReady) {
+        throw new Error(`Viewport did not finish drawing within ${readyTimeout}ms`);
+      }
+      await page.addStyleTag({ content: HIDE_DEV_OVERLAY_CSS }).catch(() => undefined);
+      return await page.screenshot({ type: "png" });
+    },
+    signal,
+  );
 }
 
 /**
@@ -247,47 +279,200 @@ export const HARVEST_PRODUCT_IMAGES_SCRIPT = `(() => {
   return out;
 })()`;
 
+const imageCache = new Map<string, { expiresAt: number; result: ProductImageResult }>();
+const IMAGE_CACHE_TTL_MS = 120_000;
+const IMAGE_CACHE_SIZE = 64;
+
+function cacheResult(key: string, result: ProductImageResult): ProductImageResult {
+  while (imageCache.size >= IMAGE_CACHE_SIZE) imageCache.delete(imageCache.keys().next().value!);
+  imageCache.set(key, {
+    expiresAt: Date.now() + (result.images.length ? IMAGE_CACHE_TTL_MS : 15_000),
+    result,
+  });
+  return result;
+}
+
 /**
- * Open a product page and harvest likely component photos (og/twitter/JSON-LD
- * + large &lt;img&gt; elements). The rendered DOM is the better reader, so it goes
- * first; plain HTML answers whenever the browser cannot (an anti-bot
- * interstitial, or Chromium dying on a small dyno) rather than reporting the
- * page as a failure.
+ * Read public-page metadata first; launch Chromium only for pages whose images
+ * require JavaScript. Fall back to plain HTML when the browser cannot start,
+ * and honor queued cancellation.
  */
 export async function extractProductImages(
   pageUrl: string,
-  { limit = 8 }: { limit?: number } = {},
+  {
+    limit = 8,
+    signal,
+    timeoutMs = 20_000,
+  }: { limit?: number; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<ProductImageResult> {
-  let browserFailure: unknown;
-  let blockedInBrowser = false;
+  signal?.throwIfAborted();
+  const key = publicPageUrl(pageUrl).href;
+  const cached = imageCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return {
+      ...cached.result,
+      images: cached.result.images.slice(0, limit).map((image) => ({ ...image })),
+    };
+  }
+  imageCache.delete(key);
 
+  const deadline = AbortSignal.timeout(Math.max(1, Math.min(30_000, timeoutMs)));
+  const combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  const loader = createPublicPageLoader(combined);
+
+  let fetched: PublicPageResponse | undefined;
+  let htmlImages: ProductImageResult | undefined;
   try {
-    const viaBrowser = await withBrowserPage({ width: 1280, height: 900 }, async (page) => {
-      await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 25_000 });
-      await new Promise((r) => setTimeout(r, 800));
-      const blocked = looksLikeBotChallenge(await page.content().catch(() => ""));
-      const raw = blocked
-        ? []
-        : ((await page.evaluate(HARVEST_PRODUCT_IMAGES_SCRIPT)) as RawImageCandidate[]);
-      return { raw, blocked };
-    });
+    const metadataSignal = AbortSignal.any([combined, AbortSignal.timeout(6_000)]);
+    fetched = await createPublicPageLoader(metadataSignal).read(key);
+    if (
+      fetched.status < 400 &&
+      /html|xhtml/i.test(fetched.headers["content-type"] ?? "text/html")
+    ) {
+      const html = fetched.body.toString("utf8");
+      if (looksLikeBotChallenge(html)) {
+        htmlImages = { images: [], via: "html", problem: "blocked" };
+      } else {
+        const images = rankProductImages(productImagesFromHtml(html, fetched.url), 12);
+        if (images.length) htmlImages = { images, via: "html" };
+      }
+    }
+  } catch (error) {
+    combined.throwIfAborted();
+    if (error instanceof Error && /public (HTTP|addresses)/.test(error.message)) throw error;
+  }
+
+  if (htmlImages?.images.length) {
+    cacheResult(key, htmlImages);
+    return {
+      ...htmlImages,
+      images: htmlImages.images.slice(0, limit).map((image) => ({ ...image })),
+    };
+  }
+
+  let browserFailure: unknown;
+  let blockedInBrowser = htmlImages?.problem === "blocked";
+  try {
+    await loader.validate(key);
+    const viaBrowser = await withBrowserPage(
+      { width: 1280, height: 900 },
+      async (page) => {
+        const context =
+          "context" in page && typeof page.context === "function" ? page.context() : null;
+        if (context) {
+          context.on?.("page", (popup: { close: () => Promise<void> }) => {
+            if (popup !== page) void popup.close().catch(() => undefined);
+          });
+          await context.addInitScript?.(
+            `for (const key of ['RTCPeerConnection','webkitRTCPeerConnection']) Object.defineProperty(globalThis,key,{value:undefined,writable:false,configurable:false});`,
+          );
+          await context.routeWebSocket?.("**/*", (socket: { close: () => void }) => socket.close());
+          let bytes = 0;
+          let requests = 0;
+          let initial = fetched;
+          let active = 0;
+          const waiters: Array<() => void> = [];
+          await context.route?.("**/*", async (route: {
+            request: () => {
+              method: () => string;
+              resourceType: () => string;
+              isNavigationRequest: () => boolean;
+              url: () => string;
+              headers: () => { accept?: string };
+            };
+            abort: () => Promise<void>;
+            fulfill: (response: {
+              status: number;
+              headers: Record<string, string>;
+              body: Buffer;
+            }) => Promise<void>;
+          }) => {
+            const request = route.request();
+            if (
+              request.method() !== "GET" ||
+              ["font", "media"].includes(request.resourceType()) ||
+              ++requests > 80 ||
+              bytes > 12_000_000
+            ) {
+              await route.abort();
+              return;
+            }
+            if (active >= 4) await new Promise<void>((resolve) => waiters.push(resolve));
+            active++;
+            try {
+              if (bytes > 12_000_000 || combined.aborted) {
+                await route.abort();
+                return;
+              }
+              let response: PublicPageResponse;
+              if (initial && request.isNavigationRequest() && request.url() === initial.url) {
+                response = initial;
+                initial = undefined;
+              } else
+                response = await loader.read(request.url(), {
+                  accept: request.headers().accept ?? "*/*",
+                });
+              bytes += response.body.length;
+              await route.fulfill({
+                status: response.status,
+                headers: response.headers,
+                body: response.body,
+              });
+            } catch {
+              await route.abort().catch(() => undefined);
+            } finally {
+              active--;
+              waiters.shift()?.();
+            }
+          });
+        }
+
+        await page.goto(fetched?.url ?? key, { waitUntil: "domcontentloaded", timeout: 12_000 });
+        const html =
+          "content" in page && typeof page.content === "function"
+            ? await page.content().catch(() => "")
+            : "";
+        const blocked = looksLikeBotChallenge(html);
+        let raw = blocked
+          ? []
+          : ((await page.evaluate(HARVEST_PRODUCT_IMAGES_SCRIPT)) as RawImageCandidate[]);
+        if (!blocked && !raw.length && "waitForFunction" in page) {
+          await page
+            .waitForFunction(`() => (${HARVEST_PRODUCT_IMAGES_SCRIPT}).length > 0`, {}, {
+              timeout: 2_500,
+            })
+            .catch(() => undefined);
+          raw = (await page.evaluate(HARVEST_PRODUCT_IMAGES_SCRIPT)) as RawImageCandidate[];
+        }
+        return { raw, blocked };
+      },
+      combined,
+    );
     if (viaBrowser.raw.length > 0) {
-      return { images: rankCandidates(viaBrowser.raw, limit), via: "browser" };
+      const result: ProductImageResult = {
+        images: rankCandidates(viaBrowser.raw, 12),
+        via: "browser",
+      };
+      cacheResult(key, result);
+      return { ...result, images: result.images.slice(0, limit).map((image) => ({ ...image })) };
     }
     blockedInBrowser = viaBrowser.blocked;
   } catch (err) {
-    // A missing binary is a deployment fact the operator must see, not a page
-    // problem to paper over with a fetch.
+    combined.throwIfAborted();
     if (/rendering service is unavailable/i.test(err instanceof Error ? err.message : ""))
       throw err;
     browserFailure = err;
   }
 
   const viaHtml = await fetchProductImages(pageUrl);
-  if (viaHtml.raw.length > 0) return { images: rankCandidates(viaHtml.raw, limit), via: "html" };
+  if (viaHtml.raw.length > 0) {
+    const result: ProductImageResult = { images: rankCandidates(viaHtml.raw, 12), via: "html" };
+    cacheResult(key, result);
+    return { ...result, images: result.images.slice(0, limit).map((image) => ({ ...image })) };
+  }
 
   const blocked = blockedInBrowser || viaHtml.blocked;
-  return {
+  const result: ProductImageResult = {
     images: [],
     via: browserFailure ? "html" : "browser",
     ...(blocked
@@ -296,4 +481,6 @@ export async function extractProductImages(
         ? { problem: "browser-unavailable" as const }
         : {}),
   };
+  cacheResult(key, result);
+  return result;
 }

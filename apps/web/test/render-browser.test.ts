@@ -1,10 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as PublicPage from "@/server/ai/public-page";
 
 // render.ts is a server module; neither guard matters under vitest.
 vi.mock("server-only", () => ({}));
 
 const launch = vi.fn();
 vi.mock("playwright-core", () => ({ chromium: { launch: () => launch() } }));
+vi.mock("@/server/ai/public-page", async (importOriginal) => ({
+  ...(await importOriginal<typeof PublicPage>()),
+  createPublicPageLoader: () => ({
+    validate: async (url: string) => new URL(url),
+    read: async (url: string) => ({
+      url,
+      status: 200,
+      headers: { "content-type": "text/html" },
+      body: Buffer.from("<html></html>"),
+    }),
+  }),
+}));
 
 /** Fresh module registry per test so the cached browser promise resets. */
 async function loadRender() {

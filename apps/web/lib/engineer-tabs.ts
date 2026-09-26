@@ -26,6 +26,8 @@ export type EngineerDocTab =
       pinned?: false;
       /** CadDoc component id when kind === "model". */
       componentId?: string;
+      /** PCB board to focus without opening a separate copy of its editor. */
+      boardId?: string;
     };
 
 export const ASSEMBLY_TAB: EngineerDocTab = {
@@ -71,7 +73,11 @@ export function labelForKind(kind: EngineerDocKind): string {
 }
 
 /** Map legacy ?view= values onto a document tab. */
-export function tabFromViewParam(view: string | undefined, partId?: string | null): EngineerDocTab {
+export function tabFromViewParam(
+  view: string | undefined,
+  partId?: string | null,
+  boardId?: string | null,
+): EngineerDocTab {
   if (view === "model") {
     return {
       key: tabKeyFor("model", partId ?? undefined),
@@ -81,7 +87,7 @@ export function tabFromViewParam(view: string | undefined, partId?: string | nul
     };
   }
   if (view === "pcb") {
-    return { key: "pcb", kind: "pcb", label: "PCB" };
+    return { key: "pcb", kind: "pcb", label: "PCB", ...(boardId ? { boardId } : {}) };
   }
   if (view === "schematic") {
     return { key: "schematic", kind: "schematic", label: "Schematic" };

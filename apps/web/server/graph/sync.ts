@@ -210,50 +210,64 @@ export async function syncProductGraph(params: {
   };
 }
 
+function isMissingGraphTable(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code: unknown }).code === "P2021"
+  );
+}
+
 /** Loads the whole graph for a branch, shaped for the pure modules. */
 export async function loadGraphSnapshot(
   projectId: string,
   branchId: string,
 ): Promise<GraphSnapshot> {
-  const [nodes, edges] = await Promise.all([
-    prisma.productNode.findMany({ where: { projectId, branchId } }),
-    prisma.productEdge.findMany({
-      where: { projectId, branchId },
-      include: {
-        from: { select: { refKey: true } },
-        to: { select: { refKey: true } },
-      },
-    }),
-  ]);
+  try {
+    const [nodes, edges] = await Promise.all([
+      prisma.productNode.findMany({ where: { projectId, branchId } }),
+      prisma.productEdge.findMany({
+        where: { projectId, branchId },
+        include: {
+          from: { select: { refKey: true } },
+          to: { select: { refKey: true } },
+        },
+      }),
+    ]);
 
-  return {
-    nodes: nodes.map((n) => ({
-      id: n.id,
-      kind: n.kind,
-      refKey: n.refKey,
-      refId: n.refId,
-      label: n.label,
-      data: (n.data ?? {}) as Record<string, unknown>,
-      origin: n.origin,
-      originDetail: n.originDetail,
-      contentHash: n.contentHash,
-      staleAt: n.staleAt,
-      staleReason: n.staleReason,
-      staleFromId: n.staleFromId,
-      staleDepth: n.staleDepth,
-      staleConfidence: n.staleConfidence,
-      staleContentHash: n.staleContentHash,
-      reviewedAt: n.reviewedAt,
-    })),
-    edges: edges.map((e) => ({
-      id: e.id,
-      kind: e.kind,
-      from: e.from.refKey,
-      to: e.to.refKey,
-      origin: e.origin,
-      rule: e.rule,
-      confidence: e.confidence,
-      evidence: e.evidence,
-    })),
-  };
+    return {
+      nodes: nodes.map((n) => ({
+        id: n.id,
+        kind: n.kind,
+        refKey: n.refKey,
+        refId: n.refId,
+        label: n.label,
+        data: (n.data ?? {}) as Record<string, unknown>,
+        origin: n.origin,
+        originDetail: n.originDetail,
+        contentHash: n.contentHash,
+        staleAt: n.staleAt,
+        staleReason: n.staleReason,
+        staleFromId: n.staleFromId,
+        staleDepth: n.staleDepth,
+        staleConfidence: n.staleConfidence,
+        staleContentHash: n.staleContentHash,
+        reviewedAt: n.reviewedAt,
+      })),
+      edges: edges.map((e) => ({
+        id: e.id,
+        kind: e.kind,
+        from: e.from.refKey,
+        to: e.to.refKey,
+        origin: e.origin,
+        rule: e.rule,
+        confidence: e.confidence,
+        evidence: e.evidence,
+      })),
+    };
+  } catch (error) {
+    if (isMissingGraphTable(error)) return { nodes: [], edges: [] };
+    throw error;
+  }
 }

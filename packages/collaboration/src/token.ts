@@ -2,7 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 const TTL_MS = 60 * 60 * 1000;
 
-export type CollabRoomKind = "codefile" | "siteprompt";
+export type CollabRoomKind = "codefile" | "siteprompt" | "design";
 
 export type CollabClaims = {
   kind: CollabRoomKind;
@@ -35,8 +35,8 @@ export function mintCollabToken(
 }
 
 export function verifyCollabToken(token: string, secretMaterial: string): CollabClaims | null {
-  const [payload, mac] = token.split(".");
-  if (!payload || !mac) return null;
+  const [payload, mac, extra] = token.split(".");
+  if (!payload || !mac || extra !== undefined) return null;
   const expected = sign(payload, secretMaterial);
   const got = Buffer.from(mac);
   const want = Buffer.from(expected);
@@ -45,10 +45,15 @@ export function verifyCollabToken(token: string, secretMaterial: string): Collab
     const claims = JSON.parse(Buffer.from(payload, "base64url").toString()) as CollabClaims;
     if (typeof claims.exp !== "number" || claims.exp < Date.now()) return null;
     if (
-      (claims.kind !== "codefile" && claims.kind !== "siteprompt") ||
+      !["codefile", "siteprompt", "design"].includes(claims.kind) ||
+      typeof claims.resourceId !== "string" ||
       !claims.resourceId ||
+      typeof claims.userId !== "string" ||
       !claims.userId ||
-      !claims.name
+      typeof claims.name !== "string" ||
+      !claims.name ||
+      typeof claims.canEdit !== "boolean" ||
+      !Number.isFinite(claims.exp)
     ) {
       return null;
     }

@@ -1,5 +1,8 @@
 export type CadErrorContext = "connection" | "execution" | "import" | "session";
 
+export const LEGACY_CAD_PREVIEW_MESSAGE =
+  "This KCL source is preserved. Ask Copilot to convert this part to Python to preview and edit its geometry.";
+
 function rawMessage(error: unknown): string {
   try {
     if (error instanceof Error) {
@@ -49,6 +52,16 @@ const BUCKETS: { keywords: string[]; message: string }[] = [
     keywords: ["timed out", "timeout", "network", "fetch failed", "websocket", "webrtc"],
     message: "The CAD service did not respond. Check your connection and try again.",
   },
+  {
+    keywords: [
+      "no module named",
+      "ocp.collections",
+      "runtime setup failed",
+      "modulenotfounderror",
+    ],
+    message:
+      "The local Python CAD runtime is incompatible. Reinstall the pinned build123d and ocpsvg versions, then retry.",
+  },
 ];
 
 /**
@@ -59,6 +72,8 @@ const BUCKETS: { keywords: string[]; message: string }[] = [
 export function safeCadError(error: unknown, context: CadErrorContext = "execution"): string {
   const message = rawMessage(error);
   const raw = message.toLowerCase();
+
+  if (message === "LEGACY_KCL_REQUIRES_CONVERSION") return LEGACY_CAD_PREVIEW_MESSAGE;
 
   const bucket = BUCKETS.find((b) => b.keywords.some((k) => raw.includes(k)));
   if (bucket) return bucket.message;
@@ -71,9 +86,14 @@ export function safeCadError(error: unknown, context: CadErrorContext = "executi
   }
 
   // Source locations help repair KCL but do not reveal the server path.
-  const location = /\b(?:line|row)\s+(\d+)(?:[,:]\s*(?:column|col)?\s*(\d+))?/i.exec(message);
+  const location =
+    /\b(?:line|row)\s+(\d+)(?:[,:]\s*(?:column|col)?\s*(\d+))?/i.exec(message) ??
+    /\[(\d+):(\d+)\]/.exec(message);
   const where = location
     ? ` near line ${location[1]}${location[2] ? `, column ${location[2]}` : ""}`
     : "";
-  return `The model could not be rebuilt${where}. Check the latest feature or dimension.`;
+  if (raw.includes("this argument needs a label")) {
+    return `A function call needs named arguments${where}. Use argumentName = value for its parameters.`;
+  }
+  return `The model could not be rebuilt${where}. Check the source and its dimensions.`;
 }

@@ -37,4 +37,12 @@ describe("groupChecksByTarget", () => {
     const groups = groupChecksByTarget([check("  ")]);
     expect(groups[0]?.target).toBeNull();
   });
+
+  it("counts simulated results as blocking unless explicitly waived", () => {
+    const groups = groupChecksByTarget([
+      check("main.kcl", "SIMULATED"),
+      check("main.kcl", "SIMULATED", true),
+    ]);
+    expect(groups[0]?.blocking).toBe(1);
+  });
 });

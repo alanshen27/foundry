@@ -11,6 +11,7 @@ import { requireProjectCapability } from "../../access";
 import { ensureStageStarted, markDownstreamStale } from "../../stage-state";
 import { getCad } from "../../cad";
 import type { CadProgressUpdate } from "../../chat-run/cad-progress";
+import type { CadDraftUpdate } from "../../chat-run/cad-draft";
 import {
   CAD_PROGRESS_LOG_MAX,
   trimNote,
@@ -22,12 +23,16 @@ export type ToolContext = {
   userId: string;
   projectId: string;
   branchId: string;
+  /** The worker-owned editing lease; never supplied by model input. */
+  runId?: string;
   /** Origin of the running app (e.g. http://localhost:3000) for render tools. */
   origin: string;
   /** Live phase/narration for CAD tools that run for minutes. */
   onCadProgress?: (update: CadProgressUpdate) => void;
   /** Called once a CAD tool call is over, so the emitter can forget it. */
   onCadProgressEnd?: (toolCallId: string) => void;
+  /** Stream incomplete Python CAD source so the editor can preview it. */
+  onCadDraft?: (draft: CadDraftUpdate) => void;
   /**
    * Set by any tool that changes project content, and read once by the chat
    * run when the turn ends.

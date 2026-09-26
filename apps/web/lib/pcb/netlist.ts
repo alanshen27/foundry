@@ -329,9 +329,12 @@ export function buildRatsnest(
  */
 export function netsByPad(nets: Net[], pcb: PcbDoc): Map<string, string> {
   const out = new Map<string, string>();
-  const byPartId = new Map(
-    pcb.footprints.filter((f) => f.partId).map((f) => [f.partId!, f] as const),
-  );
+  // Match buildRatsnest's first-owner policy; duplicate links are reported there.
+  const byPartId = new Map<string, PcbFootprint>();
+  for (const footprint of pcb.footprints) {
+    if (footprint.partId && !byPartId.has(footprint.partId))
+      byPartId.set(footprint.partId, footprint);
+  }
   for (const net of nets) {
     for (const node of net.nodes) {
       const fp = byPartId.get(node.partId);

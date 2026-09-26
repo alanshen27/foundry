@@ -7,6 +7,7 @@ import {
   type ModelMessage,
   type UIMessage,
   type ToolSet,
+  type UIMessageChunk,
 } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { buildProjectTools, withToolLogging } from "@/server/ai/tools";
@@ -22,9 +23,13 @@ import {
   type ChannelScope,
 } from "./persist";
 import { createCadProgressEmitter } from "./cad-progress";
-import { maxRunEventSeq, publishRunChunk, publishRunFinished, publishRunStarted } from "./publish";
+import { createCadDraftEmitter } from "./cad-draft";
+import { withLiveToolDrafts } from "./tool-draft";
+import { maxRunEventSeq, publishRunChunks, publishRunFinished, publishRunStarted } from "./publish";
+import { createRunEventWriter } from "./event-writer";
 import {
   markFailedAssistantMessages,
+  markCancelledAssistantMessages,
   pairToolCallsWithResults,
   sanitizeUiMessagesForModel,
   stripAllToolParts,
@@ -66,6 +71,12 @@ function isMissingProviderItemError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const message = err instanceof Error ? err.message : String(err);
   return /Item with id '[^']+' not found/i.test(message);
+}
+
+/** A provider tool's original reasoning was dropped while replaying old history. */
+function isMissingProviderReasoningError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /(?:without|missing).*required.*reasoning.*item|reasoning.*item.*required/i.test(message);
 }
 
 /** OpenAI 400 when the same `msg_` / `fc_` / `ws_` id appears twice in input. */
@@ -151,9 +162,6 @@ export async function executeChatRun(runId: string): Promise<void> {
   if (!run || run.status === "DONE" || run.status === "ERROR" || run.status === "CANCELLED") return;
 
   const channelId = run.channelId;
-  const runLog = log.child({ runId, projectId: run.projectId });
-  // Captured because `finalize` is a closure and does not see the null check.
-  const actorId = run.actorId;
   const scope: ChannelScope = {
     projectId: run.projectId,
     branchId: run.branchId,
@@ -171,16 +179,41 @@ export async function executeChatRun(runId: string): Promise<void> {
     return;
   }
 
-  const env = getServerEnv();
-  if (!env.OPENAI_API_KEY) {
-    const error = "OPENAI_API_KEY is not configured";
-    await prisma.chatRun.update({
-      where: { id: runId },
+  try {
+    await executeClaimedChatRun(run);
+  } catch (err) {
+    // Setup/validation can fail before the stream's own finalizer exists.
+    // Never leave a claimed run RUNNING because of malformed old history.
+    const error = err instanceof Error ? err.message : String(err);
+    const failed = await prisma.chatRun.updateMany({
+      where: { id: runId, status: "RUNNING" },
       data: { status: "ERROR", error, finishedAt: new Date() },
     });
-    await publishRunFinished(runId, channelId, "error", error);
-    return;
+    if (failed.count > 0) {
+      let inputMessages: UIMessage[] = [];
+      try {
+        inputMessages = await validateResumableUIMessages(run.inputMessages as unknown[]);
+      } catch {
+        /* Recover from persisted events when the input itself is invalid. */
+      }
+      await persistFailedRunFromEvents({ runId, scope, inputMessages, error }).catch((cause) =>
+        console.error(`[chat-run ${runId}] setup failure persist failed`, cause),
+      );
+      await publishRunFinished(runId, channelId, "error", error);
+    }
+    throw err;
   }
+}
+
+async function executeClaimedChatRun(
+  run: NonNullable<Awaited<ReturnType<typeof prisma.chatRun.findUnique>>>,
+) {
+  const runId = run.id;
+  const channelId = run.channelId;
+  const runLog = log.child({ runId, projectId: run.projectId });
+  const scope: ChannelScope = { projectId: run.projectId, branchId: run.branchId, channelId };
+  const env = getServerEnv();
+  if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
 
   const rawMessages = await validateResumableUIMessages(run.inputMessages as unknown[]);
 
@@ -189,18 +222,30 @@ export async function executeChatRun(runId: string): Promise<void> {
   const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
 
   // Continue past any chunks a previous crashed attempt already wrote.
-  let seq = await maxRunEventSeq(runId);
+  const seq = await maxRunEventSeq(runId);
 
-  // CAD progress rides the same event log as the model stream. Writes are
-  // serialized on their own chain (the reader awaits its own publishes), so a
-  // late-landing note can at worst be skipped by an already-caught-up client.
-  let progressWrites: Promise<void> = Promise.resolve();
-  const cadProgress = createCadProgressEmitter((chunk) => {
-    const at = ++seq;
-    progressWrites = progressWrites
-      .then(() => publishRunChunk(runId, channelId, at, chunk))
-      .catch((err) => runLog.warn("cad progress publish failed", { err }));
+  // One ordered queue for model, source drafts and progress. Otherwise a
+  // later model event can arrive first and advance SSE past an unseen draft.
+  const abort = new AbortController();
+  let finalized = false;
+  let persistenceFailed = false;
+  let persistenceError: unknown;
+  const eventWriter = createRunEventWriter({
+    initialSeq: seq,
+    persist: (events) => publishRunChunks(runId, events),
+    onError: (error) => {
+      persistenceFailed = true;
+      persistenceError = error;
+      abort.abort(error);
+    },
   });
+  const enqueueChunk = eventWriter.enqueue;
+  const publishProgress = (chunk: UIMessageChunk) => {
+    if (abort.signal.aborted || finalized) return;
+    void enqueueChunk(chunk).catch(() => undefined);
+  };
+  const cadProgress = createCadProgressEmitter(publishProgress);
+  const cadDraft = createCadDraftEmitter(publishProgress);
 
   // Set by any tool that changes project content; flushed once in finalize.
   const graphDirty = { current: false };
@@ -209,15 +254,23 @@ export async function executeChatRun(runId: string): Promise<void> {
 
   const tools = withToolLogging(
     {
-      ...buildProjectTools({
-        userId: run.actorId,
-        projectId: run.projectId,
-        branchId: run.branchId,
-        origin: appOrigin(),
-        onCadProgress: cadProgress.emit,
-        onCadProgressEnd: cadProgress.end,
-        graphDirty,
-      }),
+      ...withLiveToolDrafts(
+        buildProjectTools({
+          runId,
+          userId: run.actorId,
+          projectId: run.projectId,
+          branchId: run.branchId,
+          origin: appOrigin(),
+          onCadProgress: cadProgress.emit,
+          onCadProgressEnd: (toolCallId) => {
+            cadProgress.end(toolCallId);
+            cadDraft.end(toolCallId);
+          },
+          onCadDraft: cadDraft.emit,
+          graphDirty,
+        }),
+        cadDraft,
+      ),
       ...buildGraphTools({
         userId: run.actorId,
         projectId: run.projectId,
@@ -228,27 +281,8 @@ export async function executeChatRun(runId: string): Promise<void> {
     { runId },
   );
 
-  let finalized = false;
   /** Latest UI transcript observed from the stream (updated in onEnd). */
   let latestMessages: UIMessage[] = rawMessages;
-  let sawStreamMessages = false;
-  const abort = new AbortController();
-
-  // Heartbeat startedAt so redelivered jobs can tell a live attempt from a
-  // dead one. Doubles as a cancellation poll: if cancel/stale terminalized
-  // the row out from under us, stop streaming instead of racing finalize.
-  const heartbeat = setInterval(() => {
-    void prisma.chatRun
-      .updateMany({
-        where: { id: runId, status: "RUNNING" },
-        data: { startedAt: new Date() },
-      })
-      .then((res) => {
-        if (res.count === 0 && !abort.signal.aborted) abort.abort();
-      })
-      .catch(() => undefined);
-  }, HEARTBEAT_MS);
-  (heartbeat as unknown as { unref?: () => void }).unref?.();
 
   const { copilotBroadcastChannel, createSupabaseBroadcastPort, createOffBroadcastPort } =
     await import("@foundry/realtime");
@@ -273,9 +307,41 @@ export async function executeChatRun(runId: string): Promise<void> {
     }
   });
 
+  // Heartbeat startedAt so redelivered jobs can tell a live attempt from a
+  // dead one. Doubles as a cancellation poll: if cancel/stale terminalized
+  // the row out from under us, stop streaming instead of racing finalize.
+  const heartbeat = setInterval(() => {
+    void prisma.chatRun
+      .updateMany({
+        where: { id: runId, status: "RUNNING" },
+        data: { startedAt: new Date() },
+      })
+      .then((res) => {
+        if (res.count === 0 && !abort.signal.aborted) abort.abort();
+      })
+      .catch(() => undefined);
+  }, HEARTBEAT_MS);
+  (heartbeat as unknown as { unref?: () => void }).unref?.();
+
   async function finalize(status: "done" | "error" | "cancelled", error?: string): Promise<void> {
     if (finalized) return;
     finalized = true;
+    if (abort.signal.aborted) eventWriter.discardTransient();
+    await eventWriter.close();
+    // Lease loss also aborts this reader when another worker has already
+    // failed or completed the run. Preserve that outcome, not a false Stop.
+    const terminal = await prisma.chatRun.findUnique({
+      where: { id: runId },
+      select: { status: true, error: true },
+    });
+    if (terminal?.status === "ERROR") {
+      status = "error";
+      error = terminal.error ?? "Run failed";
+    } else if (terminal?.status === "DONE") {
+      status = "done";
+    } else if (terminal?.status === "CANCELLED") {
+      status = "cancelled";
+    }
 
     await recordRunUsage(runId, env.AI_MODEL, usage);
 
@@ -296,7 +362,7 @@ export async function executeChatRun(runId: string): Promise<void> {
             projectId: scope.projectId,
             branchId: scope.branchId,
             workspaceId: project.workspaceId,
-            actorId,
+            actorId: run.actorId,
             actorType: "AGENT",
           });
         }
@@ -306,9 +372,9 @@ export async function executeChatRun(runId: string): Promise<void> {
     }
 
     let messages = latestMessages;
-    // If the stream died before onEnd, rebuild whatever chunks we already
-    // published so the user still has the assistant turn after refresh.
-    if (status !== "done" && !sawStreamMessages) {
+    // Rebuild the fully drained log. An in-flight checkpoint may have read
+    // before the final tool chunk and must not truncate the saved turn.
+    {
       try {
         const { rebuildUiMessagesFromRunEvents } = await import("./persist");
         messages = await rebuildUiMessagesFromRunEvents(runId, rawMessages);
@@ -320,19 +386,7 @@ export async function executeChatRun(runId: string): Promise<void> {
     if (status === "error") {
       messages = markFailedAssistantMessages(messages, error ?? "request failed");
     } else if (status === "cancelled") {
-      // Keep partial work; only stamp if the assistant turn would otherwise
-      // look empty after prune on the client.
-      const hasAssistantContent = messages.some(
-        (m) =>
-          m.role === "assistant" &&
-          m.parts.some((p) => {
-            if (p.type === "text") return p.text.trim().length > 0;
-            return p.type.startsWith("tool-") || p.type === "dynamic-tool";
-          }),
-      );
-      if (!hasAssistantContent) {
-        messages = markFailedAssistantMessages(messages, "cancelled");
-      }
+      messages = markCancelledAssistantMessages(messages);
     }
 
     await persistRunMessages(scope, messages).catch((err) => {
@@ -363,15 +417,34 @@ export async function executeChatRun(runId: string): Promise<void> {
   }
 
   try {
+    // Catch cancellation that happened during setup, before the broadcast
+    // subscription existed. A stopped pending run must never start tools.
+    const lease = await prisma.chatRun.findUnique({
+      where: { id: runId },
+      select: { status: true },
+    });
+    if (lease?.status !== "RUNNING") {
+      abort.abort();
+      await finalize("cancelled", "cancelled");
+      return;
+    }
     let prepared = await toModelMessages(rawMessages, tools);
 
+    let attemptProducedContent = false;
     const runStream = async (uiMessages: UIMessage[], modelMessages: ModelMessage[]) => {
+      attemptProducedContent = false;
+      let streamError: unknown;
       const result = streamText({
         model: openai(env.AI_MODEL),
         system: COPILOT_SYSTEM_PROMPT,
         messages: modelMessages,
         tools,
         abortSignal: abort.signal,
+        // The SDK normally emits errors as chunks instead of rejecting the
+        // reader. Keep the original error for recovery and terminal status.
+        onError: ({ error }) => {
+          streamError = error;
+        },
         // A full bootstrap (brief → schematic → PCB → parts → assembly →
         // renders → fixes) can legitimately need ~20 steps; a low cap makes
         // the run stop mid-build with partial output.
@@ -410,13 +483,27 @@ export async function executeChatRun(runId: string): Promise<void> {
 
       const uiStream = result.toUIMessageStream({
         originalMessages: uiMessages,
+        // The worker and every browser must persist the same assistant ID.
+        // Without this the SDK emits start without messageId, and a server
+        // checkpoint reconstructs an empty ID that persistence discards.
+        generateMessageId: () => `assistant_${runId}`,
+        onError: (error) => {
+          streamError = error;
+          return error instanceof Error ? error.message : String(error);
+        },
         onEnd: async ({ messages: finalMessages }) => {
           latestMessages = finalMessages as UIMessage[];
-          sawStreamMessages = true;
         },
       });
 
       const reader = uiStream.getReader();
+      // A slow tool may ignore abortSignal. Cancel the consumer immediately;
+      // do not wait for that tool to produce its next stream chunk.
+      const stopReading = () => {
+        eventWriter.discardTransient();
+        void reader.cancel().catch(() => undefined);
+      };
+      abort.signal.addEventListener("abort", stopReading, { once: true });
       let lastCheckpointAt = 0;
       let checkpointing: Promise<void> | null = null;
       const maybeCheckpoint = (force = false) => {
@@ -424,14 +511,17 @@ export async function executeChatRun(runId: string): Promise<void> {
         if (!force && now - lastCheckpointAt < 1_200) return;
         if (checkpointing) return;
         lastCheckpointAt = now;
-        checkpointing = checkpointRunMessages({
-          runId,
-          scope,
-          inputMessages: uiMessages,
-        })
+        checkpointing = eventWriter
+          .flush()
+          .then(() =>
+            checkpointRunMessages({
+              runId,
+              scope,
+              inputMessages: uiMessages,
+            }),
+          )
           .then((rebuilt) => {
             latestMessages = rebuilt;
-            sawStreamMessages = true;
           })
           .catch((err) => {
             runLog.warn("stream checkpoint failed", { err });
@@ -444,12 +534,23 @@ export async function executeChatRun(runId: string): Promise<void> {
       try {
         while (true) {
           if (abort.signal.aborted) {
-            await reader.cancel().catch(() => undefined);
+            stopReading();
             break;
           }
           const { done, value } = await reader.read();
-          if (done) break;
-          await publishRunChunk(runId, channelId, ++seq, value);
+          if (done || abort.signal.aborted) break;
+          if (value.type === "error") {
+            streamError ??= new Error(value.errorText);
+            // Do not poison the client stream with a recoverable first
+            // attempt error. Finalization exposes errors after recovery fails.
+            continue;
+          }
+          if (!["start", "start-step", "finish-step", "finish"].includes(value.type)) {
+            attemptProducedContent = true;
+          }
+          // Enqueue immediately; only pause consumption when the bounded
+          // buffer fills. Progress must not delay completed tool results.
+          await enqueueChunk(value);
           const kind = value && typeof value === "object" && "type" in value ? value.type : "";
           // Persist often enough that a reload mid-Zoo-tool still has text +
           // tool cards; force on step boundaries.
@@ -461,22 +562,27 @@ export async function executeChatRun(runId: string): Promise<void> {
           );
         }
       } finally {
+        abort.signal.removeEventListener("abort", stopReading);
         reader.releaseLock();
+        await eventWriter.flush();
         maybeCheckpoint(true);
         const pending = checkpointing;
         if (pending) await pending;
       }
+      if (streamError != null && !abort.signal.aborted) throw streamError;
     };
 
     try {
-      await runStream(prepared.ui, prepared.model);
+      await runStream(rawMessages, prepared.model);
     } catch (err) {
       // convertToLanguageModelPrompt throws here once the stream starts.
-      const missingItem = isMissingProviderItemError(err);
+      const missingItem = isMissingProviderItemError(err) || isMissingProviderReasoningError(err);
       const duplicateItem = isDuplicateProviderItemError(err);
       const recoverable =
         missingItem || duplicateItem || isMissingToolResultsError(err) || isInvalidPromptError(err);
-      if (!recoverable || abort.signal.aborted) throw err;
+      // Never replay an attempt that has already issued tools or text; its
+      // writes may have committed and replaying could duplicate real work.
+      if (!recoverable || attemptProducedContent || abort.signal.aborted) throw err;
       runLog.warn(
         duplicateItem
           ? "duplicate provider item id; retrying without provider-executed tool parts"
@@ -501,17 +607,17 @@ export async function executeChatRun(runId: string): Promise<void> {
           }),
         ),
       };
-      seq = await maxRunEventSeq(runId);
-      await runStream(prepared.ui, prepared.model);
+      await runStream(rawMessages, prepared.model);
     }
 
+    if (persistenceFailed) throw persistenceError;
     if (abort.signal.aborted) {
       await finalize("cancelled", "cancelled");
     } else {
       await finalize("done");
     }
   } catch (err) {
-    const cancelled = abort.signal.aborted;
+    const cancelled = abort.signal.aborted && !persistenceFailed;
     if (cancelled) {
       await finalize("cancelled", "cancelled");
       return;

@@ -1,27 +1,28 @@
 "use client";
 
 /**
- * Engineer home — renders the product PREVIEW (`assembly/product.kcl`).
- *
- * Manufacturing geometry lives under parts/. add_part_to_assembly regenerates
- * this preview from those files as Zoo references (named solids preferred).
+ * Engineer home: the linked product assembly, built from preserved part sources.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, Boxes, CircuitBoard, Package, RefreshCw, Waypoints } from "lucide-react";
 import { DotMatrixLoader } from "@/components/dot-matrix-loader";
 import { CadViewport } from "@/components/engineer/cad-viewport";
-import { normalizeCadDoc, type CadComponent } from "@/lib/cad/engine";
+import { isCadStarterComponent, normalizeCadDoc, pickCadAssemblyPreview } from "@/lib/cad/engine";
 import { cadViewportInput } from "@/lib/cad/viewport-project";
-import { normalizePcbDoc } from "@/lib/pcb/doc";
+import { normalizePcbSet, type PcbSet } from "@/lib/pcb/doc";
 import { formatCents } from "@/lib/format";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { LEGACY_CAD_PREVIEW_MESSAGE } from "@/lib/cad/safe-error";
 import { createLogger } from "@foundry/observability";
 
 const log = createLogger("assembly");
 
 export type AssemblyOpenTarget =
-  "pcb" | "schematic" | { editor: "model"; componentId?: string; label?: string };
+  | "pcb"
+  | "schematic"
+  | { editor: "model"; componentId?: string; label?: string }
+  | { editor: "pcb"; boardId: string; label?: string };
 
 type Props = {
   projectId: string;
@@ -37,26 +38,11 @@ type SceneTarget = {
   open: AssemblyOpenTarget;
 };
 
-/** Prefer `assembly/product.kcl`, else the first assembly component. */
-function pickProductAssembly(doc: ReturnType<typeof normalizeCadDoc>): CadComponent | null {
-  const assemblies = doc.components.filter((c) => c.kind === "assembly" && c.content.trim());
-  return (
-    assemblies.find(
-      (c) =>
-        c.path === "assembly/product.kcl" ||
-        c.path === "assembly/product/main.kcl" ||
-        c.name === "product",
-    ) ??
-    assemblies[0] ??
-    null
-  );
-}
-
 function sceneTargetsFromDoc(
   cadDoc: ReturnType<typeof normalizeCadDoc>,
-  pcbDoc: ReturnType<typeof normalizePcbDoc> | null,
+  pcbSet: PcbSet | null,
 ): SceneTarget[] {
-  const parts = cadDoc.components.filter((c) => c.kind === "part" && c.content.trim());
+  const parts = cadDoc.components.filter((c) => c.kind === "part" && !isCadStarterComponent(c));
   const out: SceneTarget[] = parts.map((c) => ({
     id: c.id,
     name: c.name,
@@ -64,13 +50,13 @@ function sceneTargetsFromDoc(
     detail: c.path,
     open: { editor: "model" as const, componentId: c.id, label: c.name },
   }));
-  if (pcbDoc) {
+  for (const board of pcbSet?.boards ?? []) {
     out.push({
-      id: "pcb",
-      name: "PCB",
+      id: `pcb:${board.id}`,
+      name: board.name ?? "PCB",
       kind: "pcb",
-      detail: `${pcbDoc.board.widthMm} × ${pcbDoc.board.heightMm} mm · ${pcbDoc.footprints.length} placements`,
-      open: "pcb",
+      detail: `${board.board.widthMm} × ${board.board.heightMm} mm · ${board.footprints.length} placements`,
+      open: { editor: "pcb", boardId: board.id!, label: board.name },
     });
   }
   return out;
@@ -80,7 +66,6 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
   const utils = trpc.useUtils();
   const model = trpc.design.get.useQuery({ projectId, branchId, kind: "MODEL3D" });
   const pcb = trpc.design.get.useQuery({ projectId, branchId, kind: "PCB" });
-  const engine = trpc.cad.engineSession.useQuery({ projectId });
   const components = trpc.engineer.listComponents.useQuery({ projectId, branchId });
   const [error, setError] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -88,7 +73,7 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
   const [viewportEpoch, setViewportEpoch] = useState(0);
   const [syncing, setSyncing] = useState(false);
 
-  const loading = (model.isLoading || pcb.isLoading || engine.isLoading) && !syncing;
+  const loading = (model.isLoading || pcb.isLoading) && !syncing;
 
   const syncFromServer = useCallback(async () => {
     setSyncing(true);
@@ -97,13 +82,11 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
       await Promise.all([
         utils.design.get.invalidate({ projectId, branchId, kind: "MODEL3D" }),
         utils.design.get.invalidate({ projectId, branchId, kind: "PCB" }),
-        utils.cad.engineSession.invalidate({ projectId }),
         utils.engineer.listComponents.invalidate({ projectId, branchId }),
       ]);
       await Promise.all([
         utils.design.get.refetch({ projectId, branchId, kind: "MODEL3D" }),
         utils.design.get.refetch({ projectId, branchId, kind: "PCB" }),
-        utils.cad.engineSession.refetch({ projectId }),
         utils.engineer.listComponents.refetch({ projectId, branchId }),
       ]);
       setViewportEpoch((n) => n + 1);
@@ -116,17 +99,26 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
     () => (model.data?.data ? normalizeCadDoc(model.data.data) : null),
     [model.data],
   );
-  const pcbDoc = useMemo(
-    () => (pcb.data?.data ? normalizePcbDoc(pcb.data.data) : null),
+  const pcbSet = useMemo(
+    () => (pcb.data?.data ? normalizePcbSet(pcb.data.data) : null),
     [pcb.data],
   );
 
-  const product = useMemo(() => (cadDoc ? pickProductAssembly(cadDoc) : null), [cadDoc]);
+  const preview = useMemo(() => (cadDoc ? pickCadAssemblyPreview(cadDoc) : null), [cadDoc]);
+  const product = preview?.component ?? null;
 
-  const viewport = useMemo(
-    () => (cadDoc && product ? cadViewportInput(cadDoc, product.id) : null),
-    [cadDoc, product],
-  );
+  const viewportResult = useMemo(() => {
+    try {
+      return { data: cadDoc && product ? cadViewportInput(cadDoc, product.id) : null, error: null };
+    } catch {
+      return {
+        data: null,
+        error:
+          "A referenced CAD file is missing or unavailable. Restore the import or update the source part.",
+      };
+    }
+  }, [cadDoc, product]);
+  const viewport = viewportResult.data;
 
   useEffect(() => {
     if (!product || !viewport) {
@@ -148,8 +140,8 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
   }, [product, viewport]);
 
   const sceneTargets = useMemo(
-    () => (cadDoc ? sceneTargetsFromDoc(cadDoc, pcbDoc) : []),
-    [cadDoc, pcbDoc],
+    () => (cadDoc ? sceneTargetsFromDoc(cadDoc, pcbSet) : []),
+    [cadDoc, pcbSet],
   );
 
   const activeTarget = sceneTargets.find((t) => t.id === (hoveredId ?? selectedId)) ?? null;
@@ -163,29 +155,23 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
     return <DotMatrixLoader className="absolute inset-0" label="Loading assembly" />;
   }
 
-  if (!engine.data?.token) {
-    return (
-      <div className="text-destructive flex h-full items-center justify-center p-8 text-sm">
-        ZOO_API_TOKEN is not configured on the server.
-      </div>
-    );
-  }
-
   if (!viewport || !product) {
     return (
       <div className="flex h-full items-center justify-center p-8">
         <div className="max-w-md text-center">
           <Boxes className="text-muted-foreground mx-auto size-8" strokeWidth={1.5} />
-          <h2 className="mt-3 text-lg font-semibold">No product preview</h2>
+          <h2 className="mt-3 font-mono text-lg font-medium tracking-[-0.025em]">
+            {viewportResult.error
+              ? "Assembly needs its source files"
+              : "Build your product assembly"}
+          </h2>
           <p className="text-muted-foreground mt-1.5 text-sm">
-            Assembly shows <span className="font-mono text-[12px]">assembly/product.kcl</span> — the
-            visual product preview. Manufacturing geometry stays under{" "}
-            <span className="font-mono text-[12px]">parts/</span>. Ask the copilot to build the
-            preview, or open CAD and edit that file.
+            {viewportResult.error ??
+              "Open Workflow details above to update CAD from your boards and build the linked assembly. You can also open CAD to add manufacturing parts."}
           </p>
           <button
             type="button"
-            className="bg-primary text-primary-foreground mt-4 rounded-none px-3 py-1.5 text-xs font-medium"
+            className="bg-primary text-primary-foreground mt-4 rounded-none px-3 py-1.5 font-mono text-[11px] tracking-[0.08em] uppercase"
             onClick={() => onOpenEditor?.({ editor: "model", label: "CAD" })}
           >
             Open CAD
@@ -196,128 +182,173 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
   }
 
   return (
-    <div className="absolute inset-0">
-      <CadViewport
-        key={viewportEpoch}
-        script={viewport.script}
-        engine={{ token: engine.data.token, baseUrl: engine.data.baseUrl }}
-        projectFiles={viewport.projectFiles}
-        entryPath={viewport.entryPath}
-        meshAssets={viewport.meshAssets}
-        foreignImportOnly={viewport.foreignImportOnly}
-        chrome
-        headless={false}
-        onError={setError}
-      />
-      {error ? (
-        <div className="text-destructive bg-background/90 absolute inset-x-0 top-0 z-10 p-3 font-mono text-xs">
-          Assembly error: {error}
+    <div className="absolute inset-0 flex">
+      <aside
+        className="bg-card z-10 flex w-52 shrink-0 flex-col border-r"
+        aria-label="Assembly components"
+      >
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+          <Boxes className="text-primary size-3.5" />
+          <p className="min-w-0 flex-1 font-mono text-[11px] font-medium tracking-[0.1em] uppercase">
+            Assembly
+          </p>
+          <button
+            type="button"
+            onClick={() => void syncFromServer()}
+            disabled={syncing}
+            aria-label={syncing ? "Syncing assembly" : "Reload assembly"}
+            title="Reload assembly from saved project"
+            className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-6 items-center justify-center rounded-none disabled:opacity-60"
+          >
+            <RefreshCw className={cn("size-3", syncing && "animate-spin")} />
+          </button>
         </div>
-      ) : null}
-
-      <div className="absolute top-3 right-3 z-10 flex w-72 flex-col gap-2">
-        <button
-          type="button"
-          onClick={() => void syncFromServer()}
-          disabled={syncing}
-          className="bg-card/95 hover:bg-card flex items-center justify-center gap-2 rounded-none border px-3 py-2 text-xs font-medium shadow-lg backdrop-blur-md disabled:opacity-60"
-        >
-          <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
-          {syncing ? "Syncing…" : "Reload · sync from server"}
-        </button>
-
-        <div className="bg-card/90 overflow-hidden rounded-none border shadow-lg backdrop-blur-md">
-          <div className="border-b px-3 py-2">
-            <p className="text-xs font-semibold">Product assembly</p>
-            <p className="text-muted-foreground mt-0.5 font-mono text-[11px]">{product.path}</p>
-            <p className="text-muted-foreground mt-0.5 text-[11px]">
-              Poses live in this file — open a part to edit geometry
-            </p>
-          </div>
-          <ul className="flex max-h-[min(60vh,420px)] flex-col gap-0.5 overflow-y-auto p-1.5">
-            {sceneTargets.map((t) => {
-              const hot = t.id === hoveredId || t.id === selectedId;
-              return (
-                <li key={t.id}>
-                  <button
-                    type="button"
-                    onMouseEnter={() => setHoveredId(t.id)}
-                    onMouseLeave={() => setHoveredId(null)}
-                    onClick={() => setSelectedId(t.id)}
-                    className={cn(
-                      "flex w-full items-center gap-2.5 rounded-none px-2.5 py-2 text-left transition-all duration-150",
-                      hot
-                        ? "bg-primary/15 -translate-y-0.5 shadow-sm ring-1 ring-primary/30"
-                        : "hover:bg-muted/60",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "flex size-7 shrink-0 items-center justify-center rounded-none",
-                        t.kind === "pcb"
-                          ? "bg-phase-engineer/15 text-phase-engineer"
-                          : "bg-primary/10 text-primary",
-                      )}
-                    >
-                      {t.kind === "pcb" ? (
-                        <CircuitBoard className="size-3.5" strokeWidth={1.75} />
-                      ) : (
-                        <Boxes className="size-3.5" strokeWidth={1.75} />
-                      )}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs font-medium">{t.name}</span>
-                      <span className="text-muted-foreground block truncate text-[11px]">
-                        {t.detail}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+        <div className="px-3 pt-3 pb-2">
+          <p className="font-mono text-xs font-medium">
+            {preview?.mode === "part" ? product.name : "Product assembly"}
+          </p>
+          <p
+            className="text-muted-foreground mt-1 truncate font-mono text-[10px]"
+            title={product.path}
+          >
+            {product.path}
+          </p>
         </div>
-
+        <div className="text-muted-foreground flex items-center justify-between border-t px-3 pt-3 pb-1 font-mono text-[10px] tracking-[0.1em] uppercase">
+          <span>Components</span>
+          <span className="font-mono tabular-nums">{sceneTargets.length}</span>
+        </div>
+        <ul className="min-h-0 flex-1 overflow-y-auto py-1">
+          {sceneTargets.map((t) => {
+            const hot = t.id === hoveredId || t.id === selectedId;
+            return (
+              <li key={t.id}>
+                <button
+                  type="button"
+                  title={t.detail}
+                  aria-pressed={t.id === selectedId}
+                  onMouseEnter={() => setHoveredId(t.id)}
+                  onMouseLeave={() => setHoveredId(null)}
+                  onClick={() => setSelectedId(t.id)}
+                  className={cn(
+                    "flex w-full items-center gap-2 border-l-2 py-2 pr-3 pl-2.5 text-left transition-colors",
+                    hot
+                      ? "border-l-primary bg-primary/8 text-foreground"
+                      : "text-muted-foreground hover:bg-muted/60 border-l-transparent",
+                  )}
+                >
+                  {t.kind === "pcb" ? (
+                    <CircuitBoard className="size-3.5 shrink-0" strokeWidth={1.75} />
+                  ) : (
+                    <Boxes className="size-3.5 shrink-0" strokeWidth={1.75} />
+                  )}
+                  <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{t.name}</span>
+                  <span className="text-muted-foreground font-mono text-[9px]">
+                    {t.kind === "pcb" ? "PCB" : "PART"}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
         {activeTarget ? (
-          <div className="bg-card/95 animate-in fade-in slide-in-from-top-1 rounded-none border px-3 py-2.5 shadow-lg backdrop-blur-md duration-150">
-            <div className="flex items-start gap-2">
-              <span className="bg-primary/15 text-primary mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-none">
-                <ArrowUpRight className="size-3.5" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-semibold">{activeTarget.name}</p>
-                <p className="text-muted-foreground text-[11px]">
-                  {activeTarget.kind === "pcb" ? "Open in PCB editor" : "Open in CAD editor"}
-                </p>
-              </div>
-            </div>
-            <div className="mt-2 flex gap-1.5">
+          <div className="shrink-0 border-t px-3 py-3">
+            <p className="truncate font-mono text-xs font-medium">{activeTarget.name}</p>
+            <p
+              className="text-muted-foreground mt-1 truncate font-mono text-[10px]"
+              title={activeTarget.detail}
+            >
+              {activeTarget.detail}
+            </p>
+            <div className="mt-2.5 flex gap-1.5">
               <button
                 type="button"
-                className="bg-primary text-primary-foreground flex flex-1 items-center justify-center gap-1 rounded-none px-2 py-1.5 text-[11px] font-medium"
+                className="bg-foreground text-background hover:bg-foreground/90 flex flex-1 items-center justify-center gap-1.5 rounded-none px-2 py-1.5 font-mono text-[10px] tracking-[0.06em] uppercase"
                 onClick={() => onOpenEditor?.(activeTarget.open)}
               >
-                Open
+                Open {activeTarget.kind === "pcb" ? "PCB" : "part"}
                 <ArrowUpRight className="size-3" />
               </button>
               {activeTarget.kind === "pcb" ? (
                 <button
                   type="button"
-                  className="bg-muted flex items-center gap-1 rounded-none px-2 py-1.5 text-[11px] font-medium"
+                  className="hover:bg-muted flex items-center gap-1 rounded-none border px-2 py-1.5 font-mono text-[10px] tracking-[0.06em] uppercase"
+                  title="Open schematic"
+                  aria-label="Open schematic"
                   onClick={() => onOpenEditor?.("schematic")}
                 >
-                  <Waypoints className="size-3" />
-                  Schematic
+                  <Waypoints className="size-3.5" />
                 </button>
               ) : null}
             </div>
           </div>
-        ) : null}
-
-        <div className="bg-card/80 text-muted-foreground flex items-center gap-2 rounded-none border px-2.5 py-1.5 text-[11px] shadow backdrop-blur-md">
+        ) : (
+          <p className="text-muted-foreground shrink-0 border-t px-3 py-3 text-[11px] leading-relaxed">
+            Select a component to open its editor.
+          </p>
+        )}
+        <div className="text-muted-foreground flex h-9 shrink-0 items-center gap-2 border-t px-3 font-mono text-[10px] tracking-[0.06em] uppercase">
           <Package className="size-3" />
-          BOM · est. {formatCents(bomCents)}
+          <span>BOM estimate</span>
+          <span className="text-foreground ml-auto font-mono tabular-nums">
+            {formatCents(bomCents)}
+          </span>
         </div>
+      </aside>
+      <div className="relative min-w-0 flex-1">
+        {preview?.mode === "part" ? (
+          <div
+            className="bg-card text-muted-foreground pointer-events-none absolute top-3 left-3 z-20 rounded-none border px-2.5 py-1.5 font-mono text-[10px] tracking-[0.04em]"
+            role="status"
+          >
+            Part preview · assembly not built
+          </div>
+        ) : null}
+        {viewport.engine === "zoo" && !viewport.foreignImportOnly ? (
+          <div className="absolute inset-0 flex items-center justify-center p-8 text-center">
+            <div className="max-w-xs">
+              <Boxes className="text-muted-foreground mx-auto size-7" strokeWidth={1.5} />
+              <p className="mt-3 font-mono text-sm font-medium tracking-[-0.02em]">
+                Convert the assembly to Python
+              </p>
+              <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
+                {LEGACY_CAD_PREVIEW_MESSAGE}
+              </p>
+              <button
+                type="button"
+                onClick={() =>
+                  onOpenEditor?.({ editor: "model", componentId: product.id, label: product.name })
+                }
+                className="hover:bg-muted mt-4 rounded-none border px-3 py-2 font-mono text-[10px] tracking-[0.08em] uppercase"
+              >
+                Open preserved source
+              </button>
+            </div>
+          </div>
+        ) : (
+          <CadViewport
+            engine={viewport.engine}
+            key={viewportEpoch}
+            modelKey={product?.id}
+            script={viewport.script}
+            projectId={projectId}
+            projectFiles={viewport.projectFiles}
+            entryPath={viewport.entryPath}
+            meshAssets={viewport.meshAssets}
+            foreignImportOnly={viewport.foreignImportOnly}
+            chrome
+            headless={false}
+            onError={setError}
+          />
+        )}
+        {error ? (
+          <div
+            className="text-destructive bg-background/95 absolute inset-x-0 top-0 z-10 border-b px-3 py-2 text-xs"
+            role="alert"
+          >
+            Assembly error: {error}
+          </div>
+        ) : null}
       </div>
     </div>
   );
