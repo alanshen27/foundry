@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 
 // Catch high-DPI drawing buffers accidentally becoming the canvas's CSS dimensions.
 test.use({ deviceScaleFactor: 2 });
+// Software WebGL at 2x on a shared CI runner can take seconds per layout read.
+const LAYOUT_POLL = { timeout: 20_000 };
 
 test("workspace keeps the model dominant and preserves assembly-to-part navigation", async ({
   page,
@@ -26,10 +28,10 @@ test("workspace keeps the model dominant and preserves assembly-to-part navigati
   const canvas = viewport.locator("canvas");
   const viewportBox = (await viewport.boundingBox())!;
   await expect
-    .poll(async () => (await canvas.boundingBox())!.width)
+    .poll(async () => (await canvas.boundingBox())!.width, LAYOUT_POLL)
     .toBeCloseTo(viewportBox.width, 0);
   await expect
-    .poll(async () => (await canvas.boundingBox())!.height)
+    .poll(async () => (await canvas.boundingBox())!.height, LAYOUT_POLL)
     .toBeCloseTo(viewportBox.height, 0);
   const chat = page.getByRole("complementary", { name: "AI copilot" });
   await expect(chat).toBeVisible();
@@ -47,15 +49,19 @@ test("workspace keeps the model dominant and preserves assembly-to-part navigati
   await expect(chat).toHaveCount(0);
   expect((await viewport.boundingBox())!.width).toBeGreaterThan(beforeHide + 250);
   await expect
-    .poll(async () =>
-      Math.abs((await canvas.boundingBox())!.width - (await viewport.boundingBox())!.width),
+    .poll(
+      async () =>
+        Math.abs((await canvas.boundingBox())!.width - (await viewport.boundingBox())!.width),
+      LAYOUT_POLL,
     )
     .toBeLessThan(1);
   await page.getByRole("button", { name: "Show copilot", exact: true }).click();
   await expect(chat).toBeVisible();
   await expect
-    .poll(async () =>
-      Math.abs((await canvas.boundingBox())!.width - (await viewport.boundingBox())!.width),
+    .poll(
+      async () =>
+        Math.abs((await canvas.boundingBox())!.width - (await viewport.boundingBox())!.width),
+      LAYOUT_POLL,
     )
     .toBeLessThan(1);
 
