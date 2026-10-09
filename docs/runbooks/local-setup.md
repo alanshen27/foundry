@@ -57,9 +57,9 @@ See [native Python CAD](native-python-cad.md) for migration and execution limits
 
 ## Connected engineering and collaboration
 
-Before updating an existing database, apply the additive SQL in
-`packages/db/prisma/changes/20260911-collaboration.sql` through your normal
-database deployment process. New local databases get this table with `pnpm db:push`.
+`CollaborationDocument` is part of the Prisma migration history: existing
+databases get it from `pnpm db:migrate:deploy`, new local databases from
+`pnpm db:push`.
 The table is required even if `NEXT_PUBLIC_COLLAB_URL` is unset. Web, chat worker,
 and Hocuspocus must use the same database, Redis instance, and `AUTH_SECRET`.
 Set `NEXT_PUBLIC_COLLAB_URL=ws://localhost:1234` for live editing.

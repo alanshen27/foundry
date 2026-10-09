@@ -83,11 +83,11 @@ references to them are shared with the design.
 
 ## Required database update
 
-Before deploying this version, apply:
-
-`packages/db/prisma/changes/20260911-collaboration.sql`
-
-This additive, idempotent SQL creates `CollaborationDocument`. It is required even
+`CollaborationDocument` ships as the Prisma migration
+`packages/db/prisma/migrations/20260923000000_collaboration_document`, applied by
+`pnpm db:migrate:deploy` (the Render pre-deploy step). It is additive and
+idempotent, so databases that already ran the former hand-applied
+`20260911-collaboration.sql` converge on the same table. It is required even
 in local autosave mode. Do not deploy an older whole-document persistence server
 alongside the new bridge. Web, worker and realtime must share database, Redis and
 `AUTH_SECRET`. New local databases include the table via the normal Prisma push.

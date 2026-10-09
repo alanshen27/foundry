@@ -13,20 +13,27 @@ every service). There are no per-service env vars beyond that link.
 2. Open [Render Blueprint](https://dashboard.render.com/blueprint/new) and
    point it at the repo (file: `render.yaml`).
 3. Fill every prompted (`sync: false`) secret in **foundry-shared**:
-   - `APP_ORIGIN` — public web URL (`https://foundry-web-….onrender.com`)
+   - `APP_ORIGIN` — **required** public web URL (`https://foundry-web-….onrender.com`)
    - `DATABASE_URL` / `DIRECT_URL` — Supabase Postgres (session/direct for DDL)
-   - `REDIS_URL` — **required** Upstash `rediss://…` (TLS). If unset, the app
-     defaults to `localhost:6379` and Render logs endless `ECONNREFUSED` /
-     `AggregateError` until the service is SIGTERM'd.
+   - `REDIS_URL` — **required** Upstash `rediss://…` (TLS).
    - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
      `SUPABASE_SERVICE_ROLE_KEY`
    - `NEXT_PUBLIC_COLLAB_URL` — `wss://<foundry-collab hostname>`
-   - Optional: `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ZOO_API_TOKEN`, `V0_API_KEY`,
+   - Optional: `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `V0_API_KEY`,
+     `MEDIA_VIDEO_MODEL`, `SENTRY_DSN`, `AI_WORKSPACE_DAILY_TOKEN_BUDGET`,
      `FOUNDRY_DEFAULT_WORKSPACE_SLUG`
-4. Apply schema against production Postgres (`pnpm db:push` locally with
-   production `DIRECT_URL`, or run Prisma from a one-off shell).
+4. New database: nothing to do — each service's `preDeployCommand` runs
+   `pnpm db:migrate:deploy`. Existing `db push` database: baseline it once
+   first (see below), or every deploy stops at the pre-deploy step.
 5. Create the private Supabase Storage bucket named `artifacts`.
 6. Configure custom auth email (see `docs/runbooks/auth-email.md`).
+7. Smoke test: `curl https://<APP_ORIGIN host>/api/ready` returns
+   `{"ok":true,"checks":{"database":"ok","redis":"ok"}}`.
+
+On Render (`RENDER` is set), `packages/config` refuses to start any service
+with `AUTH_MODE` other than `supabase`, a missing `AUTH_SECRET`, a missing or
+localhost `APP_ORIGIN`, or localhost Supabase/Postgres/Redis URLs. The error
+names every offending variable; read it in the service's deploy logs.
 
 For CAD generation, configure `OPENAI_API_KEY` with access to GPT-6 Astra. The
 blueprint sets `CAD_MODEL=gpt-6-astra` for both the web and chat worker services.
@@ -43,6 +50,11 @@ on a hosted web process. See `native-python-cad.md` for the runtime boundary.
 | `foundry-web`         | Next.js App Router (`@foundry/web`) |
 | `foundry-chat-worker` | BullMQ worker for AI chat runs      |
 | `foundry-collab`      | Hocuspocus Yjs WebSocket server     |
+
+Health checks: `foundry-web` uses `/api/health` (liveness, no dependencies);
+`foundry-collab` uses `/` (Hocuspocus answers any HTTP GET with `OK`).
+`/api/ready` checks Postgres and Redis and returns 503 if either is down — use it
+for smoke tests and uptime monitors, not as Render's health check.
 
 `APP_ORIGIN` is set in `foundry-shared` to the public web URL. Auth email
 redirects and screenshot tools both use it. `AUTH_SECRET` is generated once in
@@ -94,19 +106,13 @@ root, which build commands do not have. If a launch ever fails with
 executable, the native image is short a system library and the service needs
 to move to a Docker runtime built on `mcr.microsoft.com/playwright`.
 
-## Schema changes are not applied by the deploy
+## Schema changes are applied pre-deploy
 
-`render.yaml` builds with `db generate` and `next build` — it runs **no DDL**.
-A deploy that ships new Prisma models boots fine and then fails with `P2021`
-(table does not exist) on the first query that touches them.
-
-Schema changes now ship as Prisma migrations in
-`packages/db/prisma/migrations/`. Apply them against the session-pooler URL
-**before** the web and worker services pick up the new code:
-
-```bash
-DIRECT_URL="postgresql://…:5432/postgres" pnpm db:migrate:deploy
-```
+Schema changes ship as Prisma migrations in `packages/db/prisma/migrations/`.
+Every service runs `pnpm db:migrate:deploy` as its Render `preDeployCommand`,
+after the build and before the new code takes traffic. Prisma holds an advisory
+lock, so the three services running it concurrently is safe. If a migration
+fails, Render cancels that deploy and the previous one keeps serving.
 
 `migrate deploy` only runs migrations that have not been applied and never
 resets or prompts. Never run `prisma migrate dev` or `migrate reset` against
@@ -123,21 +129,22 @@ the first `migrate deploy`:
 DIRECT_URL="…" pnpm --filter @foundry/db exec dotenv -e ../../.env -- \
   prisma migrate resolve --applied 0_init
 
-# Check what is still pending — expect exactly the product graph migration.
+# Check what is still pending.
 DIRECT_URL="…" pnpm db:migrate:status
 
 # Apply it.
 DIRECT_URL="…" pnpm db:migrate:deploy
 ```
 
-If someone already ran `db:push` with the product graph schema, mark that
-migration applied too (`migrate resolve --applied 20260916000000_product_graph`)
-instead of deploying it, then confirm with `pnpm db:migrate:check`, which
-exits non-zero if the database and `schema.prisma` disagree.
+For every later migration that `db:push` already created in production
+(`20260916000000_product_graph`, `20260916010000_chat_run_usage`,
+`20260922032714_graph_proposals`), run `migrate resolve --applied <name>`
+instead of deploying it. `20260923000000_collaboration_document` is idempotent
+and safe to deploy either way. Finish with `pnpm db:migrate:check`, which exits
+non-zero if the database and `schema.prisma` disagree.
 
-Once production is baselined, `pnpm db:migrate:deploy` can move into the
-Render build or a pre-deploy command. Do not add it there before the baseline:
-it would fail every deploy until then.
+Baseline **before** merging the change that added the pre-deploy step;
+until then each deploy stops at pre-deploy (the old deploy keeps serving).
 
 The Product Graph (`ProductNode`, `ProductEdge`, and four nullable power
 columns on `Component`) is one such change. Existing projects need no
@@ -158,9 +165,9 @@ a `.env.local` pointing at a local Postgres keeps those commands off production.
 
 ## Durable engineering collaboration rollout
 
-Apply `packages/db/prisma/changes/20260911-collaboration.sql` before deploying this
-version of the web, worker and Hocuspocus services. It creates one additive table;
-existing source documents seed durable Yjs state lazily. This is required even
+The `20260923000000_collaboration_document` migration creates one additive table
+(idempotent with the former hand-run `20260911-collaboration.sql`); existing
+source documents seed durable Yjs state lazily. This is required even
 when `NEXT_PUBLIC_COLLAB_URL` is unset because server and AI saves preserve that
 state for later reconnects. Deploy all three services together, using the same
 PostgreSQL database, Redis instance, and `AUTH_SECRET`; use `wss://` for the public

@@ -78,7 +78,7 @@ the task explicitly changes them.
 - `NEXT_PUBLIC_REALTIME_MODE=off` disables remote presence.
 - Code, schematic, PCB, CAD/assembly metadata, and design notes use durable Yjs/Hocuspocus documents.
 - API and AI writes must update CRDT state and the SQL read model atomically through the collaboration bridge; never replace SQL behind a live room.
-- Apply the additive CollaborationDocument migration before running updated web/worker/realtime services, even when websocket collaboration is disabled.
+- The CollaborationDocument Prisma migration must be applied (Render runs `pnpm db:migrate:deploy` pre-deploy) before updated web/worker/realtime services start, even when websocket collaboration is disabled.
 - Without `NEXT_PUBLIC_COLLAB_URL`, the editor falls back to single-player
   autosave.
 
