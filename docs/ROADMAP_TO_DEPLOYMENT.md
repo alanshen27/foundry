@@ -62,6 +62,9 @@ right fit, and this roadmap keeps it:
 | No readiness signal                                                                                                                                          | The only way to check DB/Redis connectivity was to use the app                                                                                                                                        | `GET /api/ready` returns 200 or 503 with per-dependency status, without leaking error details                                     |
 | `OPENROUTER_API_KEY` was documented but missing from the Blueprint                                                                                           | Jev triage could not be configured from Render                                                                                                                                                        | Added to `foundry-shared`                                                                                                         |
 
+CI also gained a Redis service (production requires Redis, but CI ran without
+it) and uploads Playwright traces when E2E fails.
+
 ### Verified CI-equivalent results on this branch
 
 `pnpm install --frozen-lockfile`, `db:generate`, `format:check`, `lint`
