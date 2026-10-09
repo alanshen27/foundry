@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { prisma } from "@foundry/db";
-import { assignableRoles, WORKSPACE_ROLES } from "@foundry/domain";
+import { assignableRoles, hasCapability, WORKSPACE_ROLES, type Capability } from "@foundry/domain";
 import { selectSharedProjects } from "@/lib/shared-projects";
 import { protectedProcedure, router } from "../trpc";
 import { recordAudit } from "../audit";
@@ -12,13 +12,51 @@ import { createWorkspaceForOwner } from "../create-workspace";
 const INVITE_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 
 export const workspaceRouter = router({
-  list: protectedProcedure.query(({ ctx }) =>
-    prisma.workspace.findMany({
+  list: protectedProcedure.query(async ({ ctx }) => {
+    const workspaces = await prisma.workspace.findMany({
       where: { memberships: { some: { userId: ctx.user.id } } },
-      include: { _count: { select: { projects: true, memberships: true } } },
+      include: {
+        _count: { select: { projects: true, memberships: true } },
+        memberships: {
+          where: { userId: ctx.user.id },
+          select: {
+            role: true,
+            grants: { where: { projectId: null }, select: { capability: true } },
+          },
+        },
+      },
       orderBy: { createdAt: "asc" },
+    });
+    return workspaces.map(({ memberships, ...workspace }) => ({
+      ...workspace,
+      canManage: memberships.some((membership) =>
+        hasCapability(
+          membership.role,
+          membership.grants.map((grant) => grant.capability as Capability),
+          "project.manage",
+        ),
+      ),
+    }));
+  }),
+
+  rename: protectedProcedure
+    .input(z.object({ workspaceId: z.string().min(1), name: z.string().trim().min(1).max(80) }))
+    .mutation(async ({ ctx, input }) => {
+      await requireWorkspaceCapability(ctx.user.id, input.workspaceId, "project.manage");
+      // The slug is a stable address; changing a display name must not break open projects.
+      const workspace = await prisma.workspace.update({
+        where: { id: input.workspaceId },
+        data: { name: input.name },
+        select: { id: true, name: true, slug: true },
+      });
+      await recordAudit({
+        type: "WorkspaceRenamed",
+        workspaceId: workspace.id,
+        actorId: ctx.user.id,
+        payload: { name: workspace.name },
+      });
+      return workspace;
     }),
-  ),
 
   /**
    * Projects reachable through a membership in a workspace someone else
@@ -48,7 +86,7 @@ export const workspaceRouter = router({
   }),
 
   create: protectedProcedure
-    .input(z.object({ name: z.string().min(1).max(80) }))
+    .input(z.object({ name: z.string().trim().min(1).max(80) }))
     .mutation(({ ctx, input }) =>
       createWorkspaceForOwner({ userId: ctx.user.id, name: input.name }),
     ),

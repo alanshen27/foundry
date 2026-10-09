@@ -18,6 +18,13 @@
 # - Chromium must be downloaded during the build (see PLAYWRIGHT_BROWSERS_PATH).
 #   playwright-core ships no browser binaries, and modern Playwright has no
 #   postinstall hook, so `pnpm install` alone never produces one.
+#
+# Migrations:
+# - Every service runs `pnpm db:migrate:deploy` as its preDeployCommand.
+#   Prisma takes an advisory lock, so the three concurrent runs are safe, and
+#   a failed migration cancels that deploy while the previous one keeps
+#   serving. An existing `db push` database must be baselined once first
+#   (docs/runbooks/deploy-render.md) or every deploy stops at this step.
 
 envVarGroups:
   - name: foundry-shared
@@ -46,6 +53,8 @@ envVarGroups:
       - key: AUTH_SECRET
         generateValue: true
       # Public web URL (https://foundry-web-….onrender.com or custom domain).
+      # Required: config refuses to boot on Render without it, because the
+      # worker's screenshot tools and auth email redirects are built from it.
       - key: APP_ORIGIN
         sync: false
       # Supabase Postgres (pooled + direct for DDL)
@@ -66,6 +75,9 @@ envVarGroups:
       - key: NEXT_PUBLIC_COLLAB_URL
         sync: false
       - key: OPENAI_API_KEY
+        sync: false
+      # Jev triage for chat messages without @AI. Unset = only @AI triggers.
+      - key: OPENROUTER_API_KEY
         sync: false
       # Copilot cost controls. AI_RUNS_PER_HOUR caps turns per user (default
       # 30); AI_WORKSPACE_DAILY_TOKEN_BUDGET caps tokens per workspace per
@@ -102,7 +114,10 @@ services:
     # --only-shell: server/ai/render.ts always launches headless, which resolves
     # to chromium-headless-shell. Skipping headful Chromium halves the download.
     buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/web exec playwright install --only-shell chromium && pnpm --filter @foundry/db generate && pnpm --filter @foundry/web build
+    preDeployCommand: pnpm db:migrate:deploy
     startCommand: pnpm --filter @foundry/web start
+    # Liveness only. /api/ready additionally checks Postgres and Redis for
+    # smoke tests and uptime monitors.
     healthCheckPath: /api/health
     buildFilter:
       paths:
@@ -127,6 +142,7 @@ services:
     # Chromium too — extract_product_images and the viewport captures both fail
     # here without a browser, surfacing as "Image extraction failed" in chat.
     buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/web exec playwright install --only-shell chromium && pnpm --filter @foundry/db generate
+    preDeployCommand: pnpm db:migrate:deploy
     startCommand: pnpm --filter @foundry/web worker:chat:prod
     buildFilter:
       paths:
@@ -146,16 +162,24 @@ services:
     plan: starter
     region: oregon
     buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @foundry/db generate
+    preDeployCommand: pnpm db:migrate:deploy
     startCommand: pnpm --filter @foundry/collab-server start:prod
+    # Hocuspocus answers any plain HTTP GET with 200 "OK".
+    healthCheckPath: /
+    # Every workspace package the collab server imports, so web, worker and
+    # collab always redeploy together when shared code changes.
     buildFilter:
       paths:
         - apps/realtime/**
         - packages/collaboration/**
         - packages/config/**
         - packages/db/**
+        - packages/domain/**
+        - packages/observability/**
         - package.json
         - pnpm-lock.yaml
         - pnpm-workspace.yaml
+        - turbo.json
         - render.yaml
     envVars:
       - fromGroup: foundry-shared

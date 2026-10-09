@@ -232,4 +232,24 @@ describe("shared code text", () => {
     applyTextSnapshot(text, "hello world", "hello WORLD");
     expect(text.toString()).toBe("hello new WORLD");
   });
+
+  it("replaces a rewrite too large to diff when the file is otherwise unchanged", () => {
+    const doc = new Y.Doc(),
+      text = doc.getText("content");
+    const before = "a".repeat(20_001);
+    const after = "b".repeat(20_001);
+    text.insert(0, before);
+    applyTextSnapshot(text, before, after);
+    expect(text.toString()).toBe(after);
+  });
+
+  it("keeps a concurrent edit when a rewrite is too large to merge with it", () => {
+    const doc = new Y.Doc(),
+      text = doc.getText("content");
+    const before = "a".repeat(20_001);
+    text.insert(0, before);
+    text.insert(0, "human\n");
+    expect(() => applyTextSnapshot(text, before, "b".repeat(20_001))).toThrow(/changed during/);
+    expect(text.toString().startsWith("human\n")).toBe(true);
+  });
 });

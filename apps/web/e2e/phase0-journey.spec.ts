@@ -8,6 +8,7 @@ import { expect, test, type Page } from "@playwright/test";
  */
 
 const runId = Date.now().toString(36);
+const SIGNED_IN_HOME = /\/w\/[^/]+(\/projects\/[^/]+\/engineer\?view=assembly)?$/;
 
 /**
  * page.goto that survives a client-side navigation still in flight.
@@ -33,11 +34,13 @@ async function signIn(page: Page, email: string) {
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("demo-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  // Signed-in home is the primary workspace slug, not the all-workspaces list.
-  await page.waitForURL(/\/w\/[^/]+$/);
+  // Signed-in home opens the last (or newest) project's assembly viewport, or
+  // the workspace itself when there is no project yet; never the workspace list.
+  await page.waitForURL(SIGNED_IN_HOME);
   // Let the landing page finish loading: navigating away while the client
   // router is still settling aborts the next page.goto (net::ERR_ABORTED).
   await page.waitForLoadState("load");
+  return new URL(page.url()).pathname;
 }
 
 test("full Phase 0 journey", async ({ browser }) => {
@@ -62,29 +65,33 @@ test("full Phase 0 journey", async ({ browser }) => {
   await builder
     .getByLabel("Describe the product to build")
     .fill("A palm-sized two-wheel rover for phase 0 acceptance.");
-  await builder.getByRole("button", { name: "More" }).click();
+  await builder.getByRole("button", { name: "Options" }).click();
   await builder.getByLabel("Project name").fill("Test Rover");
   await builder.getByRole("button", { name: "Build" }).click();
-  await builder.waitForURL(`**/w/${workspaceSlug}/projects/test-rover/engineer`);
+  await builder.waitForURL(new RegExp(`/w/${workspaceSlug}/projects/test-rover/engineer(\\?|$)`));
   expect(builder.url()).toMatch(new RegExp(`/w/${workspaceSlug}/projects/test-rover`));
   expect(builder.url()).not.toMatch(/\/w\/test-rover(?:\/|$)/);
   await expect(builder.getByRole("heading", { name: "Test Rover" })).toBeVisible();
 
-  // Walk the stages through the workspace tab bar and check each real editor
-  // renders. The old footer "Design process" nav is gone: every stage now
-  // lives inside the engineer workspace as a tab, addressed by ?view=.
-  // Clicks retry because dev-mode hydration can swallow the first one.
+  // Walk the project through the window menu. Assembly stays on the page;
+  // other surfaces open as tabs from that one control.
   const stageTabs: [string, string, string][] = [
     ["Ideate", "ideate", "Product brief"],
     ["Verify", "verify", "Validation checklist"],
     ["Launch", "launch", "Cut a release"],
     ["Assembly", "assembly", "Test Rover"],
   ];
+  const documents = builder.getByRole("navigation", { name: "Open documents" });
   for (const [tab, view, marker] of stageTabs) {
-    const button = builder.getByRole("button", { name: tab, exact: true });
     await expect(async () => {
-      await button.click();
-      await expect(button).toHaveAttribute("aria-pressed", "true", { timeout: 5_000 });
+      if (view === "assembly") {
+        await documents.getByRole("button", { name: "Assembly", exact: true }).click();
+      } else {
+        await builder.getByRole("button", { name: "Open window", exact: true }).click();
+        await builder.getByRole("menuitem", { name: tab, exact: true }).click();
+      }
+      const current = documents.getByRole("button", { name: tab, exact: true });
+      await expect(current).toHaveAttribute("aria-pressed", "true", { timeout: 5_000 });
     }).toPass({ timeout: 60_000 });
     if (view !== "assembly") await expect(builder).toHaveURL(new RegExp(`view=${view}`));
     await expect(builder.getByText(marker).first()).toBeVisible({ timeout: 60_000 });
@@ -102,21 +109,23 @@ test("full Phase 0 journey", async ({ browser }) => {
   // Reviewer accepts in a separate session
   const reviewerContext = await browser.newContext();
   const reviewer = await reviewerContext.newPage();
-  await signIn(reviewer, "reviewer@foundry.local");
+  // No projects yet, so the reviewer lands on their own workspace.
+  const reviewerHome = await signIn(reviewer, "reviewer@foundry.local");
+  expect(reviewerHome).toMatch(/^\/w\/[^/]+$/);
   await gotoSettled(reviewer, invitePath);
   await reviewer.getByRole("button", { name: "Accept invitation" }).click();
   await reviewer.waitForURL("**/w/e2e-workspace-*");
   await expect(reviewer.getByRole("heading", { name: workspaceName })).toBeVisible();
 
   // Reviewer can open the project and see stage statuses
-  await reviewer.getByRole("link", { name: /Test Rover/ }).click();
-  await reviewer.waitForURL("**/projects/test-rover/engineer");
+  await reviewer.getByRole("link", { name: "Test Rover", exact: true }).click();
+  await reviewer.waitForURL(/\/projects\/test-rover\/engineer(\?|$)/);
   await expect(reviewer.getByRole("heading", { name: "Test Rover" })).toBeVisible();
 
   // Shared work has no place in the reviewer's own folder tree, so their home
   // sidebar lists it flat under "Shared with me".
-  await gotoSettled(reviewer, "/");
-  await reviewer.waitForURL(/\/w\/[^/]+$/);
+  // "/" now reopens the last project, so return to their workspace directly.
+  await gotoSettled(reviewer, reviewerHome);
   await expect(
     reviewer
       .getByTestId("shared-with-me")
@@ -132,7 +141,7 @@ test("full Phase 0 journey", async ({ browser }) => {
   await reviewerContext.close();
 });
 
-test("chat channels and visual CAD parameters", async ({ page }) => {
+test("chat channels persist and new CAD starts as native Python", async ({ page }) => {
   test.setTimeout(240_000);
   await signIn(page, "builder@foundry.local");
 
@@ -144,11 +153,11 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
   const workspaceSlug = new URL(page.url()).pathname.split("/")[2]!;
   await page
     .getByLabel("Describe the product to build")
-    .fill("A rig for testing CAD parameters and chat channels.");
-  await page.getByRole("button", { name: "More" }).click();
+    .fill("A rig for testing chat channels and the CAD starter.");
+  await page.getByRole("button", { name: "Options" }).click();
   await page.getByLabel("Project name").fill("Param Rig");
   await page.getByRole("button", { name: "Build" }).click();
-  await page.waitForURL(`**/w/${workspaceSlug}/projects/param-rig/engineer`);
+  await page.waitForURL(new RegExp(`/w/${workspaceSlug}/projects/param-rig/engineer(\\?|$)`));
   expect(page.url()).not.toMatch(/\/w\/param-rig(?:\/|$)/);
 
   // --- Copilot channels: create one, switch, persist across reloads.
@@ -168,28 +177,11 @@ test("chat channels and visual CAD parameters", async ({ page }) => {
   await expect(page.getByRole("listbox").getByText("enclosure")).toBeVisible();
   await page.keyboard.press("Escape");
 
-  // --- Visual CAD parameters: edit a value, autosave, survive reload.
+  // --- New projects start with a native Python part, not legacy KCL.
   await gotoSettled(page, page.url().replace(/\/engineer.*$/, "/engineer?view=model"));
-  // Parameters live in the CAD Inspector, collapsed by default.
-  const inspector = page.getByRole("button", { name: /Inspector/ });
-  await expect(inspector).toBeVisible({ timeout: 90_000 });
-  if ((await inspector.getAttribute("aria-expanded")) !== "true") await inspector.click();
-  await expect(page.getByText("Part parameters")).toBeVisible();
-  const width = page.locator('label:has-text("width") input[type="number"]');
-  await expect(width).toHaveValue("60");
-  // Editing the control rewrites the script and autosaves (900ms debounce).
-  const saved = page.waitForResponse((r) => r.url().includes("design.save") && r.ok(), {
-    timeout: 30_000,
-  });
-  await width.fill("75");
-  await saved;
-  await page.reload();
-  const reopened = page.getByRole("button", { name: /Inspector/ });
-  await expect(reopened).toBeVisible({ timeout: 90_000 });
-  if ((await reopened.getAttribute("aria-expanded")) !== "true") await reopened.click();
-  await expect(page.locator('label:has-text("width") input[type="number"]')).toHaveValue("75", {
-    timeout: 30_000,
-  });
+  await expect(page.getByText("Design browser")).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByRole("button", { name: /^main\.py/ })).toBeVisible();
+  await expect(page.getByText("No geometry yet")).toBeVisible();
 });
 
 test("sites chatbar creates a Site under the workspace, not a Workspace", async ({ page }) => {

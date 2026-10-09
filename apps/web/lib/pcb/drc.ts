@@ -13,7 +13,7 @@
  * precisely the case where the copper disagrees with the intent.
  */
 
-import { footprintDef, type PcbDoc, type PcbFootprint } from "@/lib/pcb/doc";
+import { footprintDef, type FootprintLibrary, type PcbDoc, type PcbFootprint } from "@/lib/pcb/doc";
 import {
   pointInPolygon,
   pointSegmentDistance,
@@ -415,8 +415,8 @@ function checkCourtyards(doc: PcbDoc): DrcViolation[] {
       const a = doc.footprints[i]!;
       const b = doc.footprints[j]!;
       if (a.side !== b.side) continue;
-      const defA = footprintBody(a);
-      const defB = footprintBody(b);
+      const defA = footprintBody(a, doc.library);
+      const defB = footprintBody(b, doc.library);
       if (!defA || !defB) continue;
       const overlapX = Math.abs(a.xMm - b.xMm) < (defA.w + defB.w) / 2;
       const overlapY = Math.abs(a.yMm - b.yMm) < (defA.h + defB.h) / 2;
@@ -434,8 +434,11 @@ function checkCourtyards(doc: PcbDoc): DrcViolation[] {
 }
 
 /** Body extents with rotation applied, as an axis-aligned approximation. */
-function footprintBody(fp: PcbFootprint): { w: number; h: number } | null {
-  const def = footprintDef(fp.libraryId);
+function footprintBody(
+  fp: PcbFootprint,
+  library: FootprintLibrary,
+): { w: number; h: number } | null {
+  const def = footprintDef(fp.libraryId, library);
   if (!def) return null;
   const rot = ((fp.rotationDeg % 180) + 180) % 180;
   // A quarter turn swaps the body's width and height.
@@ -451,7 +454,7 @@ export function runDrc(doc: PcbDoc, ratsnest: Ratsnest, copper?: CopperGraph): D
   // Re-key the schematic's pad->net map onto the copper graph's pad keys.
   const byPadId = netsByPad(ratsnest.nets, doc);
   const padNets = new Map<string, string>();
-  for (const pad of copper?.pads ?? boardPads(doc.footprints)) {
+  for (const pad of copper?.pads ?? boardPads(doc.footprints, doc.library)) {
     const net = byPadId.get(`${pad.footprintId}:${pad.pin}`);
     if (net) padNets.set(padKey(pad.footprintId, pad.pin), net);
   }
@@ -489,7 +492,9 @@ export function runDrc(doc: PcbDoc, ratsnest: Ratsnest, copper?: CopperGraph): D
     });
   }
   for (const footprint of doc.footprints) {
-    if (footprintDef(footprint.libraryId)?.pads.some((pad) => pad.plated && !pad.drillMm)) {
+    if (
+      footprintDef(footprint.libraryId, doc.library)?.pads.some((pad) => pad.plated && !pad.drillMm)
+    ) {
       violations.push({
         rule: "missing-drill",
         severity: "error",
@@ -501,7 +506,7 @@ export function runDrc(doc: PcbDoc, ratsnest: Ratsnest, copper?: CopperGraph): D
   ratsnest.nets.forEach((net, netIndex) => {
     for (const node of net.nodes) {
       const fp = doc.footprints.find((footprint) => footprint.partId === node.partId);
-      const pad = fp && resolvePad(fp, node.pin);
+      const pad = fp && resolvePad(fp, node.pin, doc.library);
       if (!fp || !pad) continue;
       const key = padKey(fp.id, pad.pin);
       const previous = padOwners.get(key);

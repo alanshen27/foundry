@@ -35,6 +35,8 @@ type SceneTarget = {
   name: string;
   kind: "mechanical" | "pcb";
   detail: string;
+  /** Manufacturing-part id used to highlight the matching 3D instance. */
+  componentId: string;
   open: AssemblyOpenTarget;
 };
 
@@ -42,21 +44,35 @@ function sceneTargetsFromDoc(
   cadDoc: ReturnType<typeof normalizeCadDoc>,
   pcbSet: PcbSet | null,
 ): SceneTarget[] {
-  const parts = cadDoc.components.filter((c) => c.kind === "part" && !isCadStarterComponent(c));
+  const boards = pcbSet?.boards ?? [];
+  const boardIds = new Set(boards.map((board) => board.id ?? "board-1"));
+  const pcbPartId = (boardId: string) =>
+    cadDoc.components.find(
+      (component) => component.source?.kind === "pcb" && component.source.boardId === boardId,
+    )?.id;
+  const parts = cadDoc.components.filter(
+    (c) =>
+      c.kind === "part" &&
+      !isCadStarterComponent(c) &&
+      !(c.source?.kind === "pcb" && boardIds.has(c.source.boardId)),
+  );
   const out: SceneTarget[] = parts.map((c) => ({
     id: c.id,
     name: c.name,
     kind: "mechanical" as const,
     detail: c.path,
+    componentId: c.id,
     open: { editor: "model" as const, componentId: c.id, label: c.name },
   }));
-  for (const board of pcbSet?.boards ?? []) {
+  for (const board of boards) {
+    const boardId = board.id ?? "board-1";
     out.push({
-      id: `pcb:${board.id}`,
+      id: `pcb:${boardId}`,
       name: board.name ?? "PCB",
       kind: "pcb",
       detail: `${board.board.widthMm} × ${board.board.heightMm} mm · ${board.footprints.length} placements`,
-      open: { editor: "pcb", boardId: board.id!, label: board.name },
+      componentId: pcbPartId(boardId) ?? `pcb:${boardId}`,
+      open: { editor: "pcb", boardId, label: board.name },
     });
   }
   return out;
@@ -145,6 +161,7 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
   );
 
   const activeTarget = sceneTargets.find((t) => t.id === (hoveredId ?? selectedId)) ?? null;
+  const highlightKey = activeTarget?.componentId ?? null;
 
   const bomCents = (components.data ?? []).reduce(
     (sum, c) => sum + (c.unitCostCents ?? 0) * c.quantity,
@@ -184,43 +201,42 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
   return (
     <div className="absolute inset-0 flex">
       <aside
-        className="bg-card z-10 flex w-52 shrink-0 flex-col border-r"
+        className="bg-card z-10 flex w-56 shrink-0 flex-col border-r lg:w-72"
         aria-label="Assembly components"
       >
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
-          <Boxes className="text-primary size-3.5" />
-          <p className="min-w-0 flex-1 font-mono text-[11px] font-medium tracking-[0.1em] uppercase">
-            Assembly
-          </p>
+        <div className="flex items-start gap-2 px-4 pt-3.5 pb-3">
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-mono text-[13px] font-medium">
+              {preview?.mode === "part" ? product.name : "Product assembly"}
+            </p>
+            <p
+              className="text-muted-foreground mt-1 truncate font-mono text-[11px]"
+              title={product.path}
+            >
+              {product.path}
+            </p>
+          </div>
           <button
             type="button"
             onClick={() => void syncFromServer()}
             disabled={syncing}
             aria-label={syncing ? "Syncing assembly" : "Reload assembly"}
             title="Reload assembly from saved project"
-            className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-6 items-center justify-center rounded-none disabled:opacity-60"
+            className="text-muted-foreground hover:bg-muted hover:text-foreground -mr-1 flex size-7 shrink-0 items-center justify-center rounded-none disabled:opacity-60"
           >
-            <RefreshCw className={cn("size-3", syncing && "animate-spin")} />
+            <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
           </button>
         </div>
-        <div className="px-3 pt-3 pb-2">
-          <p className="font-mono text-xs font-medium">
-            {preview?.mode === "part" ? product.name : "Product assembly"}
-          </p>
-          <p
-            className="text-muted-foreground mt-1 truncate font-mono text-[10px]"
-            title={product.path}
-          >
-            {product.path}
-          </p>
-        </div>
-        <div className="text-muted-foreground flex items-center justify-between border-t px-3 pt-3 pb-1 font-mono text-[10px] tracking-[0.1em] uppercase">
+        <div className="text-muted-foreground flex items-center justify-between border-t px-4 pt-3 pb-1 font-mono text-[10px] tracking-[0.1em] uppercase">
           <span>Components</span>
           <span className="font-mono tabular-nums">{sceneTargets.length}</span>
         </div>
         <ul className="min-h-0 flex-1 overflow-y-auto py-1">
           {sceneTargets.map((t) => {
-            const hot = t.id === hoveredId || t.id === selectedId;
+            const hot =
+              t.id === hoveredId ||
+              t.id === selectedId ||
+              (highlightKey !== null && t.componentId === highlightKey);
             return (
               <li key={t.id}>
                 <button
@@ -231,7 +247,7 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
                   onMouseLeave={() => setHoveredId(null)}
                   onClick={() => setSelectedId(t.id)}
                   className={cn(
-                    "flex w-full items-center gap-2 border-l-2 py-2 pr-3 pl-2.5 text-left transition-colors",
+                    "flex w-full items-center gap-2.5 border-l-2 py-2.5 pr-4 pl-3.5 text-left transition-colors",
                     hot
                       ? "border-l-primary bg-primary/8 text-foreground"
                       : "text-muted-foreground hover:bg-muted/60 border-l-transparent",
@@ -242,7 +258,7 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
                   ) : (
                     <Boxes className="size-3.5 shrink-0" strokeWidth={1.75} />
                   )}
-                  <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{t.name}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{t.name}</span>
                   <span className="text-muted-foreground font-mono text-[9px]">
                     {t.kind === "pcb" ? "PCB" : "PART"}
                   </span>
@@ -263,7 +279,7 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
             <div className="mt-2.5 flex gap-1.5">
               <button
                 type="button"
-                className="bg-foreground text-background hover:bg-foreground/90 flex flex-1 items-center justify-center gap-1.5 rounded-none px-2 py-1.5 font-mono text-[10px] tracking-[0.06em] uppercase"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 flex flex-1 items-center justify-center gap-1.5 rounded-none px-2 py-1.5 font-mono text-[10px] tracking-[0.06em] uppercase"
                 onClick={() => onOpenEditor?.(activeTarget.open)}
               >
                 Open {activeTarget.kind === "pcb" ? "PCB" : "part"}
@@ -336,9 +352,27 @@ export function AssemblyView({ projectId, branchId, onOpenEditor }: Props) {
             entryPath={viewport.entryPath}
             meshAssets={viewport.meshAssets}
             foreignImportOnly={viewport.foreignImportOnly}
+            selectedKey={highlightKey}
+            selectionHints={activeTarget ? [activeTarget.name, activeTarget.id] : []}
+            pickOnClick
             chrome
             headless={false}
             onError={setError}
+            onSelectObject={(key) => {
+              if (!key) {
+                setSelectedId(null);
+                return;
+              }
+              const needle = key.toLowerCase();
+              const match =
+                sceneTargets.find(
+                  (target) => target.kind === "pcb" && target.componentId === key,
+                ) ??
+                sceneTargets.find((target) => target.componentId === key) ??
+                sceneTargets.find((target) => target.name.toLowerCase() === needle) ??
+                sceneTargets.find((target) => needle.includes(target.name.toLowerCase()));
+              setSelectedId(match?.id ?? key);
+            }}
           />
         )}
         {error ? (

@@ -8,9 +8,32 @@ import {
   updateComponentContent,
   upsertPartScript,
 } from "../src/doc";
-import { buildLinkedAssembly, linkedAssemblyStatus, stableCadHash } from "../src/linked-assembly";
+import {
+  assemblyInstanceLabel,
+  assemblyMeshDisplayName,
+  buildLinkedAssembly,
+  linkedAssemblyStatus,
+  parseAssemblyInstanceLabel,
+  stableCadHash,
+} from "../src/linked-assembly";
 
 describe("linked manufacturing assembly", () => {
+  it("encodes a stable instance identity that the viewport can highlight", () => {
+    const label = assemblyInstanceLabel(
+      { id: "pcb-1", name: "Main board" },
+      { id: "instance-pcb-1" },
+    );
+    expect(label).toBe("foundry:pcb-1:instance-pcb-1:Main board");
+    expect(parseAssemblyInstanceLabel(`${label}|U1`)).toEqual({
+      componentId: "pcb-1",
+      instanceId: "instance-pcb-1",
+      name: "Main board",
+      child: "U1",
+    });
+    expect(assemblyMeshDisplayName(`${label}|U1`)).toBe("U1 · Main board");
+    expect(parseAssemblyInstanceLabel("Outer housing")).toBeNull();
+  });
+
   it("fingerprints object keys canonically without conflating array order", () => {
     expect(stableCadHash({ b: 2, a: [1, { z: 3, y: 4 }] })).toBe(
       stableCadHash({ a: [1, { y: 4, z: 3 }], b: 2 }),

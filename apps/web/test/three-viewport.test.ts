@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import {
+  applyCadHighlight,
+  assemblyComponentId,
+  CAD_HIGHLIGHT_COLOR,
   cadModelTransform,
+  cadPickableMeshes,
   cadSelectionTarget,
   cameraOrientation,
+  clearCadHighlight,
   disposeCadObject,
   frameCadModel,
   meshLabel,
@@ -100,6 +105,63 @@ describe("mesh lifetime and labels", () => {
     body.name = "Outer_housing";
     expect(meshLabel(face)).toBe("Outer housing");
   });
+  it("reads foundry instance identity from labeled assembly meshes", () => {
+    const mesh = new THREE.Mesh();
+    mesh.userData.assemblyLabel = "foundry:enclosure:instance-enclosure:Lower housing";
+    mesh.userData.assemblyComponentId = "enclosure";
+    expect(meshLabel(mesh)).toBe("Lower housing");
+    expect(assemblyComponentId(mesh)).toBe("enclosure");
+    const child = new THREE.Mesh();
+    child.userData.assemblyLabel = "foundry:pcb-1:instance-pcb:Main board|U1";
+    expect(meshLabel(child)).toBe("U1 · Main board");
+    expect(assemblyComponentId(child)).toBe("pcb-1");
+  });
+
+  it("tints only the highlighted solid and restores the shared material", () => {
+    const geometry = new THREE.BoxGeometry();
+    const material = new THREE.MeshStandardMaterial({ color: 0x888888 });
+    const highlighted = new THREE.Mesh(geometry, material);
+    const neighbor = new THREE.Mesh(geometry, material);
+    applyCadHighlight([highlighted]);
+    expect(highlighted.material).not.toBe(material);
+    const tinted = highlighted.material as THREE.MeshStandardMaterial;
+    expect(tinted.emissive.getHex()).toBe(CAD_HIGHLIGHT_COLOR);
+    expect(tinted.emissiveIntensity).toBeGreaterThan(0.5);
+    expect(tinted.color.getHex()).not.toBe(0x888888);
+    expect(neighbor.material).toBe(material);
+    expect(material.emissive.getHex()).toBe(0);
+    expect(highlighted.children.some((child) => child.userData.cadHighlightOverlay)).toBe(true);
+    clearCadHighlight(highlighted);
+    expect(highlighted.material).toBe(material);
+    expect(highlighted.children).toHaveLength(0);
+  });
+
+  it("reuses edge geometry across repeated hovers instead of rebuilding it", () => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial());
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 30));
+    edges.userData.cadEdges = true;
+    mesh.add(edges);
+    const dispose = vi.spyOn(edges.geometry, "dispose");
+    for (let i = 0; i < 3; i += 1) {
+      applyCadHighlight([mesh]);
+      const overlay = mesh.children.find(
+        (child) => child.userData.cadHighlightOverlay,
+      ) as THREE.LineSegments;
+      expect(overlay.geometry).toBe(edges.geometry);
+      clearCadHighlight(mesh);
+    }
+    expect(dispose).not.toHaveBeenCalled();
+    expect(mesh.children).toEqual([edges]);
+
+    const bare = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial());
+    applyCadHighlight([bare]);
+    const first = (bare.children[0] as THREE.LineSegments).geometry;
+    clearCadHighlight(bare);
+    applyCadHighlight([bare]);
+    expect((bare.children[0] as THREE.LineSegments).geometry).toBe(first);
+    expect(cadPickableMeshes(mesh)).toEqual([mesh]);
+  });
+
   it("uses an exported parent name, and keeps unnamed bodies honest", () => {
     const root = new THREE.Group();
     root.name = "housing";

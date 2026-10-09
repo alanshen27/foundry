@@ -20,20 +20,43 @@ return to the canvas.
 3. Set real board dimensions, corner radius, mounting holes, and known package
    heights. Unknown heights stay unknown. Drill export uses declared drill sizes.
 4. In the workflow inspector, **Update CAD from boards** synchronizes every board
-   to a stable generated CAD part. Edited generated files report conflicts instead
-   of being overwritten. Renaming a board does not change its generated path.
-5. **Build linked assembly** imports actual manufacturing parts and writes the
-   product assembly. Existing instance poses are retained; missing instances start
-   at the origin. Use Placement to set millimetres and global XYZ rotations.
-   Duplicate instances clone the source solid before transforms.
+   to a stable generated CAD part: substrate, drills, and UNVERIFIED package
+   envelopes for footprints with known body heights. Edited generated files report
+   conflicts instead of being overwritten. Renaming a board does not change its
+   generated path.
+5. **Build linked assembly** imports actual manufacturing parts, including those
+   board mockups, and writes the product assembly with labeled instances so
+   Assembly can highlight a clicked component. Existing instance poses are
+   retained; missing instances start at the origin. Use Placement or the copilot
+   to set millimetres and global XYZ rotations — place each PCB in its pocket,
+   not stacked at the origin with housings. Duplicate instances clone the source
+   solid before transforms.
 6. Review readiness, run appropriate engineering checks, and approve through
    Verify. A synchronized document is not proof of physical fit.
 
 Linked assemblies do not solve mates, automatically design an enclosure, or
-certify manufacturing tolerances. PCB substrate modules include declared outlines
-and holes; component envelopes use supplied heights in the PCB preview. The linked
-board solid alone does not prove enclosure clearance. Optional Astra product
-previews are artistic previews and may differ from manufacturing parts.
+certify manufacturing tolerances. PCB CAD parts include declared outlines, holes,
+and package envelopes when heights are known; those envelopes are still
+UNVERIFIED. Envelopes sit on the board surface unless the footprint declares a
+standoff (header pins, spacers, a display module); set it in the PCB inspector
+or `save_pcb` and sync again to raise that body without moving the whole board.
+The linked board solid alone does not prove enclosure clearance.
+
+Parts outside the small built-in footprint library (display modules, tactile
+switches, sensors) are installed per board with the copilot's
+`install_pcb_footprint` tool, from one of three sources:
+
+- the official KiCad library (`gitlab.com/kicad/libraries/kicad-footprints`);
+- a `.kicad_mod` file on `raw.githubusercontent.com` / `github.com`;
+- pads and outline read from a datasheet drawing, with its URL.
+
+Downloads are limited to those hosts (each redirect re-checked), 1 MB, and
+10 s. KiCad files carry no body height, so the seated height comes from the
+datasheet. Installed footprints are stored in the board's `library`, labelled
+UNVERIFIED with their source in the PCB inspector, and flow through DRC, Gerber
+export and CAD envelopes like built-ins.
+Optional Astra product previews are artistic previews and may differ from
+manufacturing parts.
 
 ## Live edits and AI streaming
 
@@ -60,11 +83,11 @@ references to them are shared with the design.
 
 ## Required database update
 
-Before deploying this version, apply:
-
-`packages/db/prisma/changes/20260911-collaboration.sql`
-
-This additive, idempotent SQL creates `CollaborationDocument`. It is required even
+`CollaborationDocument` ships as the Prisma migration
+`packages/db/prisma/migrations/20260923000000_collaboration_document`, applied by
+`pnpm db:migrate:deploy` (the Render pre-deploy step). It is additive and
+idempotent, so databases that already ran the former hand-applied
+`20260911-collaboration.sql` converge on the same table. It is required even
 in local autosave mode. Do not deploy an older whole-document persistence server
 alongside the new bridge. Web, worker and realtime must share database, Redis and
 `AUTH_SECRET`. New local databases include the table via the normal Prisma push.

@@ -393,6 +393,29 @@ export function buildEngineeringReadiness(input: {
         target: { view: "assembly" },
       });
     }
+    const origin = (instance: (typeof cad.assembly.instances)[number]) =>
+      instance.translationMm.x === 0 &&
+      instance.translationMm.y === 0 &&
+      instance.translationMm.z === 0 &&
+      instance.rotationDeg.x === 0 &&
+      instance.rotationDeg.y === 0 &&
+      instance.rotationDeg.z === 0;
+    const visible = cad.assembly.instances.filter((instance) => instance.visible);
+    const originBoards = visible.filter((instance) => {
+      const part = parts.find((item) => item.id === instance.componentId);
+      return part?.source?.kind === "pcb" && origin(instance);
+    });
+    if (originBoards.length && visible.length > originBoards.length) {
+      add({
+        id: "assembly:pcb-at-origin",
+        stage: "assembly",
+        severity: "warning",
+        title: "Place PCB mockups in the assembly",
+        detail:
+          "Board parts still sit at the origin. Give each pcb-* instance an explicit millimetre pose inside the enclosure; origin placement is UNVERIFIED and will overlap housings.",
+        target: { view: "assembly" },
+      });
+    }
   }
   const errors = issues.filter((issue) => issue.severity === "error").length;
   const warnings = issues.filter((issue) => issue.severity === "warning").length;

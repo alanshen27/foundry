@@ -202,6 +202,32 @@ describe("connected engineering readiness", () => {
     ).toBe(true);
   });
 
+  it("warns when a board mockup is still stacked at the origin with other parts", () => {
+    const input = fixture();
+    input.cad.components.push({
+      id: "housing",
+      name: "Housing",
+      path: "parts/housing/main.py",
+      kind: "part",
+      content: "from build123d import Box\nresult = Box(80, 50, 12)\n",
+    });
+    input.cad.assembly!.instances.push({
+      id: "instance-housing",
+      componentId: "housing",
+      translationMm: { x: 0, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      visible: true,
+      fixed: false,
+    });
+    expect(buildEngineeringReadiness(input).issues).toContainEqual(
+      expect.objectContaining({
+        id: "assembly:pcb-at-origin",
+        severity: "warning",
+        target: { view: "assembly" },
+      }),
+    );
+  });
+
   it("reports boards excluded from visible assembly instances", () => {
     const input = fixture();
     input.cad.assembly!.instances[0]!.visible = false;

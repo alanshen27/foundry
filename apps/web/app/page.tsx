@@ -10,52 +10,30 @@ import { cn } from "@/lib/utils";
 import { getCurrentUser } from "@/server/session";
 import { resolveViewportHomePath } from "@/server/workspace-home";
 
-const PHASES: { stage: Stage; verb: string; label: string; blurb: string; code: string }[] = [
+const PHASES: { stage: Stage; label: string; blurb: string; code: string }[] = [
   {
     stage: "IDEATE",
-    verb: "Describe it.",
     label: "Ideate",
-    blurb: "A prompt becomes a brief, requirements, and open questions.",
+    blurb: "A prompt becomes a brief and the questions still open.",
     code: "01",
   },
   {
     stage: "ENGINEER",
-    verb: "Engineer it.",
     label: "Engineer",
-    blurb: "Schematic, PCB, CAD, firmware, and BOM in one workspace.",
+    blurb: "Schematic, PCB, CAD, firmware, and the bill of materials.",
     code: "02",
   },
   {
     stage: "VERIFY",
-    verb: "Build it.",
     label: "Verify",
-    blurb: "Every requirement tracked against a check that proves it.",
+    blurb: "Every requirement stays tied to a check that can prove it.",
     code: "03",
   },
   {
     stage: "LAUNCH",
-    verb: "Sell it.",
     label: "Launch",
-    blurb: "Pin a release, publish the docs, open the storefront.",
+    blurb: "Pin a release, publish the docs, and open the storefront.",
     code: "04",
-  },
-];
-
-const SIGNALS = [
-  {
-    code: "SIG.01",
-    title: "One thread",
-    body: "Requirements, circuits, geometry, and firmware stay linked — no more losing the product in a pile of tools.",
-  },
-  {
-    code: "SIG.02",
-    title: "Human + agent",
-    body: "Copilots draft and check, but publishing, checkout, and merges stay behind explicit human approval.",
-  },
-  {
-    code: "SIG.03",
-    title: "Ship-shaped",
-    body: "From sentence to manufacturable release with the same industrial chrome the whole way down.",
   },
 ];
 
@@ -68,220 +46,105 @@ export default async function HomePage() {
 
   return (
     <main className="relative flex min-h-screen flex-col">
-      <InteractiveDotField className="fixed inset-0" gap={16} radius={56} />
+      <InteractiveDotField className="fixed inset-0" gap={18} radius={48} />
 
-      <header className="border-border relative z-10 mx-auto flex w-full max-w-6xl items-center justify-between border-b bg-background/85 px-6 py-4 backdrop-blur-sm sm:px-10 lg:border-x">
+      <header className="relative z-10 flex items-center justify-between px-6 py-4 sm:px-8 lg:px-10">
         <FoundryMark />
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <Link
             href="/auth/sign-up"
-            className="text-muted-foreground hover:text-foreground hidden px-3 py-2 font-mono text-[11px] tracking-[0.1em] uppercase transition-colors sm:inline"
+            className="text-muted-foreground hover:text-foreground hidden px-3 py-2 text-[13px] transition-colors sm:inline"
           >
             Create account
           </Link>
           <Link
             href="/auth/sign-in"
-            className="bg-foreground text-background hover:bg-foreground/90 px-4 py-2 font-mono text-[12px] tracking-[0.08em] uppercase transition-colors"
+            className="bg-foreground text-background hover:bg-foreground/90 px-3.5 py-2 text-[13px] font-medium transition-colors"
           >
             Sign in
           </Link>
         </div>
       </header>
 
-      <div className="relative z-10 mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 lg:grid-cols-12 lg:border-x">
-        <SignalHero />
-
-        <section className="border-border bg-background/80 flex flex-col justify-between px-6 py-12 backdrop-blur-[2px] sm:px-10 lg:col-span-7 lg:border-l lg:px-12 lg:py-16">
-          <div>
-            <p className="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
-              Hardware OS
-            </p>
-            <h1 className="mt-5 font-mono text-[clamp(1.85rem,3.8vw,2.85rem)] leading-[1.08] font-medium tracking-[-0.045em]">
-              {PHASES.map((phase) => (
-                <span key={phase.stage} className="mr-2.5 inline-block whitespace-nowrap">
-                  {phase.verb}
-                </span>
-              ))}
-            </h1>
-            <p className="text-muted-foreground mt-6 max-w-lg text-[15px] leading-relaxed">
-              An AI-native workspace that carries one physical product from a sentence to a
-              manufacturable release — without losing the thread between requirements, circuits,
-              geometry, and firmware.
-            </p>
+      <div className="relative z-10 grid min-h-0 flex-1 lg:grid-cols-2">
+        <section className="flex flex-col justify-center px-6 py-12 sm:px-8 lg:px-10 lg:py-14">
+          <p className="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
+            Hardware OS
+          </p>
+          <h1 className="mt-4 max-w-xl text-[clamp(2.5rem,4.6vw,4rem)] leading-[0.96] font-medium tracking-[-0.045em]">
+            Describe it.
+            <br />
+            Engineer it.
+            <br />
+            Build it.
+            <br />
+            Sell it.
+          </h1>
+          <p className="text-muted-foreground mt-6 max-w-md text-[16px] leading-relaxed">
+            One workspace for a physical product — from the sentence, through the circuit and the
+            geometry, to a release you can stand behind.
+          </p>
+          <div className="mt-8 flex flex-wrap items-center gap-3">
+            <Link
+              href="/auth/sign-in"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2.5 text-[14px] font-medium transition-colors"
+            >
+              Enter workspace
+            </Link>
+            <Link
+              href="/auth/sign-up"
+              className="border-border bg-card/80 hover:border-foreground/25 border px-4 py-2.5 text-[14px] font-medium backdrop-blur-sm transition-colors"
+            >
+              Create account
+            </Link>
           </div>
 
-          <ul className="mt-14 grid gap-0 border-t sm:grid-cols-2">
-            {PHASES.map((phase, i) => {
+          <ul className="mt-12 grid max-w-xl grid-cols-1 gap-x-8 gap-y-5 border-t pt-6 sm:grid-cols-2">
+            {PHASES.map((phase) => {
               const theme = STAGE_THEME[phase.stage];
               return (
-                <li
-                  key={phase.stage}
-                  className={cn(
-                    "border-border bg-card/90 group flex flex-col gap-3 border-b p-5 transition-colors",
-                    i % 2 === 0 && "sm:border-r",
-                    theme.cardHover,
-                  )}
-                >
-                  <div className="flex items-baseline justify-between gap-3">
+                <li key={phase.stage}>
+                  <div className="flex items-baseline gap-2">
                     <span className="text-muted-foreground font-mono text-[11px] tracking-[0.14em]">
                       {phase.code}
                     </span>
                     <span
                       className={cn(
-                        "font-mono text-[12px] font-medium tracking-[0.08em] uppercase",
+                        "font-mono text-[11px] font-medium tracking-[0.12em] uppercase",
                         theme.text,
                       )}
                     >
                       {phase.label}
                     </span>
                   </div>
-                  <p className="text-muted-foreground text-[13px] leading-relaxed">{phase.blurb}</p>
+                  <p className="text-muted-foreground mt-1.5 text-[13px] leading-relaxed">
+                    {phase.blurb}
+                  </p>
                 </li>
               );
             })}
           </ul>
-
-          <div className="mt-10 flex flex-wrap items-center gap-3">
-            <Link
-              href="/auth/sign-in"
-              className="bg-primary text-primary-foreground hover:bg-primary/90 px-5 py-2.5 font-mono text-[12px] tracking-[0.1em] uppercase transition-colors"
-            >
-              Enter workspace
-            </Link>
-            <Link
-              href="/auth/sign-up"
-              className="border-border bg-card hover:border-foreground/30 border px-5 py-2.5 font-mono text-[12px] tracking-[0.1em] uppercase transition-colors"
-            >
-              Create account
-            </Link>
-          </div>
         </section>
+
+        <SignalHero />
       </div>
-
-      <section className="border-border relative z-10 mx-auto w-full max-w-6xl border-t lg:border-x">
-        <div className="border-border grid gap-0 lg:grid-cols-12 lg:border-b">
-          <div className="border-border bg-background/85 px-6 py-12 sm:px-10 lg:col-span-4 lg:border-r lg:px-12">
-            <p className="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
-              Field notes
-            </p>
-            <h2 className="mt-4 font-mono text-[clamp(1.4rem,2.4vw,1.85rem)] leading-[1.15] font-medium tracking-[-0.04em]">
-              Built like a signal display, not a soft SaaS dashboard.
-            </h2>
-            <p className="text-muted-foreground mt-4 text-[14px] leading-relaxed">
-              Dot matrix. Sharp edges. Orange where it matters. The same industrial language from
-              the landing page into the workspace.
-            </p>
-          </div>
-          <ul className="lg:col-span-8">
-            {SIGNALS.map((signal, i) => (
-              <li
-                key={signal.code}
-                className={cn(
-                  "border-border bg-card/80 flex flex-col gap-2 border-b px-6 py-8 sm:px-10 lg:px-12",
-                  i === SIGNALS.length - 1 && "border-b-0 lg:border-b-0",
-                )}
-              >
-                <div className="flex items-baseline justify-between gap-4">
-                  <span className="text-primary font-mono text-[11px] tracking-[0.16em]">
-                    {signal.code}
-                  </span>
-                  <span className="signal-letter text-primary font-mono text-[18px] font-medium">
-                    {signal.title.charAt(0)}
-                  </span>
-                </div>
-                <h3 className="font-mono text-[15px] font-medium tracking-[-0.02em]">
-                  {signal.title}
-                </h3>
-                <p className="text-muted-foreground max-w-xl text-[13px] leading-relaxed">
-                  {signal.body}
-                </p>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
-
-      <section className="relative z-10 mx-auto w-full max-w-6xl lg:border-x">
-        <div className="bg-primary text-primary-foreground relative overflow-hidden">
-          <InteractiveDotField tone="signal" gap={11} radius={64} />
-          <div className="relative z-10 grid gap-10 px-6 py-14 sm:px-10 lg:grid-cols-12 lg:px-12 lg:py-16">
-            <div className="lg:col-span-5">
-              <p className="font-mono text-[11px] tracking-[0.18em] uppercase opacity-80">
-                Ready when you are
-              </p>
-              <h2 className="mt-4 font-mono text-[clamp(1.6rem,3vw,2.2rem)] leading-[1.1] font-medium tracking-[-0.04em]">
-                Open a workspace.
-                <br />
-                Keep the pulse.
-              </h2>
-              <div className="mt-8 flex flex-wrap gap-3">
-                <Link
-                  href="/auth/sign-up"
-                  className="bg-[#faf9f5] text-[#0c0c0c] hover:bg-[#faf9f5]/90 px-5 py-2.5 font-mono text-[12px] tracking-[0.1em] uppercase transition-colors"
-                >
-                  Create account
-                </Link>
-                <Link
-                  href="/auth/sign-in"
-                  className="border border-[#faf9f5]/40 hover:border-[#faf9f5]/80 px-5 py-2.5 font-mono text-[12px] tracking-[0.1em] uppercase transition-colors"
-                >
-                  Sign in
-                </Link>
-              </div>
-            </div>
-            <div className="flex items-center justify-center lg:col-span-7">
-              <AnimatedSignalGlyph
-                seed="foundry-close"
-                rows={18}
-                cols={40}
-                fontSize={12}
-                className="opacity-95"
-              />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <footer className="border-border relative z-10 mx-auto flex w-full max-w-6xl items-center justify-between border-t px-6 py-5 font-mono text-[10px] tracking-[0.14em] uppercase lg:border-x sm:px-10">
-        <span className="text-muted-foreground">Foundry</span>
-        <span className="text-muted-foreground">Ideate · Engineer · Verify · Launch</span>
-      </footer>
     </main>
   );
 }
 
-/** Orange signal panel with cursor-reactive dots + ASCII dissolve. */
+/** Orange signal panel with cursor-reactive dots and the living ASCII mark. */
 function SignalHero() {
   return (
-    <section className="bg-primary text-primary-foreground relative flex min-h-[34rem] flex-col overflow-hidden px-6 py-8 sm:px-8 lg:col-span-5 lg:min-h-0 lg:px-8 lg:py-10">
-      <InteractiveDotField tone="signal" gap={10} radius={60} />
-      <div className="relative z-10 flex items-center gap-2.5 font-mono text-[12px] tracking-[0.18em] uppercase">
-        <span className="inline-grid grid-cols-3 gap-[2px]" aria-hidden>
-          {Array.from({ length: 9 }, (_, i) => (
-            <span key={i} className="size-[3px] bg-[#faf9f5]" />
-          ))}
-        </span>
-        Foundry
-      </div>
-
-      <div className="relative z-10 flex flex-1 items-center justify-center py-8">
+    <section className="bg-primary text-primary-foreground relative min-h-[22rem] overflow-hidden lg:min-h-full">
+      <InteractiveDotField tone="signal" gap={11} radius={64} />
+      <div className="relative z-10 flex h-full min-h-[22rem] items-center justify-center p-6 lg:absolute lg:inset-0 lg:min-h-0">
         <AnimatedSignalGlyph
           seed="foundry-pulse"
-          rows={30}
-          cols={42}
-          fontSize={13}
+          rows={36}
+          cols={50}
+          fontSize={18}
           className="opacity-95"
         />
-      </div>
-
-      <div className="relative z-10 space-y-3">
-        <p className="max-w-xs font-mono text-[11px] leading-relaxed tracking-[0.02em] opacity-90">
-          When form dissolves, the center holds.
-          <br />A silent pulse from sentence to ship.
-        </p>
-        <p className="font-mono text-[10px] tracking-[0.16em] uppercase opacity-60">
-          Ideate · Engineer · Verify · Launch
-        </p>
       </div>
     </section>
   );

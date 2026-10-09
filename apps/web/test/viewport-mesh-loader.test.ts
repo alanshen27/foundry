@@ -7,6 +7,7 @@ import {
   parseViewportMeshResponse,
 } from "@/lib/cad/viewport-mesh-loader";
 import { disposeCadObject } from "@/lib/cad/three-viewport";
+import { decodeFoundryMesh, encodeFoundryMesh } from "@/lib/cad/foundry-mesh";
 
 function request(overrides: Partial<CadMeshRequest> = {}): CadMeshRequest {
   return {
@@ -214,6 +215,66 @@ describe("viewport mesh response parsing", () => {
     expect(result.unit).toBe("in");
     expect(new THREE.Box3().setFromObject(result.scene).max.x).toBe(1);
     disposeCadObject(result.scene);
+  });
+
+  it("splits a labeled assembly mesh so each instance can be highlighted", async () => {
+    const packed = encodeFoundryMesh([
+      { name: "foundry:base:instance-base:Lower housing", stl: triangleStl() },
+      { name: "foundry:pcb-1:instance-pcb:Main board|U1", stl: triangleStl() },
+    ]);
+    const result = await parseViewportMeshResponse(
+      new Response(packed, {
+        headers: {
+          "Content-Type": "model/stl",
+          "X-Cad-Up-Axis": "z",
+          "X-Cad-Unit": "mm",
+        },
+      }),
+    );
+    const meshes = result.scene.children.filter((child) => child instanceof THREE.Mesh);
+    expect(meshes.map((mesh) => mesh.name)).toEqual(["Lower housing", "U1 · Main board"]);
+    expect(meshes.map((mesh) => mesh.userData.assemblyComponentId)).toEqual(["base", "pcb-1"]);
+    disposeCadObject(result.scene);
+  });
+
+  it("renders build123d source colours per solid and keeps uncoloured solids neutral", async () => {
+    const packed = encodeFoundryMesh([
+      { name: "Lens", stl: triangleStl(), color: { r: 20, g: 40, b: 160, a: 128 } },
+      { name: "Button", stl: triangleStl(), color: { r: 255, g: 90, b: 0, a: 255 } },
+      { name: "Shell", stl: triangleStl() },
+    ]);
+    const result = await parseViewportMeshResponse(
+      new Response(packed, {
+        headers: { "Content-Type": "model/stl", "X-Cad-Up-Axis": "z", "X-Cad-Unit": "mm" },
+      }),
+    );
+    const [lens, button, shell] = result.scene.children as THREE.Mesh[];
+    const material = (mesh: THREE.Mesh) => mesh.material as THREE.MeshStandardMaterial;
+    expect(lens!.userData.cadSourceColor).toBe("#1428a0");
+    expect(material(lens!).transparent).toBe(true);
+    expect(material(lens!).opacity).toBeCloseTo(128 / 255);
+    expect(`#${material(button!).color.getHexString(THREE.SRGBColorSpace)}`).toBe("#ff5a00");
+    expect(material(button!).transparent).toBe(false);
+    expect(shell!.userData.cadSourceColor).toBeUndefined();
+    expect(material(shell!).color.getHex()).toBe(0xb8bab7);
+    disposeCadObject(result.scene);
+  });
+
+  it("still decodes version-1 labeled meshes without colour", () => {
+    const stl = triangleStl();
+    const name = new TextEncoder().encode("Body");
+    const bytes = new Uint8Array(12 + 6 + name.byteLength + stl.byteLength);
+    const view = new DataView(bytes.buffer);
+    bytes.set(new TextEncoder().encode("FDRYMSH1"), 0);
+    view.setUint32(8, 1, true);
+    view.setUint16(12, name.byteLength, true);
+    view.setUint32(14, stl.byteLength, true);
+    bytes.set(name, 18);
+    bytes.set(new Uint8Array(stl), 18 + name.byteLength);
+    const solids = decodeFoundryMesh(bytes.buffer)!;
+    expect(solids).toHaveLength(1);
+    expect(solids[0]).toMatchObject({ name: "Body" });
+    expect(solids[0]!.color).toBeUndefined();
   });
 
   it("parses native Python STL responses using the server's units and axis", async () => {

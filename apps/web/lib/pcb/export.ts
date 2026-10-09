@@ -162,7 +162,7 @@ function zoneFills(doc: PcbDoc, layer: PcbLayer, padNets: Map<string, string>): 
     }
 
     for (const fp of doc.footprints) {
-      const def = footprintDef(fp.libraryId);
+      const def = footprintDef(fp.libraryId, doc.library);
       if (!def) continue;
       for (const pad of def.pads) {
         if (!padOnLayer(fp, pad, layer)) continue;
@@ -231,7 +231,7 @@ export function gerberCopper(
   }
 
   for (const fp of doc.footprints) {
-    const def = footprintDef(fp.libraryId);
+    const def = footprintDef(fp.libraryId, doc.library);
     if (!def) continue;
     for (const pad of def.pads) {
       if (!padOnLayer(fp, pad, layer)) continue;
@@ -284,7 +284,7 @@ export function gerberSilk(doc: PcbDoc): string {
 
   for (const fp of doc.footprints) {
     if (fp.side !== "front") continue;
-    const def = footprintDef(fp.libraryId);
+    const def = footprintDef(fp.libraryId, doc.library);
     if (!def) continue;
     const theta = (fp.rotationDeg * Math.PI) / 180;
     const cos = Math.cos(theta);
@@ -319,7 +319,7 @@ export function gerberMask(doc: PcbDoc, layer: PcbLayer, expansionMm = 0.05): st
   const lines = header(`${layer === "F.Cu" ? "F.Mask" : "B.Mask"} solder mask`);
 
   for (const fp of doc.footprints) {
-    const def = footprintDef(fp.libraryId);
+    const def = footprintDef(fp.libraryId, doc.library);
     if (!def) continue;
     for (const pad of def.pads) {
       if (!padOnLayer(fp, pad, layer)) continue;
@@ -342,7 +342,7 @@ export function gerberPaste(doc: PcbDoc, layer: PcbLayer): string {
   const lines = header(`${layer === "F.Cu" ? "F.Paste" : "B.Paste"} solder paste`);
 
   for (const fp of doc.footprints) {
-    const def = footprintDef(fp.libraryId);
+    const def = footprintDef(fp.libraryId, doc.library);
     if (!def) continue;
     for (const pad of def.pads) {
       if (pad.plated || !pad.pin) continue;

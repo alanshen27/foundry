@@ -62,7 +62,25 @@ export type PcbFootprintDef = {
    * computed from it as ESTIMATED. Omitted means unknown.
    */
   seatedHeightMm?: number;
+  /**
+   * Display glass: the part of a module that shows through a lid window. It is
+   * smaller than the carrier board and is the top `heightMm` of the seated
+   * height. Offsets are from the footprint centre, before rotation.
+   */
+  glass?: { wMm: number; hMm: number; heightMm: number; xMm: number; yMm: number };
+  /** Reference designator prefix for new placements, e.g. "SW" or "DS". */
+  refDesPrefix?: string;
   pads: PcbPadDef[];
+  /** Set only on footprints installed into a board; those are UNVERIFIED. */
+  source?: PcbFootprintSource;
+};
+
+/** Where an installed footprint came from. Built-in footprints have none. */
+export type PcbFootprintSource = {
+  kind: "kicad" | "datasheet";
+  url: string;
+  fetchedAt?: string;
+  note?: string;
 };
 
 export type PcbFootprint = {
@@ -79,6 +97,11 @@ export type PcbFootprint = {
   side: PcbSide;
   /** Known package body height above the board; omit when not specified. */
   bodyHeightMm?: number;
+  /**
+   * Gap between the board surface and the bottom of the body: header pins,
+   * spacers, or a daughterboard module such as a display. Omitted means 0.
+   */
+  standoffMm?: number;
   /**
    * Id of the CircuitPart this footprint physically realises. Set it to pull
    * the schematic's nets onto the board (see lib/pcb/netlist.ts); unset means
@@ -186,6 +209,11 @@ export type PcbDoc = {
   vias: PcbVia[];
   zones: PcbZone[];
   rules: PcbRules;
+  /**
+   * Footprints installed for this board from KiCad libraries or datasheets.
+   * Looked up after the built-in library and never shadow a built-in id.
+   */
+  library?: PcbFootprintDef[];
 };
 
 /**
@@ -413,22 +441,37 @@ export const FOOTPRINT_LIBRARY: PcbFootprintDef[] = [
 
 export const FOOTPRINT_IDS = FOOTPRINT_LIBRARY.map((f) => f.id);
 
-export function footprintDef(libraryId: string): PcbFootprintDef | undefined {
-  return FOOTPRINT_LIBRARY.find((f) => f.id === libraryId);
+/** A board's installed footprints, or none. */
+export type FootprintLibrary = readonly PcbFootprintDef[] | undefined;
+
+export function footprintDef(
+  libraryId: string,
+  library?: FootprintLibrary,
+): PcbFootprintDef | undefined {
+  return (
+    FOOTPRINT_LIBRARY.find((f) => f.id === libraryId) ?? library?.find((f) => f.id === libraryId)
+  );
 }
 
-/** Library ids in a proposed footprint list that are not in FOOTPRINT_LIBRARY. */
-export function unsupportedFootprintIds(footprints: { libraryId: string }[]): string[] {
+/** Library ids in a proposed footprint list that are in neither library. */
+export function unsupportedFootprintIds(
+  footprints: { libraryId: string }[],
+  library?: FootprintLibrary,
+): string[] {
   const unknown = new Set<string>();
   for (const f of footprints) {
-    if (!footprintDef(f.libraryId)) unknown.add(f.libraryId);
+    if (!footprintDef(f.libraryId, library)) unknown.add(f.libraryId);
   }
   return [...unknown];
 }
 
 /** Pad on `libraryId` whose pin matches `pin` (exact, then case-insensitive). */
-export function padByPin(libraryId: string, pin: string): PcbPadDef | undefined {
-  const def = footprintDef(libraryId);
+export function padByPin(
+  libraryId: string,
+  pin: string,
+  library?: FootprintLibrary,
+): PcbPadDef | undefined {
+  const def = footprintDef(libraryId, library);
   if (!def || !pin) return undefined;
   return (
     def.pads.find((p) => p.pin === pin) ??
@@ -436,10 +479,11 @@ export function padByPin(libraryId: string, pin: string): PcbPadDef | undefined 
   );
 }
 
-export function searchFootprints(query: string): PcbFootprintDef[] {
+export function searchFootprints(query: string, library?: FootprintLibrary): PcbFootprintDef[] {
+  const all = [...FOOTPRINT_LIBRARY, ...(library ?? [])];
   const q = query.trim().toLowerCase();
-  if (!q) return FOOTPRINT_LIBRARY;
-  return FOOTPRINT_LIBRARY.filter(
+  if (!q) return all;
+  return all.filter(
     (f) =>
       f.name.toLowerCase().includes(q) ||
       f.id.toLowerCase().includes(q) ||
@@ -463,20 +507,29 @@ function num(raw: unknown, fallback: number, min: number, max: number): number {
  * a pad that doesn't exist would silently drop the pin from the ratsnest, so
  * it's better reported as unmapped.
  */
-function cleanPinMap(raw: unknown, libraryId: string): Record<string, string> | undefined {
+function cleanPinMap(
+  raw: unknown,
+  libraryId: string,
+  library: FootprintLibrary,
+): Record<string, string> | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const out: Record<string, string> = {};
   for (const [schematicPin, padPin] of Object.entries(raw as Record<string, unknown>)) {
     if (!schematicPin || typeof padPin !== "string") continue;
-    const pad = padByPin(libraryId, padPin);
+    const pad = padByPin(libraryId, padPin, library);
     if (pad) out[schematicPin.slice(0, 40)] = pad.pin;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function nextRefDes(libraryId: string, existing: PcbFootprint[]): string {
+function nextRefDes(
+  libraryId: string,
+  existing: PcbFootprint[],
+  library?: FootprintLibrary,
+): string {
   const prefix =
-    libraryId.startsWith("R_") || libraryId.startsWith("C_")
+    footprintDef(libraryId, library)?.refDesPrefix ??
+    (libraryId.startsWith("R_") || libraryId.startsWith("C_")
       ? libraryId[0]!
       : libraryId.startsWith("LED_")
         ? "D"
@@ -484,7 +537,7 @@ function nextRefDes(libraryId: string, existing: PcbFootprint[]): string {
           ? "J"
           : libraryId.startsWith("MountingHole")
             ? "H"
-            : "U";
+            : "U");
   const used = new Set(
     existing
       .map((f) => f.refDes)
@@ -506,12 +559,13 @@ export function createFootprint(
   libraryId: string,
   existing: PcbFootprint[],
   at: { xMm: number; yMm: number } = { xMm: 10, yMm: 10 },
+  library?: FootprintLibrary,
 ): PcbFootprint | null {
-  if (!footprintDef(libraryId)) return null;
+  if (!footprintDef(libraryId, library)) return null;
   return {
     id: pcbId("fp"),
     libraryId,
-    refDes: nextRefDes(libraryId, existing),
+    refDes: nextRefDes(libraryId, existing, library),
     xMm: at.xMm,
     yMm: at.yMm,
     rotationDeg: 0,
@@ -620,10 +674,116 @@ function normalizeRules(raw: unknown): PcbRules {
   };
 }
 
+export const INSTALLED_FOOTPRINT_ID = /^[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}$/;
+export const MAX_INSTALLED_FOOTPRINTS = 40;
+export const MAX_INSTALLED_PADS = 300;
+
+function normalizePadDef(raw: unknown): PcbPadDef | null {
+  if (!raw || typeof raw !== "object") return null;
+  const p = raw as Record<string, unknown>;
+  const wMm = num(p.wMm, NaN, 0.05, 50);
+  const hMm = num(p.hMm, NaN, 0.05, 50);
+  const xMm = num(p.xMm, NaN, -200, 200);
+  const yMm = num(p.yMm, NaN, -200, 200);
+  if (![wMm, hMm, xMm, yMm].every(Number.isFinite)) return null;
+  const drillMm =
+    typeof p.drillMm === "number" && Number.isFinite(p.drillMm) && p.drillMm > 0
+      ? clamp(p.drillMm, 0.05, 20)
+      : undefined;
+  return {
+    pin: typeof p.pin === "string" ? p.pin.trim().slice(0, 16) : "",
+    xMm,
+    yMm,
+    wMm,
+    hMm,
+    shape: p.shape === "oval" ? "oval" : "rect",
+    ...(p.plated === true ? { plated: true } : {}),
+    ...(drillMm !== undefined ? { drillMm } : {}),
+  };
+}
+
+/** Glass must fit inside the carrier outline and stay shorter than the whole module. */
+function normalizeGlass(
+  raw: unknown,
+  bodyWMm: number,
+  bodyHMm: number,
+  seatedHeightMm: number | undefined,
+): PcbFootprintDef["glass"] | undefined {
+  if (!raw || typeof raw !== "object" || seatedHeightMm === undefined) return undefined;
+  const g = raw as Record<string, unknown>;
+  const wMm = num(g.wMm, NaN, 0.1, bodyWMm);
+  const hMm = num(g.hMm, NaN, 0.1, bodyHMm);
+  const heightMm = num(g.heightMm, NaN, 0.05, seatedHeightMm);
+  if (![wMm, hMm, heightMm].every(Number.isFinite) || heightMm >= seatedHeightMm) return undefined;
+  const xMm = num(g.xMm, 0, -(bodyWMm - wMm) / 2, (bodyWMm - wMm) / 2);
+  const yMm = num(g.yMm, 0, -(bodyHMm - hMm) / 2, (bodyHMm - hMm) / 2);
+  return { wMm, hMm, heightMm, xMm, yMm };
+}
+
+/** Installed footprints are untrusted input: bounded, sourced, and never a built-in id. */
+export function normalizeFootprintLibrary(raw: unknown): PcbFootprintDef[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: PcbFootprintDef[] = [];
+  for (const item of raw) {
+    if (out.length >= MAX_INSTALLED_FOOTPRINTS) break;
+    if (!item || typeof item !== "object") continue;
+    const d = item as Record<string, unknown>;
+    const id = typeof d.id === "string" ? d.id.trim() : "";
+    if (!INSTALLED_FOOTPRINT_ID.test(id) || footprintDef(id) || out.some((f) => f.id === id))
+      continue;
+    const s = d.source && typeof d.source === "object" ? (d.source as Record<string, unknown>) : {};
+    const url = typeof s.url === "string" ? s.url.trim() : "";
+    if (!/^https:\/\/\S{1,500}$/.test(url)) continue;
+    const pads = (Array.isArray(d.pads) ? d.pads : [])
+      .slice(0, MAX_INSTALLED_PADS)
+      .map(normalizePadDef)
+      .filter((pad): pad is PcbPadDef => pad !== null);
+    if (pads.length === 0) continue;
+    const seated =
+      typeof d.seatedHeightMm === "number" &&
+      Number.isFinite(d.seatedHeightMm) &&
+      d.seatedHeightMm >= 0
+        ? clamp(d.seatedHeightMm, 0, 100)
+        : undefined;
+    const prefix =
+      typeof d.refDesPrefix === "string" && /^[A-Z]{1,4}$/.test(d.refDesPrefix)
+        ? d.refDesPrefix
+        : undefined;
+    const bodyWMm = num(d.bodyWMm, 1, 0.1, 300);
+    const bodyHMm = num(d.bodyHMm, 1, 0.1, 300);
+    const glass = normalizeGlass(d.glass, bodyWMm, bodyHMm, seated);
+    out.push({
+      id,
+      name: typeof d.name === "string" && d.name.trim() ? d.name.trim().slice(0, 80) : id,
+      category:
+        typeof d.category === "string" && d.category.trim()
+          ? d.category.trim().slice(0, 40)
+          : "Installed",
+      keywords: typeof d.keywords === "string" ? d.keywords.toLowerCase().slice(0, 200) : "",
+      bodyWMm,
+      bodyHMm,
+      ...(seated !== undefined ? { seatedHeightMm: seated } : {}),
+      ...(glass ? { glass } : {}),
+      ...(prefix ? { refDesPrefix: prefix } : {}),
+      pads,
+      source: {
+        kind: s.kind === "kicad" ? "kicad" : "datasheet",
+        url,
+        ...(typeof s.fetchedAt === "string" ? { fetchedAt: s.fetchedAt.slice(0, 40) } : {}),
+        ...(typeof s.note === "string" && s.note.trim()
+          ? { note: s.note.trim().slice(0, 300) }
+          : {}),
+      },
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 export function normalizePcbDoc(raw: unknown): PcbDoc {
   if (!raw || typeof raw !== "object") return emptyPcbDoc();
 
   const obj = raw as Record<string, unknown>;
+  const library = normalizeFootprintLibrary(obj.library);
   const boardRaw =
     obj.board && typeof obj.board === "object" ? (obj.board as Record<string, unknown>) : {};
 
@@ -640,7 +800,7 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
     if (!item || typeof item !== "object") continue;
     const f = item as Record<string, unknown>;
     const libraryId = typeof f.libraryId === "string" ? f.libraryId : "";
-    if (!footprintDef(libraryId)) continue;
+    if (!footprintDef(libraryId, library)) continue;
     const side = f.side === "back" ? "back" : "front";
     footprints.push({
       id: typeof f.id === "string" && f.id ? f.id : `fp_${footprints.length + 1}`,
@@ -648,7 +808,7 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
       refDes:
         typeof f.refDes === "string" && f.refDes.trim()
           ? f.refDes.trim().slice(0, 16)
-          : nextRefDes(libraryId, footprints),
+          : nextRefDes(libraryId, footprints, library),
       value: typeof f.value === "string" ? f.value.slice(0, 64) : undefined,
       xMm: num(f.xMm, board.widthMm / 2, -50, board.widthMm + 50),
       yMm: num(f.yMm, board.heightMm / 2, -50, board.heightMm + 50),
@@ -661,9 +821,16 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
         f.bodyHeightMm <= 500
           ? f.bodyHeightMm
           : undefined,
+      standoffMm:
+        typeof f.standoffMm === "number" &&
+        Number.isFinite(f.standoffMm) &&
+        f.standoffMm > 0 &&
+        f.standoffMm <= 100
+          ? f.standoffMm
+          : undefined,
       partId:
         typeof f.partId === "string" && f.partId.trim() ? f.partId.trim().slice(0, 60) : undefined,
-      pinMap: cleanPinMap(f.pinMap, libraryId),
+      pinMap: cleanPinMap(f.pinMap, libraryId, library),
     });
   }
 
@@ -682,6 +849,7 @@ export function normalizePcbDoc(raw: unknown): PcbDoc {
     vias: normalizeVias(obj.vias, board),
     zones: normalizeZones(obj.zones, board),
     rules: normalizeRules(obj.rules),
+    ...(library ? { library } : {}),
   };
 }
 

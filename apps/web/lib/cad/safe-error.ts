@@ -53,12 +53,7 @@ const BUCKETS: { keywords: string[]; message: string }[] = [
     message: "The CAD service did not respond. Check your connection and try again.",
   },
   {
-    keywords: [
-      "no module named",
-      "ocp.collections",
-      "runtime setup failed",
-      "modulenotfounderror",
-    ],
+    keywords: ["no module named", "ocp.collections", "runtime setup failed", "modulenotfounderror"],
     message:
       "The local Python CAD runtime is incompatible. Reinstall the pinned build123d and ocpsvg versions, then retry.",
   },

@@ -11,18 +11,12 @@ import {
   RefreshCw,
 } from "lucide-react";
 import type { CadAssemblyInstance, CadDoc } from "@foundry/cad";
-import type { EngineeringStep, EngineeringTarget } from "@/lib/engineering/readiness";
+import type { EngineeringTarget } from "@/lib/engineering/readiness";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-const VIEW_FOR_STEP: Record<EngineeringStep, EngineeringTarget["view"]> = {
-  schematic: "schematic",
-  pcb: "pcb",
-  cad: "model",
-  assembly: "assembly",
-};
 const STATE_LABELS = {
   missing: "Not started",
   attention: "Needs attention",
@@ -341,11 +335,9 @@ export function EngineeringWorkflow({
           {report.stages.map((step, index) => (
             <div key={step.id} className="flex shrink-0 items-center gap-1">
               {index > 0 ? <ArrowRight className="text-muted-foreground/60 mx-1 size-3" /> : null}
-              <button
-                type="button"
-                onClick={() => onNavigate({ view: VIEW_FOR_STEP[step.id] })}
-                className="hover:bg-muted focus-visible:ring-primary flex items-center gap-1.5 rounded-none px-1.5 py-1 font-mono text-[10px] tracking-[0.1em] uppercase outline-none focus-visible:ring-2"
+              <span
                 title={`${step.label}: ${STATE_LABELS[step.state]}. ${step.summary}`}
+                className="flex items-center gap-1.5 px-1.5 py-1 font-mono text-[10px] tracking-[0.1em] uppercase"
               >
                 <span
                   className={cn(
@@ -359,7 +351,7 @@ export function EngineeringWorkflow({
                   aria-hidden
                 />
                 {step.label}
-              </button>
+              </span>
             </div>
           ))}
         </div>

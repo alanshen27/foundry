@@ -12,6 +12,7 @@ import {
 import { trpc } from "@/lib/trpc";
 
 const LOCAL_EDIT = "foundry-local-design-edit";
+const LIVE_LOST_MS = 3_000;
 type Status = "connecting" | "connected" | "disconnected" | "local";
 
 /** Shared Yjs transport for every engineering JSON editor. */
@@ -36,6 +37,8 @@ export function useCollaborativeDesign(input: {
   const sessionRef = useRef(session.data);
   sessionRef.current = session.data;
   const [ready, setReady] = useState(false);
+  /** Whether the current live document has synced at least once. */
+  const [hasLiveData, setHasLiveData] = useState(false);
   const [status, setStatus] = useState<Status>("connecting");
   const [error, setError] = useState<string | null>(null);
   const invalidateRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -63,6 +66,7 @@ export function useCollaborativeDesign(input: {
     const doc = new Y.Doc();
     docRef.current = doc;
     setReady(false);
+    setHasLiveData(false);
     setError(null);
     const emit = () => {
       if (!syncedRef.current) return;
@@ -93,6 +97,7 @@ export function useCollaborativeDesign(input: {
         if (state) {
           setError(null);
           emit();
+          setHasLiveData(true);
         }
       },
       onAuthenticationFailed: ({ reason }) => {
@@ -129,6 +134,21 @@ export function useCollaborativeDesign(input: {
     // Keep CRDT identities and unacknowledged updates across token rotation.
   }, [active?.url, active?.documentName, active?.user.id]);
 
+  // A reconnect blip keeps the last live state; a room down for longer falls
+  // back to fresh committed data so AI writes still appear.
+  const [liveLost, setLiveLost] = useState(false);
+  useEffect(() => {
+    if (ready || !hasLiveData) {
+      setLiveLost(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setLiveLost(true);
+      void utils.design.get.invalidate({ projectId, branchId });
+    }, LIVE_LOST_MS);
+    return () => clearTimeout(timer);
+  }, [ready, hasLiveData, utils, projectId, branchId]);
+
   const mode = !hasScope || session.data === null ? "local" : session.data ? "live" : "loading";
   const applySnapshot = useCallback(
     (before: unknown, after: unknown): boolean => {
@@ -149,6 +169,13 @@ export function useCollaborativeDesign(input: {
   return {
     mode: mode as "loading" | "local" | "live",
     ready,
+    /**
+     * Live mode is not synced right now: session pending, room connecting, or
+     * the collab server dropped mid-session. Editors show the saved SQL
+     * snapshot read-only meanwhile — refetched as writes commit — instead of
+     * an empty canvas or a frozen copy of the last live state.
+     */
+    awaitingLive: mode !== "local" && (!hasLiveData || liveLost),
     canEdit: input.canEdit && (mode === "local" || (ready && session.data?.canEdit === true)),
     status,
     error: error ?? session.error?.message ?? null,

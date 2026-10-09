@@ -90,6 +90,12 @@ const TOOL_META: Record<
     failed: "Could not check design readiness",
     icon: ClipboardCheck,
   },
+  read_cad_file: {
+    doing: "Reading CAD file",
+    done: "Read CAD file",
+    failed: "Could not read CAD file",
+    icon: ClipboardCheck,
+  },
   sync_pcb_to_cad: {
     doing: "Updating CAD from boards",
     done: "Updated board geometry",
@@ -180,6 +186,12 @@ const TOOL_META: Record<
     failed: "Failed to save PCB",
     icon: CircuitBoard,
   },
+  install_pcb_footprint: {
+    doing: "Installing footprint",
+    done: "Installed footprint (UNVERIFIED)",
+    failed: "Failed to install footprint",
+    icon: CircuitBoard,
+  },
   clear_pcb: {
     doing: "Clearing PCB",
     done: "Cleared the PCB",
@@ -211,15 +223,15 @@ const TOOL_META: Record<
     icon: Boxes,
   },
   save_cad_script: {
-    doing: "Writing KCL",
+    doing: "Writing Python CAD",
     done: "Saved the 3D model",
-    failed: "Failed to save KCL",
+    failed: "Failed to save Python CAD",
     icon: Boxes,
   },
   patch_cad_script: {
-    doing: "Patching KCL",
+    doing: "Patching Python CAD",
     done: "Patched the 3D model",
-    failed: "KCL patch failed",
+    failed: "Python patch failed",
     icon: Boxes,
   },
   python_cad: {
@@ -394,8 +406,11 @@ function toolDetail(name: string, part: ToolPart): string | null {
     bits.push(`${out.failed.length} failed`);
   if (name === "add_part_to_assembly" && Array.isArray(out.manufacturingRefs))
     bits.push(`${out.manufacturingRefs.length} mfg refs`);
-  if ((name === "save_cad_script" || name === "text_to_cad") && typeof out.kclChars === "number")
-    bits.push(`${out.kclChars} chars KCL`);
+  if (
+    (name === "save_cad_script" || name === "text_to_cad" || name === "python_cad") &&
+    typeof out.sourceChars === "number"
+  )
+    bits.push(`${out.sourceChars} chars`);
   if (
     (name === "save_circuit" || name === "import_wokwi_diagram") &&
     typeof out.parts === "number" &&
@@ -1104,18 +1119,11 @@ export function ChatSidebar() {
       <div className="border-border relative z-10 flex h-10 shrink-0 items-center gap-2 border-b px-2.5">
         <ChannelSwitcher />
         <ProposalInboxTrigger projectId={projectId} branchId={branchId} />
-        <span className="text-muted-foreground ml-auto flex shrink-0 items-center gap-1.5 font-mono text-[10px] tracking-[0.08em] uppercase">
-          <span
-            aria-hidden
-            className={cn("size-1.5", busy ? "bg-primary animate-pulse" : "bg-muted-foreground/45")}
-          />
-          {busy ? "Working" : "Ready"}
-        </span>
         <Button
           type="button"
           variant="ghost"
           size="icon-sm"
-          className="text-muted-foreground size-7"
+          className="text-muted-foreground ml-auto size-7"
           onClick={() => openChatPopout(pathname)}
           aria-label="Open chat in a new window"
           title="Open in a new window"

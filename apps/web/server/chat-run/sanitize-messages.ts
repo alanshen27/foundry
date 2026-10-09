@@ -4,6 +4,7 @@ export {
   pairToolCallsWithResults,
   pruneEmptyAssistantMessages,
   repairInterruptedToolParts,
+  compactHistoryForModel,
   sanitizeUiMessagesForModel,
   stripAllToolParts,
   stripOrphanToolCalls,

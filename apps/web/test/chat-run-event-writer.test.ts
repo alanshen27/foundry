@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UIMessageChunk } from "ai";
-import { createRunEventWriter, type RunEventWrite } from "@/server/chat-run/event-writer";
+import {
+  createRunEventWriter,
+  isPublishedRunChunk,
+  type RunEventWrite,
+} from "@/server/chat-run/event-writer";
 
 const draft = (content: string): UIMessageChunk => ({
   type: "data-cad-draft",
@@ -16,6 +20,26 @@ function deferred() {
   return { promise, resolve };
 }
 afterEach(() => vi.useRealTimers());
+
+describe("published run chunks", () => {
+  it("keeps tool-input deltas on the worker but publishes the tool lifecycle", () => {
+    expect(
+      isPublishedRunChunk({ type: "tool-input-delta", toolCallId: "t", inputTextDelta: "{" }),
+    ).toBe(false);
+    expect(
+      isPublishedRunChunk({ type: "tool-input-start", toolCallId: "t", toolName: "save_pcb" }),
+    ).toBe(true);
+    expect(
+      isPublishedRunChunk({
+        type: "tool-input-available",
+        toolCallId: "t",
+        toolName: "save_pcb",
+        input: {},
+      }),
+    ).toBe(true);
+    expect(isPublishedRunChunk(delta("hi"))).toBe(true);
+  });
+});
 
 describe("ordered chat event batches", () => {
   it("persists a burst in batches rather than waiting for each chunk", async () => {

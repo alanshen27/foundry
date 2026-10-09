@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { assemblyMeshDisplayName, parseAssemblyInstanceLabel } from "@foundry/cad";
 import { orientationForView, type CameraOrientation, type CameraViewId } from "./viewport-input";
 
 export type CadCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
@@ -112,16 +113,140 @@ export function switchCadProjection(
 export function meshLabel(object: THREE.Object3D): string {
   let current: THREE.Object3D | null = object;
   while (current && !(current instanceof THREE.Scene)) {
+    const labeled =
+      typeof current.userData.assemblyLabel === "string"
+        ? current.userData.assemblyLabel.trim()
+        : "";
+    if (labeled) return assemblyMeshDisplayName(labeled);
     const name =
       typeof current.userData.name === "string"
         ? current.userData.name.trim()
         : current.name.trim();
-    if (name && !/^(?:mesh|node|scene)[_\s-]?\d*$/i.test(name)) return name;
+    if (name && !/^(?:mesh|node|scene)[_\s-]?\d*$/i.test(name))
+      return assemblyMeshDisplayName(name);
     const solid = current.userData.gltfExtensions?.KITTYCAD_boundary_representation?.solid;
     if (Number.isInteger(solid) && solid >= 0) return `Body ${solid + 1}`;
     current = current.parent;
   }
   return "Body";
+}
+
+export function assemblyComponentId(object: THREE.Object3D): string | null {
+  let current: THREE.Object3D | null = object;
+  while (current && !(current instanceof THREE.Scene)) {
+    if (typeof current.userData.assemblyComponentId === "string")
+      return current.userData.assemblyComponentId;
+    const labeled =
+      typeof current.userData.assemblyLabel === "string"
+        ? current.userData.assemblyLabel
+        : current.userData.name;
+    const parsed = typeof labeled === "string" ? parseAssemblyInstanceLabel(labeled) : null;
+    if (parsed) return parsed.componentId;
+    current = current.parent;
+  }
+  return null;
+}
+
+export const CAD_HIGHLIGHT_COLOR = 0xff5a00;
+
+function highlightable(material: THREE.Material): material is THREE.MeshStandardMaterial {
+  return (
+    "emissive" in material &&
+    (material as THREE.MeshStandardMaterial).emissive instanceof THREE.Color
+  );
+}
+
+/** Solid meshes only: edge lines and highlight overlays are not pickable. */
+export function cadPickableMeshes(root: THREE.Object3D): THREE.Mesh[] {
+  return meshSolids(root);
+}
+
+/** Reuse the viewport's edge lines (or one cached copy) instead of rebuilding per hover. */
+function highlightEdges(mesh: THREE.Mesh): THREE.BufferGeometry {
+  const existing = mesh.children.find(
+    (child): child is THREE.LineSegments =>
+      child instanceof THREE.LineSegments && Boolean(child.userData.cadEdges),
+  );
+  if (existing) return existing.geometry;
+  const cached = mesh.userData.cadHighlightEdges as THREE.BufferGeometry | undefined;
+  if (cached) return cached;
+  const edges = new THREE.EdgesGeometry(mesh.geometry, 25);
+  mesh.userData.cadHighlightEdges = edges;
+  return edges;
+}
+
+function meshSolids(root: THREE.Object3D): THREE.Mesh[] {
+  const meshes: THREE.Mesh[] = [];
+  root.traverse((object) => {
+    if (
+      object instanceof THREE.Mesh &&
+      !object.userData.cadEdges &&
+      !object.userData.cadHighlightOverlay
+    )
+      meshes.push(object);
+  });
+  return meshes;
+}
+
+export function collectCadHighlightMeshes(targets: readonly THREE.Object3D[]): THREE.Mesh[] {
+  const seen = new Set<THREE.Mesh>();
+  for (const target of targets) for (const mesh of meshSolids(target)) seen.add(mesh);
+  return [...seen];
+}
+
+export function clearCadHighlight(root: THREE.Object3D | null | undefined) {
+  if (!root) return;
+  const overlays: THREE.Object3D[] = [];
+  const clones = new Set<THREE.Material>();
+  root.traverse((object) => {
+    if (object.userData.cadHighlightOverlay) overlays.push(object);
+    if (!(object instanceof THREE.Mesh) || !object.userData.cadHighlightMaterials) return;
+    const tinted = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of tinted) clones.add(material);
+    object.material = object.userData.cadHighlightMaterials as THREE.Material | THREE.Material[];
+    delete object.userData.cadHighlightMaterials;
+  });
+  for (const overlay of overlays) {
+    overlay.parent?.remove(overlay);
+    // The edge geometry is shared with the mesh; only the overlay material is owned.
+    ((overlay as THREE.LineSegments).material as THREE.Material).dispose();
+  }
+  for (const material of clones) material.dispose();
+}
+
+/** Tint the solid itself. Clones materials so a cached assembly scene is not mutated. */
+export function applyCadHighlight(meshes: readonly THREE.Mesh[], intensity = 0.55) {
+  const accent = new THREE.Color(CAD_HIGHLIGHT_COLOR);
+  for (const mesh of collectCadHighlightMeshes(meshes)) {
+    if (mesh.userData.cadHighlightMaterials) continue;
+    const original = mesh.material;
+    mesh.userData.cadHighlightMaterials = original;
+    const list = Array.isArray(original) ? original : [original];
+    const tinted = list.map((material) => {
+      const next = material.clone();
+      if (highlightable(next)) {
+        next.emissive.copy(accent);
+        next.emissiveIntensity = Math.max(intensity, 0.75);
+        next.color.lerp(accent, 0.72);
+        next.metalness = Math.min(next.metalness, 0.12);
+        next.roughness = Math.max(next.roughness, 0.4);
+      }
+      return next;
+    });
+    mesh.material = Array.isArray(original) ? tinted : tinted[0]!;
+    const overlay = new THREE.LineSegments(
+      highlightEdges(mesh),
+      new THREE.LineBasicMaterial({
+        color: CAD_HIGHLIGHT_COLOR,
+        transparent: true,
+        opacity: Math.min(1, intensity + 0.4),
+        depthTest: false,
+      }),
+    );
+    overlay.userData.cadHighlightOverlay = true;
+    overlay.renderOrder = 20;
+    mesh.add(overlay);
+  }
 }
 
 /** Zoo exports a solid as several face primitives; select their shared body. */
@@ -143,6 +268,8 @@ export function disposeCadObject(root: THREE.Object3D): void {
   root.traverse((object) => {
     const drawable = object as THREE.Mesh;
     if (drawable.geometry) geometries.add(drawable.geometry);
+    if (object.userData.cadHighlightEdges instanceof THREE.BufferGeometry)
+      geometries.add(object.userData.cadHighlightEdges);
     if (drawable.material) {
       for (const material of Array.isArray(drawable.material)
         ? drawable.material

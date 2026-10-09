@@ -83,10 +83,12 @@ vi.mock("../server/stage-state", () => ({
 }));
 const evaluateCadComponent = vi.hoisted(() => vi.fn());
 const writeDesignWithCollaboration = vi.hoisted(() =>
-  vi.fn(async (input: { data: unknown }) => input.data),
+  vi.fn(async (...args: unknown[]) => (args[0] as { data: unknown }).data),
 );
-const writeCodeWithCollaboration = vi.hoisted(() => vi.fn(async () => ({ id: "file-1" })));
-const deleteCodeWithCollaboration = vi.hoisted(() => vi.fn());
+const writeCodeWithCollaboration = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ id: "file-1" })),
+);
+const deleteCodeWithCollaboration = vi.hoisted(() => vi.fn((..._args: unknown[]) => undefined));
 
 vi.mock("../server/cad", () => ({
   getCad: () => ({ executeKcl }),
@@ -150,7 +152,9 @@ beforeEach(() => {
   executeKcl.mockReset().mockResolvedValue({ ok: true });
   mutateModel3dDoc.mockReset();
   evaluateCadComponent.mockReset();
-  writeDesignWithCollaboration.mockReset().mockImplementation(async (input: { data: unknown }) => input.data);
+  writeDesignWithCollaboration
+    .mockReset()
+    .mockImplementation(async (...args: unknown[]) => (args[0] as { data: unknown }).data);
   writeCodeWithCollaboration.mockReset().mockResolvedValue({ id: "file-1" });
   deleteCodeWithCollaboration.mockReset();
 });
@@ -178,6 +182,7 @@ const CAPABILITY: Record<string, string> = {
   check_integration: "project.read",
   clear_pcb: "electronics.edit",
   save_pcb: "electronics.edit",
+  install_pcb_footprint: "electronics.edit",
   create_cad_component: "mechanical.edit",
   delete_cad_component: "mechanical.edit",
   text_to_cad: "mechanical.edit",
@@ -186,6 +191,7 @@ const CAPABILITY: Record<string, string> = {
   python_cad: "mechanical.edit",
   add_part_to_assembly: "mechanical.edit",
   get_engineering_status: "project.read",
+  read_cad_file: "project.read",
   sync_pcb_to_cad: "mechanical.edit",
   build_linked_assembly: "mechanical.edit",
   generate_concept_image: "site.edit",
@@ -431,5 +437,54 @@ describe("patch_cad_script", () => {
       options,
     )) as { error: string };
     expect(result.error).toContain('"bracket"');
+  });
+});
+
+describe("engineering results for the model", () => {
+  const doc = normalizeCadDoc({
+    version: 5,
+    engine: "build123d",
+    activeId: "c1",
+    script: "",
+    components: [
+      {
+        id: "c1",
+        kind: "part",
+        name: "enclosure_lid",
+        path: "parts/enclosure_lid/main.py",
+        content: "width = 60\nresult = Box(width, 10, 10)\n",
+      },
+    ],
+  });
+
+  it("reads one CAD file by name or path, and lists the paths when none matches", async () => {
+    overrides.set("designDoc.findUnique", () => ({ data: doc }));
+    expect(await tools().read_cad_file!.execute({ path: "enclosure_lid" }, options)).toMatchObject({
+      path: "parts/enclosure_lid/main.py",
+      content: "width = 60\nresult = Box(width, 10, 10)\n",
+    });
+    const missing = (await tools().read_cad_file!.execute({ path: "bracket" }, options)) as {
+      error: string;
+      paths: string[];
+    };
+    expect(missing.error).toContain("bracket");
+    expect(missing.paths).toContain("parts/enclosure_lid/main.py");
+  });
+
+  it("replaces CAD source with a file index and puts the fit report first", async () => {
+    const { engineeringForModel } = await import("../server/ai/project-tools/cad");
+    const fit = { collisions: [], loose: [{ part: "cap", free: ["+Z"] }] };
+    const { value } = engineeringForModel({
+      output: { cad: doc, fingerprint: "f", seatNotes: [], fit },
+    }) as { value: Record<string, unknown> };
+    expect(Object.keys(value)[0]).toBe("fit");
+    expect(value).not.toHaveProperty("seatNotes");
+    expect(JSON.stringify(value)).not.toContain("Box(width");
+    expect(value.cad).toMatchObject({
+      activePath: "parts/enclosure_lid/main.py",
+      components: [
+        { id: "c1", path: "parts/enclosure_lid/main.py", chars: doc.components[0]!.content.length },
+      ],
+    });
   });
 });

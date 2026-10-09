@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
-import { useCopilot } from "@/components/copilot/copilot-provider";
+import { useCopilotShell } from "@/components/copilot/copilot-provider";
 import { ProposalInboxOverlay } from "@/components/graph/proposal-inbox";
 import { cn } from "@/lib/utils";
 
@@ -32,7 +32,7 @@ export function CommandPalette({
   branchId: string;
 }) {
   const router = useRouter();
-  const { open: copilotOpen, setOpen: setCopilotOpen } = useCopilot();
+  const { open: copilotOpen, setOpen: setCopilotOpen } = useCopilotShell();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);

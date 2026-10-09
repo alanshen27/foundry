@@ -75,6 +75,7 @@ export default async function ProjectShellLayout({
       project={{ id: project.id, name: project.name, slug: project.slug }}
       branchId={activeBranch.id}
       branchName={activeBranch.name}
+      branchIsDefault={activeBranch.isDefault}
       stageStatuses={stageStatuses}
       user={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
       chatChannels={channels}

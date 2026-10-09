@@ -372,59 +372,62 @@ export async function extractProductImages(
           let initial = fetched;
           let active = 0;
           const waiters: Array<() => void> = [];
-          await context.route?.("**/*", async (route: {
-            request: () => {
-              method: () => string;
-              resourceType: () => string;
-              isNavigationRequest: () => boolean;
-              url: () => string;
-              headers: () => { accept?: string };
-            };
-            abort: () => Promise<void>;
-            fulfill: (response: {
-              status: number;
-              headers: Record<string, string>;
-              body: Buffer;
-            }) => Promise<void>;
-          }) => {
-            const request = route.request();
-            if (
-              request.method() !== "GET" ||
-              ["font", "media"].includes(request.resourceType()) ||
-              ++requests > 80 ||
-              bytes > 12_000_000
-            ) {
-              await route.abort();
-              return;
-            }
-            if (active >= 4) await new Promise<void>((resolve) => waiters.push(resolve));
-            active++;
-            try {
-              if (bytes > 12_000_000 || combined.aborted) {
+          await context.route?.(
+            "**/*",
+            async (route: {
+              request: () => {
+                method: () => string;
+                resourceType: () => string;
+                isNavigationRequest: () => boolean;
+                url: () => string;
+                headers: () => { accept?: string };
+              };
+              abort: () => Promise<void>;
+              fulfill: (response: {
+                status: number;
+                headers: Record<string, string>;
+                body: Buffer;
+              }) => Promise<void>;
+            }) => {
+              const request = route.request();
+              if (
+                request.method() !== "GET" ||
+                ["font", "media"].includes(request.resourceType()) ||
+                ++requests > 80 ||
+                bytes > 12_000_000
+              ) {
                 await route.abort();
                 return;
               }
-              let response: PublicPageResponse;
-              if (initial && request.isNavigationRequest() && request.url() === initial.url) {
-                response = initial;
-                initial = undefined;
-              } else
-                response = await loader.read(request.url(), {
-                  accept: request.headers().accept ?? "*/*",
+              if (active >= 4) await new Promise<void>((resolve) => waiters.push(resolve));
+              active++;
+              try {
+                if (bytes > 12_000_000 || combined.aborted) {
+                  await route.abort();
+                  return;
+                }
+                let response: PublicPageResponse;
+                if (initial && request.isNavigationRequest() && request.url() === initial.url) {
+                  response = initial;
+                  initial = undefined;
+                } else
+                  response = await loader.read(request.url(), {
+                    accept: request.headers().accept ?? "*/*",
+                  });
+                bytes += response.body.length;
+                await route.fulfill({
+                  status: response.status,
+                  headers: response.headers,
+                  body: response.body,
                 });
-              bytes += response.body.length;
-              await route.fulfill({
-                status: response.status,
-                headers: response.headers,
-                body: response.body,
-              });
-            } catch {
-              await route.abort().catch(() => undefined);
-            } finally {
-              active--;
-              waiters.shift()?.();
-            }
-          });
+              } catch {
+                await route.abort().catch(() => undefined);
+              } finally {
+                active--;
+                waiters.shift()?.();
+              }
+            },
+          );
         }
 
         await page.goto(fetched?.url ?? key, { waitUntil: "domcontentloaded", timeout: 12_000 });
@@ -438,9 +441,13 @@ export async function extractProductImages(
           : ((await page.evaluate(HARVEST_PRODUCT_IMAGES_SCRIPT)) as RawImageCandidate[]);
         if (!blocked && !raw.length && "waitForFunction" in page) {
           await page
-            .waitForFunction(`() => (${HARVEST_PRODUCT_IMAGES_SCRIPT}).length > 0`, {}, {
-              timeout: 2_500,
-            })
+            .waitForFunction(
+              `() => (${HARVEST_PRODUCT_IMAGES_SCRIPT}).length > 0`,
+              {},
+              {
+                timeout: 2_500,
+              },
+            )
             .catch(() => undefined);
           raw = (await page.evaluate(HARVEST_PRODUCT_IMAGES_SCRIPT)) as RawImageCandidate[];
         }

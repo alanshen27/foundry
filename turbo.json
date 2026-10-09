@@ -3,6 +3,8 @@
   "globalEnv": [
     "CI",
     "DATABASE_URL",
+    "DIRECT_URL",
+    "RENDER",
     "AUTH_MODE",
     "AUTH_SECRET",
     "STORAGE_BUCKET",
@@ -15,6 +17,8 @@
     "REDIS_URL",
     "OPENAI_API_KEY",
     "AI_MODEL",
+    "OPENROUTER_API_KEY",
+    "JEV_MODEL",
     "AI_LIGHT_MODEL",
     "AI_RUNS_PER_HOUR",
     "AI_WORKSPACE_DAILY_TOKEN_BUDGET",

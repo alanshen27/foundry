@@ -7,7 +7,7 @@ import {
   DESIGN_KINDS,
 } from "@foundry/collaboration";
 import { prisma } from "@foundry/db";
-import { loadCollaborationDocument } from "@foundry/collaboration/server";
+import { hasCollaborationState, loadCollaborationDocument } from "@foundry/collaboration/server";
 import { normalizeCadDoc } from "@foundry/cad";
 import { normalizePcbSet } from "@/lib/pcb/doc";
 import { normalizeCircuitDoc } from "@/lib/circuit/catalog";
@@ -33,23 +33,20 @@ export const collaborationRouter = router({
     .query(async ({ ctx, input }) => {
       const url = getCollabWebsocketUrl();
       if (!url) return null;
-      const { project, membership, role } = await requireProjectCapability(
-        ctx.user.id,
-        input.projectId,
-        "project.read",
-      );
-      const branch = await prisma.projectBranch.findFirst({
-        where: { id: input.branchId, projectId: input.projectId },
-      });
+      const documentName = designDocumentRoom(input.projectId, input.branchId, input.kind);
+      // Authorization completes before the room-existence result is used.
+      const [{ project, membership, role }, branch, seeded] = await Promise.all([
+        requireProjectCapability(ctx.user.id, input.projectId, "project.read"),
+        prisma.projectBranch.findFirst({
+          where: { id: input.branchId, projectId: input.projectId },
+          select: { id: true },
+        }),
+        hasCollaborationState(documentName),
+      ]);
       if (!branch) throw new TRPCError({ code: "NOT_FOUND", message: "Project branch not found" });
-      const grants = (
-        await prisma.capabilityGrant.findMany({
-          where: {
-            membershipId: membership.id,
-            OR: [{ projectId: null }, { projectId: input.projectId }],
-          },
-        })
-      ).map((g) => g.capability as Capability);
+      const grants = membership.grants
+        .filter((g) => g.projectId === null || g.projectId === input.projectId)
+        .map((g) => g.capability as Capability);
       const capability =
         input.kind === "MODEL3D"
           ? "mechanical.edit"
@@ -57,19 +54,20 @@ export const collaborationRouter = router({
             ? "site.edit"
             : "electronics.edit";
       const canEdit = hasCapability(role, grants, capability);
-      const documentName = designDocumentRoom(input.projectId, input.branchId, input.kind);
       // Seed one canonical identity set before issuing a room token. This also
       // upgrades legacy single-board data and makes simultaneous first edits
       // share the same empty arrays/board instead of racing to replace a root.
-      await loadCollaborationDocument(documentName, (data) =>
-        input.kind === "PCB"
-          ? normalizePcbSet(data)
-          : input.kind === "CIRCUIT"
-            ? normalizeCircuitDoc(data)
-            : input.kind === "MODEL3D"
-              ? normalizeCadDoc(data)
-              : (data ?? {}),
-      );
+      // Rooms are never un-seeded, so an existing row skips the locking transaction.
+      if (!seeded)
+        await loadCollaborationDocument(documentName, (data) =>
+          input.kind === "PCB"
+            ? normalizePcbSet(data)
+            : input.kind === "CIRCUIT"
+              ? normalizeCircuitDoc(data)
+              : input.kind === "MODEL3D"
+                ? normalizeCadDoc(data)
+                : (data ?? {}),
+        );
       const user = { id: ctx.user.id, name: ctx.user.name, avatarUrl: ctx.user.avatarUrl };
       return {
         url,

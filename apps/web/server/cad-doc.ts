@@ -1,5 +1,6 @@
 import { prisma, type Prisma } from "@foundry/db";
 import { acquireBranchEditMutex, withAiRunEditLockGuard } from "./ai-edit-lock";
+import { notifyProjectChanged } from "./project-change";
 import { pythonCadDoc, normalizeCadDoc, type CadDoc } from "@foundry/cad";
 import { designDocumentRoom, COLLABORATION_TRANSACTION_OPTIONS } from "@foundry/collaboration";
 import {
@@ -28,6 +29,7 @@ export async function mutateModel3dDoc(
   try {
     const doc = await writeModel3dDoc(projectId, branchId, userId, mutate, runId);
     await publishCollaborationUpdate(designDocumentRoom(projectId, branchId, "MODEL3D"));
+    notifyProjectChanged(projectId, branchId, { kind: "design", design: "MODEL3D" });
     return doc;
   } catch (err) {
     // First write has no row to lock, so two parallel tool calls can both
@@ -35,6 +37,7 @@ export async function mutateModel3dDoc(
     if (!isUniqueViolation(err)) throw err;
     const doc = await writeModel3dDoc(projectId, branchId, userId, mutate, runId);
     await publishCollaborationUpdate(designDocumentRoom(projectId, branchId, "MODEL3D"));
+    notifyProjectChanged(projectId, branchId, { kind: "design", design: "MODEL3D" });
     return doc;
   }
 }

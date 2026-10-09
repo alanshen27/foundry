@@ -287,6 +287,87 @@ describe("electrical copilot persistence", () => {
       pinMap: { A: "1", C: "2" },
     });
   });
+
+  it("installs a datasheet footprint as UNVERIFIED and keeps it through later layouts", async () => {
+    let stored: unknown = null;
+    designFindUnique.mockImplementation(async () => (stored ? { data: stored } : null));
+    designUpsert.mockImplementation(async (arg: { update: { data: unknown } }) => {
+      stored = arg.update.data;
+    });
+    const install = buildProjectTools(context).install_pcb_footprint;
+    const result = await install.execute(
+      install.inputSchema.parse({
+        datasheet: {
+          url: "https://example.test/ssd1306-module.pdf",
+          name: "OLED_0.96in_I2C",
+          bodyWMm: 27.3,
+          bodyHMm: 27.8,
+          pads: ["GND", "VCC", "SCL", "SDA"].map((pin, i) => ({
+            pin,
+            xMm: -3.81 + i * 2.54,
+            yMm: -12.4,
+            wMm: 1.7,
+            hMm: 1.7,
+            drillMm: 1,
+          })),
+        },
+        seatedHeightMm: 3.7,
+        refDesPrefix: "DS",
+      }),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: "UNVERIFIED",
+      libraryId: "OLED_0.96in_I2C",
+      seatedHeightMm: 3.7,
+      source: { kind: "datasheet", url: "https://example.test/ssd1306-module.pdf" },
+    });
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "DesignDocUpdated",
+        payload: expect.objectContaining({ installedFootprint: "OLED_0.96in_I2C" }),
+      }),
+    );
+
+    const save = buildProjectTools(context).save_pcb;
+    const placed = await save.execute(
+      save.inputSchema.parse({
+        board: { widthMm: 60, heightMm: 50 },
+        footprints: [
+          {
+            id: "ds1",
+            libraryId: "OLED_0.96in_I2C",
+            refDes: "DS1",
+            xMm: 30,
+            yMm: 25,
+            bodyHeightMm: 3.7,
+            standoffMm: 8.5,
+          },
+        ],
+      }),
+    );
+    expect(placed).toMatchObject({
+      ok: true,
+      envelopes: [{ refDes: "DS1", bottomZMm: 10.1, topZMm: 13.8 }],
+    });
+    const board = (stored as { boards: { library?: { id: string }[] }[] }).boards[0]!;
+    expect(board.library?.map((f) => f.id)).toEqual(["OLED_0.96in_I2C"]);
+
+    const refused = await save.execute(
+      save.inputSchema.parse({
+        board: { widthMm: 60, heightMm: 50 },
+        footprints: [{ id: "x", libraryId: "Never_Installed", refDes: "U9", xMm: 5, yMm: 5 }],
+      }),
+    );
+    expect(refused).toMatchObject({ error: expect.stringContaining("install_pcb_footprint") });
+  });
+
+  it("rejects an installer call without exactly one source", async () => {
+    const install = buildProjectTools(context).install_pcb_footprint;
+    expect(await install.execute(install.inputSchema.parse({}))).toMatchObject({
+      error: expect.stringContaining("exactly one source"),
+    });
+  });
 });
 
 const SOURCE = "from build123d import Box\nwidth = 10\nresult = Box(width, 10, 10)\n";

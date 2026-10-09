@@ -42,7 +42,11 @@ async function findOrCreateCategory(projectId: string, branchId: string) {
   }
 }
 
-async function findOrCreateChannel(projectId: string, branchId: string, categoryId: string) {
+async function findOrCreateChannel(
+  projectId: string,
+  branchId: string,
+  category: Promise<{ id: string }>,
+) {
   const where = {
     projectId_branchId_name: { projectId, branchId, name: DEFAULT_CHANNEL_NAME },
   } as const;
@@ -50,6 +54,7 @@ async function findOrCreateChannel(projectId: string, branchId: string, category
   const existing = await prisma.chatChannel.findUnique({ where });
   if (existing) return existing;
 
+  const { id: categoryId } = await category;
   try {
     return await prisma.chatChannel.create({
       data: {
@@ -75,26 +80,32 @@ export async function ensureDefaultCategory(projectId: string, branchId: string)
  * Also adopts legacy messages written before channels existed (channelId null).
  */
 export async function ensureDefaultChannel(projectId: string, branchId: string) {
-  const category = await findOrCreateCategory(projectId, branchId);
-  const channel = await findOrCreateChannel(projectId, branchId, category.id);
+  // Existing branches need both lookups, but neither read depends on the other.
+  // Only creating a missing channel has to wait for its category's id.
+  const categoryPromise = findOrCreateCategory(projectId, branchId);
+  const [category, channel] = await Promise.all([
+    categoryPromise,
+    findOrCreateChannel(projectId, branchId, categoryPromise),
+  ]);
 
-  if (!channel.categoryId) {
-    await prisma.chatChannel.update({
-      where: { id: channel.id },
+  // Keep legacy adoption on every ensure, but run the independent backfills
+  // together. Return the fetched/updated channel without reading it again.
+  const [categorizedChannel] = await Promise.all([
+    channel.categoryId
+      ? Promise.resolve(channel)
+      : prisma.chatChannel.update({
+          where: { id: channel.id },
+          data: { categoryId: category.id },
+        }),
+    prisma.chatChannel.updateMany({
+      where: { projectId, branchId, categoryId: null },
       data: { categoryId: category.id },
-    });
-  }
+    }),
+    prisma.chatMessage.updateMany({
+      where: { projectId, branchId, channelId: null },
+      data: { channelId: channel.id },
+    }),
+  ]);
 
-  // Assign uncategorized channels to the default category.
-  await prisma.chatChannel.updateMany({
-    where: { projectId, branchId, categoryId: null },
-    data: { categoryId: category.id },
-  });
-
-  await prisma.chatMessage.updateMany({
-    where: { projectId, branchId, channelId: null },
-    data: { channelId: channel.id },
-  });
-
-  return prisma.chatChannel.findUniqueOrThrow({ where: { id: channel.id } });
+  return categorizedChannel;
 }

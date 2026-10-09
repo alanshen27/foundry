@@ -1,10 +1,8 @@
 "use client";
 
 /**
- * Single-window workspace. Surfaces that exist once per project — Assembly,
- * PCB, Checks, Repository, Ideate, Verify, Launch, Renders — are permanent
- * buttons in the top bar. Only CAD and Schematic open as closable tabs, since
- * those can have several components open side by side.
+ * Single-page workspace. Assembly is the home surface. Other documents open
+ * as closable tabs from the window menu; Cmd+K still jumps anywhere.
  */
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -149,15 +147,23 @@ type Props = {
   caps: StageCaps;
 };
 
-/** Windows the + menu can open as tabs — multi-component surfaces only. */
+/** Anything except Assembly can be opened as a closable tab. */
 type OpenableKind = Exclude<EngineerDocKind, "assembly">;
 
 const OPENABLE: { kind: OpenableKind; label: string; icon: typeof Boxes }[] = [
   { kind: "model", label: "CAD", icon: Boxes },
   { kind: "schematic", label: "Schematic", icon: Waypoints },
+  { kind: "pcb", label: "PCB", icon: CircuitBoard },
+  { kind: "sourcing", label: "Sourcing", icon: Package },
+  { kind: "checks", label: "Checks", icon: ShieldCheck },
+  { kind: "code", label: "Repository", icon: FolderGit2 },
+  { kind: "ideate", label: "Ideate", icon: Lightbulb },
+  { kind: "verify", label: "Verify", icon: ShieldCheck },
+  { kind: "launch", label: "Launch", icon: Rocket },
+  { kind: "renders", label: "Renders", icon: Images },
 ];
 
-/** Single-instance surfaces pinned to the top bar. */
+/** Surfaces that mount once and stay warm after the first visit. */
 type FixedKind = Exclude<EngineerDocKind, "model" | "schematic">;
 
 const FIXED: { kind: FixedKind; label: string; icon: typeof Boxes }[] = [
@@ -173,15 +179,6 @@ const FIXED: { kind: FixedKind; label: string; icon: typeof Boxes }[] = [
 ];
 
 const FIXED_KINDS = new Set<EngineerDocKind>(FIXED.map((f) => f.kind));
-
-/**
- * Real pipeline stages (Ideate/Verify/Launch/Renders) are still FIXED
- * surfaces for the mount/tab state machine — deep links and the Stage Rail
- * both route through `?view=`, unchanged — but they're no longer buttons in
- * this bar now that the Stage Rail (project-shell.tsx) is their home.
- */
-const STAGE_KINDS = new Set<EngineerDocKind>(["ideate", "verify", "launch", "renders"]);
-const TOP_BAR_FIXED = FIXED.filter(({ kind }) => !STAGE_KINDS.has(kind));
 
 function TabIcon({ kind }: { kind: EngineerDocKind }) {
   if (kind === "assembly") return <Combine className="size-3" strokeWidth={2} />;
@@ -258,10 +255,8 @@ function EngineerDocWorkspace({
     [view, partParam, boardParam],
   );
 
-  // Only multi-component surfaces (CAD / Schematic) live in the tab strip;
-  // fixed surfaces are top-bar buttons and mount lazily on first visit.
   const [tabs, setTabs] = useState<EngineerDocTab[]>(() =>
-    FIXED_KINDS.has(initial.kind) ? [] : [initial],
+    initial.kind === "assembly" ? [] : [initial],
   );
   const [activeKey, setActiveKey] = useState(initial.key);
   const [visitedFixed, setVisitedFixed] = useState<Set<string>>(
@@ -277,7 +272,8 @@ function EngineerDocWorkspace({
     if (FIXED_KINDS.has(next.kind)) {
       setVisitedFixed((prev) => (prev.has(next.key) ? prev : new Set([...prev, next.key])));
       if (next.kind === "pcb" && next.boardId) setPcbBoardId(next.boardId);
-    } else {
+    }
+    if (next.kind !== "assembly") {
       setTabs((prev) => (prev.some((t) => t.key === next.key) ? prev : [...prev, next]));
     }
     setActiveKey(next.key);
@@ -304,19 +300,10 @@ function EngineerDocWorkspace({
 
   const openTab = useCallback(
     (kind: OpenableKind, opts?: { componentId?: string; boardId?: string; label?: string }) => {
+      if (kind === "pcb" && opts?.boardId) setPcbBoardId(opts.boardId);
       if (FIXED_KINDS.has(kind)) {
-        const key = tabKeyFor(kind);
-        if (kind === "pcb" && opts?.boardId) setPcbBoardId(opts.boardId);
-        setVisitedFixed((prev) => (prev.has(key) ? prev : new Set([...prev, key])));
-        setActiveKey(key);
-        syncUrl({
-          key,
-          kind,
-          label: opts?.label ?? labelForKind(kind),
-          boardId: opts?.boardId,
-        });
-        setNewOpen(false);
-        return;
+        const mounted = tabKeyFor(kind);
+        setVisitedFixed((prev) => (prev.has(mounted) ? prev : new Set([...prev, mounted])));
       }
       const key = tabKeyFor(kind, opts?.componentId);
       const tab: EngineerDocTab = {
@@ -411,23 +398,21 @@ function EngineerDocWorkspace({
           aria-label="Open documents"
           className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
         >
-          {TOP_BAR_FIXED.map(({ kind, label, icon: Icon }) => (
-            <button
-              key={kind}
-              type="button"
-              onClick={() => activateFixed(kind)}
-              aria-pressed={active.kind === kind}
-              className={cn(
-                "flex h-7 shrink-0 items-center gap-1.5 rounded-none px-2.5 text-xs",
-                active.kind === kind
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:bg-muted/50",
-              )}
-            >
-              <Icon className="size-3" strokeWidth={2} />
-              <span>{label}</span>
-            </button>
-          ))}
+          <button
+            type="button"
+            onClick={() => activateFixed("assembly")}
+            aria-current={active.kind === "assembly" ? "page" : undefined}
+            aria-pressed={active.kind === "assembly"}
+            className={cn(
+              "flex h-7 shrink-0 items-center gap-1.5 rounded-none px-2.5 text-xs",
+              active.kind === "assembly"
+                ? "bg-muted text-foreground"
+                : "text-muted-foreground hover:bg-muted/50",
+            )}
+          >
+            <Combine className="size-3" strokeWidth={2} />
+            <span>Assembly</span>
+          </button>
           {tabs.length > 0 ? (
             <span className="bg-border mx-1 h-4 w-px shrink-0" aria-hidden />
           ) : null}
@@ -445,6 +430,7 @@ function EngineerDocWorkspace({
                 type="button"
                 onClick={() => activate(tab)}
                 aria-current={tab.key === active.key ? "page" : undefined}
+                aria-pressed={tab.key === active.key}
                 className="focus-visible:outline-ring flex h-full items-center gap-1.5 px-2.5 outline-offset-[-3px]"
               >
                 <TabIcon kind={tab.kind} />
@@ -495,16 +481,20 @@ function EngineerDocWorkspace({
                 className="bg-popover text-popover-foreground absolute top-full right-0 z-50 mt-1 min-w-44 overflow-hidden rounded-none border py-1 font-mono text-[11px] tracking-[0.08em] uppercase shadow-none"
               >
                 {OPENABLE.map(({ kind, label, icon: Icon }) => (
-                  <button
-                    key={kind}
-                    type="button"
-                    role="menuitem"
-                    className="hover:bg-muted flex w-full items-center gap-2 px-3 py-1.5 text-left"
-                    onClick={() => openTab(kind)}
-                  >
-                    <Icon className="size-3.5 opacity-70" />
-                    {label}
-                  </button>
+                  <div key={kind}>
+                    {kind === "sourcing" || kind === "ideate" ? (
+                      <div className="bg-border my-1 h-px" aria-hidden />
+                    ) : null}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="hover:bg-muted flex w-full items-center gap-2 px-3 py-1.5 text-left"
+                      onClick={() => openTab(kind)}
+                    >
+                      <Icon className="size-3.5 opacity-70" />
+                      {label}
+                    </button>
+                  </div>
                 ))}
               </div>
             </>

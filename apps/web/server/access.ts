@@ -1,9 +1,11 @@
 import { TRPCError } from "@trpc/server";
-import { prisma, type Project, type WorkspaceMembership } from "@foundry/db";
+import { prisma, type CapabilityGrant, type Project, type WorkspaceMembership } from "@foundry/db";
 import { hasCapability, type Capability, type WorkspaceRole } from "@foundry/domain";
 
+type MembershipWithGrants = WorkspaceMembership & { grants: CapabilityGrant[] };
+
 export type WorkspaceAccess = {
-  membership: WorkspaceMembership;
+  membership: MembershipWithGrants;
   role: WorkspaceRole;
 };
 
@@ -24,6 +26,14 @@ export async function requireWorkspaceCapability(
     where: { workspaceId_userId: { workspaceId, userId } },
     include: { grants: true },
   });
+  return assertMembershipCapability(membership, capability, projectId);
+}
+
+function assertMembershipCapability(
+  membership: MembershipWithGrants | null,
+  capability: Capability,
+  projectId?: string,
+): WorkspaceAccess {
   if (!membership) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Not a member of this workspace" });
   }
@@ -46,13 +56,20 @@ export async function requireProjectCapability(
   projectId: string,
   capability: Capability,
 ): Promise<ProjectAccess> {
-  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  // One round trip instead of two: the membership is resolved through the
+  // project's workspace in parallel, then pinned to that workspace below.
+  const [project, membership] = await Promise.all([
+    prisma.project.findUnique({ where: { id: projectId } }),
+    prisma.workspaceMembership.findFirst({
+      where: { userId, workspace: { projects: { some: { id: projectId } } } },
+      include: { grants: true },
+    }),
+  ]);
   if (!project) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
   }
-  const access = await requireWorkspaceCapability(
-    userId,
-    project.workspaceId,
+  const access = assertMembershipCapability(
+    membership?.workspaceId === project.workspaceId ? membership : null,
     capability,
     project.id,
   );

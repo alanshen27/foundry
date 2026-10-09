@@ -33,16 +33,40 @@ export function createSupabaseBroadcastPort(config: SupabaseBroadcastConfig): Br
   };
 }
 
-/** Server/worker: publish broadcast events with the service role key. */
+/**
+ * Server/worker: publish broadcast events with the service role key.
+ *
+ * Uses Realtime's REST broadcast endpoint — one HTTP request, no socket join —
+ * and falls back to join-send-leave over the websocket if REST is refused.
+ */
 export function createSupabaseBroadcastPublisher(
   config: SupabaseBroadcastPublisherConfig,
+  fetchImpl: typeof fetch = fetch,
 ): BroadcastPublisher {
   const client = createClient(config.url, config.serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+  const endpoint = `${config.url.replace(/\/+$/, "")}/realtime/v1/api/broadcast`;
 
   return {
     async publish(channel, message) {
+      try {
+        const response = await fetchImpl(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: config.serviceRoleKey,
+            Authorization: `Bearer ${config.serviceRoleKey}`,
+          },
+          body: JSON.stringify({
+            messages: [{ topic: channel, event: message.event, payload: message.payload }],
+          }),
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (response.ok) return;
+      } catch {
+        /* Fall through to the websocket path. */
+      }
       const room = client.channel(channel);
       await new Promise<void>((resolve, reject) => {
         room.subscribe((status) => {

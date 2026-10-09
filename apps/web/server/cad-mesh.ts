@@ -1,5 +1,6 @@
 import "server-only";
 import { createHash } from "node:crypto";
+import { FOUNDRY_MESH_MAGIC } from "@/lib/cad/foundry-mesh";
 import { cadMeshStorageKey, type CadMeshRequest } from "@/lib/cad/mesh-request";
 import { getObjectStorage } from "./storage";
 import { runPythonCad } from "@foundry/cad/server";
@@ -57,6 +58,7 @@ export async function compileCadModel(
       JSON.stringify({
         projectId,
         engine: "build123d",
+        meshFormat: FOUNDRY_MESH_MAGIC,
         entryPath: input.entryPath ?? "main.py",
         files: Object.entries(files).sort(([a], [b]) => a.localeCompare(b)),
         assets,

@@ -87,7 +87,7 @@ export function PcbRenderView({
         </g>
       ))}
       {doc.footprints.map((fp) => {
-        const def = footprintDef(fp.libraryId);
+        const def = footprintDef(fp.libraryId, doc.library);
         if (!def) return null;
         const copper = fp.side === "front" ? "#c04040" : "#6060d0";
         return (

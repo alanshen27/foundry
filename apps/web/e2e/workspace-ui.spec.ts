@@ -2,10 +2,14 @@ import { expect, test } from "@playwright/test";
 
 // Catch high-DPI drawing buffers accidentally becoming the canvas's CSS dimensions.
 test.use({ deviceScaleFactor: 2 });
+// Software WebGL at 2x on a shared CI runner can take seconds per layout read.
+const LAYOUT_POLL = { timeout: 20_000 };
 
 test("workspace keeps the model dominant and preserves assembly-to-part navigation", async ({
   page,
 }, testInfo) => {
+  // A cold dev server compiles the workspace, CAD and PCB surfaces on first visit.
+  test.setTimeout(180_000);
   const errors: string[] = [];
   const serviceCalls: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -24,10 +28,10 @@ test("workspace keeps the model dominant and preserves assembly-to-part navigati
   const canvas = viewport.locator("canvas");
   const viewportBox = (await viewport.boundingBox())!;
   await expect
-    .poll(async () => (await canvas.boundingBox())!.width)
+    .poll(async () => (await canvas.boundingBox())!.width, LAYOUT_POLL)
     .toBeCloseTo(viewportBox.width, 0);
   await expect
-    .poll(async () => (await canvas.boundingBox())!.height)
+    .poll(async () => (await canvas.boundingBox())!.height, LAYOUT_POLL)
     .toBeCloseTo(viewportBox.height, 0);
   const chat = page.getByRole("complementary", { name: "AI copilot" });
   await expect(chat).toBeVisible();
@@ -45,15 +49,19 @@ test("workspace keeps the model dominant and preserves assembly-to-part navigati
   await expect(chat).toHaveCount(0);
   expect((await viewport.boundingBox())!.width).toBeGreaterThan(beforeHide + 250);
   await expect
-    .poll(async () =>
-      Math.abs((await canvas.boundingBox())!.width - (await viewport.boundingBox())!.width),
+    .poll(
+      async () =>
+        Math.abs((await canvas.boundingBox())!.width - (await viewport.boundingBox())!.width),
+      LAYOUT_POLL,
     )
     .toBeLessThan(1);
   await page.getByRole("button", { name: "Show copilot", exact: true }).click();
   await expect(chat).toBeVisible();
   await expect
-    .poll(async () =>
-      Math.abs((await canvas.boundingBox())!.width - (await viewport.boundingBox())!.width),
+    .poll(
+      async () =>
+        Math.abs((await canvas.boundingBox())!.width - (await viewport.boundingBox())!.width),
+      LAYOUT_POLL,
     )
     .toBeLessThan(1);
 
@@ -67,7 +75,9 @@ test("workspace keeps the model dominant and preserves assembly-to-part navigati
   await expect(page).toHaveURL(/view=model&part=top/);
   await expect(viewport).toHaveAttribute("data-cad-status", "running", { timeout: 60_000 });
   await expect(viewport).toHaveAttribute("data-cad-engine", "build123d");
-  await expect(page.getByText("parts/top/main.py", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("parts/top/main.py", { exact: true }).filter({ visible: true }),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: /^Measure$/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Move \/ Copy$/i })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Show code", exact: true })).toBeVisible();
@@ -76,6 +86,10 @@ test("workspace keeps the model dominant and preserves assembly-to-part navigati
   await expect(page.getByRole("button", { name: /^Export STL$/i })).toBeVisible();
   await page.getByText(/^Export$/i).click();
   await page.screenshot({ path: testInfo.outputPath("workspace-cad-part.png") });
+  await expect(openDocuments.getByRole("button", { name: /^Assembly$/i })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
   await openDocuments.getByRole("button", { name: "Close Upper housing", exact: true }).click();
   await expect(openDocuments.getByRole("button", { name: /^Assembly$/i })).toHaveAttribute(
     "aria-current",

@@ -16,6 +16,9 @@ import {
   copilotBroadcastChannel,
   createOffBroadcastPort,
   createSupabaseBroadcastPort,
+  PROJECT_CHANGED_EVENT,
+  projectBroadcastChannel,
+  readProjectChanges,
   type BroadcastPort,
 } from "@foundry/realtime";
 import { BackgroundChatTransport } from "@/lib/copilot/background-chat-transport";
@@ -65,7 +68,11 @@ export type ChatCategory = {
   sortOrder: number;
 };
 
-export type CopilotViewer = { id: string; name: string; avatarUrl?: string | null };
+export type CopilotViewer = {
+  id: string;
+  name: string;
+  avatarUrl?: string | null;
+};
 
 export type SendOptions = { replyToId?: string };
 
@@ -109,15 +116,73 @@ export function useCopilot(): CopilotContextValue {
   return ctx;
 }
 
+type CopilotShellValue = Pick<CopilotContextValue, "open" | "setOpen">;
+const CopilotShellContext = createContext<CopilotShellValue | null>(null);
+
+/** Panel state only; unlike useCopilot it does not re-render on streamed chunks. */
+export function useCopilotShell(): CopilotShellValue {
+  const ctx = useContext(CopilotShellContext);
+  if (!ctx) throw new Error("useCopilotShell must be used inside CopilotProvider");
+  return ctx;
+}
+
 const REALTIME_MODE = process.env.NEXT_PUBLIC_REALTIME_MODE ?? "off";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 function createBroadcastPort(): BroadcastPort {
   if (REALTIME_MODE === "supabase" && SUPABASE_URL && SUPABASE_ANON_KEY) {
-    return createSupabaseBroadcastPort({ url: SUPABASE_URL, anonKey: SUPABASE_ANON_KEY });
+    return createSupabaseBroadcastPort({
+      url: SUPABASE_URL,
+      anonKey: SUPABASE_ANON_KEY,
+    });
   }
   return createOffBroadcastPort();
+}
+
+/**
+ * Refetch what an AI or API write committed, as it commits. Live Yjs rooms
+ * already receive it; this covers views that are not on one (collab server
+ * down, still connecting, local mode) instead of waiting for the run to end.
+ */
+function useProjectChangeRefresh(projectId: string, branchId: string, disabled: boolean) {
+  const utils = trpc.useUtils();
+  useEffect(() => {
+    if (disabled) return;
+    const kinds = new Set<string>();
+    let code = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      timer = null;
+      const jobs: Promise<unknown>[] = [];
+      if (kinds.size) {
+        jobs.push(
+          utils.design.get.invalidate({ projectId, branchId }),
+          utils.engineering.status.invalidate({ projectId, branchId }),
+        );
+        if (kinds.has("MODEL3D")) jobs.push(utils.engineer.invalidate());
+      }
+      if (code) jobs.push(utils.code.invalidate());
+      kinds.clear();
+      code = false;
+      void Promise.all(jobs);
+    };
+    const sub = createBroadcastPort().subscribe(
+      projectBroadcastChannel(projectId, branchId),
+      (message) => {
+        if (message.event !== PROJECT_CHANGED_EVENT) return;
+        for (const change of readProjectChanges(message.payload)) {
+          if (change.kind === "code") code = true;
+          else kinds.add(change.design);
+        }
+        timer ??= setTimeout(flush, 150);
+      },
+    );
+    return () => {
+      if (timer) clearTimeout(timer);
+      sub.leave();
+    };
+  }, [projectId, branchId, disabled, utils]);
 }
 
 /**
@@ -193,14 +258,14 @@ function ChatEngine({
   const connectionDropRef = useRef(false);
   // Freeze the seed so RSC re-renders / prop updates never reset the live chat.
   // Merge sessionStorage so a reload after a failed POST still shows the turn.
-  const seedRef = useRef(
+  const [seedMessages] = useState(() =>
     preview
       ? initialMessages
       : seedTranscriptWithLocalBackup(channelId, pruneEmptyAssistantMessages(initialMessages)),
   );
   // Flip true synchronously on send so the stop square appears before status catches up.
   const [localBusy, setLocalBusy] = useState(false);
-  const messagesRef = useRef<UIMessage[]>(seedRef.current);
+  const messagesRef = useRef<UIMessage[]>(seedMessages);
 
   // Broadcast handles most start/finish updates. Keep polling sparse — every
   // hit runs Supabase getUser via createContext and was rate-limiting Auth (429).
@@ -323,127 +388,129 @@ function ChatEngine({
     setMessages,
     clearError,
   } = useChat({
-      id: channelId,
-      transport,
-      messages: seedRef.current,
-      onData: (chunk) => {
-        const progress = readCadProgress(chunk);
-        if (progress) {
-          cadProgressRef.current.set(progress);
-          // A "saved" event means geometry just landed in the workspace mid-run:
-          // refetch so open viewports render it without waiting for the tool to
-          // finish. refreshProjectData is debounced, so bursts coalesce.
-          if (progress.phase === "saved") refreshProjectData();
+    id: channelId,
+    transport,
+    messages: seedMessages,
+    // Long agent runs stream thousands of chunks; re-render the transcript at most ~12×/s.
+    throttle: 80,
+    onData: (chunk) => {
+      const progress = readCadProgress(chunk);
+      if (progress) {
+        cadProgressRef.current.set(progress);
+        // A "saved" event means geometry just landed in the workspace mid-run:
+        // refetch so open viewports render it without waiting for the tool to
+        // finish. refreshProjectData is debounced, so bursts coalesce.
+        if (progress.phase === "saved") refreshProjectData();
+      }
+      const draft = readCadDraft(chunk);
+      if (draft) cadDraftRef.current.set(draft);
+    },
+    // Manual resume only (see effect below). SDK auto-resume + our send SSE
+    // both attach to the same run and the UI flashes as chunks replay twice.
+    resume: false,
+    onFinish: ({ isError, isAbort }) => {
+      // A lock refusal about to be retried is not the end of the turn.
+      if (lockRetryingRef.current) return;
+      if (isAbort) {
+        // Stop already updated this turn synchronously. A late abort callback
+        // from it must not clear the next turn's stream or stamp it as failed.
+        if (cancelledEpochRef.current === sendEpochRef.current) {
+          cadProgressRef.current.clearAll();
+          cadDraftRef.current.clearAll();
+          setMessages((prev) => markCancelledAssistantMessages(pruneEmptyAssistantMessages(prev)));
         }
-        const draft = readCadDraft(chunk);
-        if (draft) cadDraftRef.current.set(draft);
-      },
-      // Manual resume only (see effect below). SDK auto-resume + our send SSE
-      // both attach to the same run and the UI flashes as chunks replay twice.
-      resume: false,
-      onFinish: ({ isError, isAbort }) => {
-        // A lock refusal about to be retried is not the end of the turn.
-        if (lockRetryingRef.current) return;
-        if (isAbort) {
-          // Stop already updated this turn synchronously. A late abort callback
-          // from it must not clear the next turn's stream or stamp it as failed.
-          if (cancelledEpochRef.current === sendEpochRef.current) {
-            cadProgressRef.current.clearAll();
-            cadDraftRef.current.clearAll();
-            setMessages((prev) =>
-              markCancelledAssistantMessages(pruneEmptyAssistantMessages(prev)),
-            );
-          }
-          return;
-        }
-        cadProgressRef.current.clearAll();
-        cadDraftRef.current.clearAll();
-        if (connectionDropRef.current) {
-          // Stream socket died mid-run. Keep busy state — the activeRun poll
-          // reattaches or reloads once we're back online.
-          if (isError) return;
-          // A resumed stream completed normally: fall through to cleanup.
-          connectionDropRef.current = false;
-        }
-        const epoch = sendEpochRef.current;
+        return;
+      }
+      cadProgressRef.current.clearAll();
+      cadDraftRef.current.clearAll();
+      if (connectionDropRef.current) {
+        // Stream socket died mid-run. Keep busy state — the activeRun poll
+        // reattaches or reloads once we're back online.
+        if (isError) return;
+        // A resumed stream completed normally: fall through to cleanup.
+        connectionDropRef.current = false;
+      }
+      const epoch = sendEpochRef.current;
+      selfRunRef.current = false;
+      setLocalBusy(false);
+      if (epoch === sendEpochRef.current) ownedRunIdRef.current = null;
+      void utils.chat.activeRun.invalidate({ projectId, channelId });
+      const tip = pendingPingTipRef.current;
+      pendingPingTipRef.current = null;
+      if (statusRef.current === "error") {
+        persistFailureStampRef.current(error?.message);
+      } else {
+        setMessages((prev) => {
+          const next = pruneEmptyAssistantMessages(prev);
+          if (!tip || next.some((message) => message.id === tip.id)) return next;
+          return [
+            ...next,
+            {
+              id: tip.id,
+              role: "assistant" as const,
+              parts: [{ type: "text" as const, text: tip.text }],
+            },
+          ];
+        });
+      }
+      refreshProjectData();
+    },
+    onError: (err) => {
+      if (cancelledEpochRef.current === sendEpochRef.current) return;
+      const reason = err instanceof Error ? err.message : String(err);
+      // The SSE connection dropped (laptop sleep, wifi blip, deploy) after the
+      // run was already enqueued (we have its runId). The worker is still
+      // executing it — do NOT cancel the run and do NOT stamp the transcript
+      // as failed. Release stream ownership so the resume effect can reattach
+      // once the activeRun poll comes back.
+      if (isConnectionError(err) && ownedRunIdRef.current) {
+        log.warn("stream connection lost; run continues in background", {
+          reason,
+        });
+        connectionDropRef.current = true;
         selfRunRef.current = false;
-        setLocalBusy(false);
-        if (epoch === sendEpochRef.current) ownedRunIdRef.current = null;
+        resumedRunIdRef.current = null;
+        ownedRunIdRef.current = null;
+        pendingPingTipRef.current = null;
         void utils.chat.activeRun.invalidate({ projectId, channelId });
-        const tip = pendingPingTipRef.current;
-        pendingPingTipRef.current = null;
-        if (statusRef.current === "error") {
-          persistFailureStampRef.current(error?.message);
-        } else {
-          setMessages((prev) => {
-            const next = pruneEmptyAssistantMessages(prev);
-            if (!tip || next.some((message) => message.id === tip.id)) return next;
-            return [
-              ...next,
-              {
-                id: tip.id,
-                role: "assistant" as const,
-                parts: [{ type: "text" as const, text: tip.text }],
-              },
-            ];
-          });
-        }
-        refreshProjectData();
-      },
-      onError: (err) => {
-        if (cancelledEpochRef.current === sendEpochRef.current) return;
-        const reason = err instanceof Error ? err.message : String(err);
-        // The SSE connection dropped (laptop sleep, wifi blip, deploy) after the
-        // run was already enqueued (we have its runId). The worker is still
-        // executing it — do NOT cancel the run and do NOT stamp the transcript
-        // as failed. Release stream ownership so the resume effect can reattach
-        // once the activeRun poll comes back.
-        if (isConnectionError(err) && ownedRunIdRef.current) {
-          log.warn("stream connection lost; run continues in background", { reason });
-          connectionDropRef.current = true;
-          selfRunRef.current = false;
-          resumedRunIdRef.current = null;
-          ownedRunIdRef.current = null;
-          pendingPingTipRef.current = null;
-          void utils.chat.activeRun.invalidate({ projectId, channelId });
+        return;
+      }
+      pendingPingTipRef.current = null;
+      // Another agent run holds the branch. Usually that lock is stale (a run
+      // killed without releasing it), so clear it and resend once. Never
+      // cancel our own run here — a concurrent retry may already own a runId.
+      if (/workspace is locked/i.test(reason)) {
+        const pending = lockRetryRef.current;
+        if (pending && !pending.retried && pending.epoch === sendEpochRef.current) {
+          pending.retried = true;
+          lockRetryingRef.current = true;
+          void cancelMutationRef.current
+            .mutateAsync({ projectId, branchId })
+            .catch(() => undefined)
+            .then(async () => {
+              lockRetryingRef.current = false;
+              if (pending.epoch !== sendEpochRef.current) return;
+              // regenerate() resends the conversation including the user's
+              // turn; sendMessage() would append a duplicate of it.
+              await regenerateRef.current();
+            });
           return;
         }
-        pendingPingTipRef.current = null;
-        // Another agent run holds the branch. Usually that lock is stale (a run
-        // killed without releasing it), so clear it and resend once. Never
-        // cancel our own run here — a concurrent retry may already own a runId.
-        if (/workspace is locked/i.test(reason)) {
-          const pending = lockRetryRef.current;
-          if (pending && !pending.retried && pending.epoch === sendEpochRef.current) {
-            pending.retried = true;
-            lockRetryingRef.current = true;
-            void cancelMutationRef.current
-              .mutateAsync({ projectId, branchId })
-              .catch(() => undefined)
-              .then(async () => {
-                lockRetryingRef.current = false;
-                if (pending.epoch !== sendEpochRef.current) return;
-                // regenerate() resends the conversation including the user's
-                // turn; sendMessage() would append a duplicate of it.
-                await regenerateRef.current();
-              });
-            return;
-          }
-          selfRunRef.current = false;
-          setLocalBusy(false);
-          lockRetryRef.current = null;
-          persistFailureStampRef.current(reason);
-          void utils.chat.activeRun.invalidate({ projectId, channelId });
-          return;
-        }
-        const epoch = sendEpochRef.current;
         selfRunRef.current = false;
         setLocalBusy(false);
+        lockRetryRef.current = null;
         persistFailureStampRef.current(reason);
-        // Only the run that failed — never wipe a newer send's ChatRun.
-        releaseOwnedRun(epoch);
-      },
-    });
+        void utils.chat.activeRun.invalidate({ projectId, channelId });
+        return;
+      }
+      const epoch = sendEpochRef.current;
+      selfRunRef.current = false;
+      setLocalBusy(false);
+      persistFailureStampRef.current(reason);
+      // Only the run that failed — never wipe a newer send's ChatRun.
+      releaseOwnedRun(epoch);
+    },
+  });
 
   onRemoteCancelledRef.current = (runId) => {
     if (ownedRunIdRef.current !== runId) return;
@@ -511,7 +578,10 @@ function ChatEngine({
 
         let server: UIMessage[] = [];
         try {
-          const rows = await utils.client.chat.messages.query({ projectId, channelId });
+          const rows = await utils.client.chat.messages.query({
+            projectId,
+            channelId,
+          });
           server = rowsToMessages(rows as ChatHistoryRow[]);
         } catch (err) {
           log.error("failed to reload chat history after error", { err });
@@ -526,7 +596,13 @@ function ChatEngine({
         if (!preview) writeLocalTranscript(channelId, merged);
         pendingUserTextRef.current = null;
         void persistMutation
-          .mutateAsync({ projectId, branchId, channelId, messages: merged, error: reason })
+          .mutateAsync({
+            projectId,
+            branchId,
+            channelId,
+            messages: merged,
+            error: reason,
+          })
           .catch((err) => log.error("failed to persist chat transcript", { err }));
       })();
     },
@@ -548,7 +624,10 @@ function ChatEngine({
         return prev;
       });
       try {
-        const rows = await utils.client.chat.messages.query({ projectId, channelId });
+        const rows = await utils.client.chat.messages.query({
+          projectId,
+          channelId,
+        });
         if (epoch !== sendEpochRef.current) return;
         const server = rowsToMessages(rows as ChatHistoryRow[]);
         const merged = pruneEmptyAssistantMessages(
@@ -654,7 +733,10 @@ function ChatEngine({
           if (startedRunId) {
             resumedRunIdRef.current = startedRunId;
             ownedRunIdRef.current = startedRunId;
-            acceptedRunRef.current = { runId: startedRunId, epoch: sendEpochRef.current };
+            acceptedRunRef.current = {
+              runId: startedRunId,
+              epoch: sendEpochRef.current,
+            };
           }
           void resumeStream();
         }
@@ -731,6 +813,25 @@ function ChatEngine({
     if (preview || status === "submitted" || status === "streaming") return;
     writeLocalTranscript(channelId, messages);
   }, [channelId, messages, onMessages, status, preview]);
+
+  // Save the latest in-memory transcript when leaving this view. The send path
+  // already backs up optimistic user turns; streaming chunks stay off storage
+  // until a lifecycle boundary or terminal status so long replies do not block
+  // the main thread with full-history parse/stringify work.
+  useEffect(() => {
+    if (preview) return;
+    const checkpoint = () => writeLocalTranscript(channelId, messagesRef.current);
+    const onVisibilityChange = () => {
+      if (document.hidden) checkpoint();
+    };
+    window.addEventListener("pagehide", checkpoint);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("pagehide", checkpoint);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      checkpoint();
+    };
+  }, [channelId, preview]);
 
   // Do NOT persist mid-stream from the client. That path used persistRunMessages
   // upserts and routinely overwrote richer worker checkpoints (tool cards/text)
@@ -1019,11 +1120,13 @@ function ChatEngine({
   );
 
   return (
-    <CopilotContext.Provider value={value}>
-      <CadProgressProvider value={cadProgressRef.current}>
-        <CadDraftProvider value={cadDraftRef.current}>{children}</CadDraftProvider>
-      </CadProgressProvider>
-    </CopilotContext.Provider>
+    <CopilotShellContext.Provider value={shell}>
+      <CopilotContext.Provider value={value}>
+        <CadProgressProvider value={cadProgressRef.current}>
+          <CadDraftProvider value={cadDraftRef.current}>{children}</CadDraftProvider>
+        </CadProgressProvider>
+      </CopilotContext.Provider>
+    </CopilotShellContext.Provider>
   );
 }
 
@@ -1048,6 +1151,7 @@ export function CopilotProvider({
 }) {
   const preview = useWorkspaceUiPreview();
   const utils = trpc.useUtils();
+  useProjectChangeRefresh(projectId, branchId, Boolean(preview));
   const createChannelMutation = trpc.chat.createChannel.useMutation();
   const deleteChannelMutation = trpc.chat.deleteChannel.useMutation();
   const createCategoryMutation = trpc.chat.createCategory.useMutation();
@@ -1058,31 +1162,31 @@ export function CopilotProvider({
   const [categories, setCategories] = useState(initialCategories);
   const [activeChannelId, setActiveChannelId] = useState(defaultChannelId);
 
-  const cacheRef = useRef(
-    new Map<string, UIMessage[]>([
-      [
-        defaultChannelId,
-        preview
-          ? initialMessages
-          : seedTranscriptWithLocalBackup(
-              defaultChannelId,
-              pruneEmptyAssistantMessages(initialMessages),
-            ),
-      ],
-    ]),
+  const [cache] = useState(
+    () =>
+      new Map<string, UIMessage[]>([
+        [
+          defaultChannelId,
+          preview
+            ? initialMessages
+            : seedTranscriptWithLocalBackup(
+                defaultChannelId,
+                pruneEmptyAssistantMessages(initialMessages),
+              ),
+        ],
+      ]),
   );
   const onMessages = useCallback(
     (channelId: string, messages: UIMessage[]) => {
-      cacheRef.current.set(channelId, messages);
-      if (!preview) writeLocalTranscript(channelId, messages);
+      cache.set(channelId, messages);
     },
-    [preview],
+    [cache],
   );
 
   const switchChannel = useCallback(
     (channelId: string) => {
       if (channelId === activeChannelId) return;
-      if (cacheRef.current.has(channelId)) {
+      if (cache.has(channelId)) {
         setActiveChannelId(channelId);
         return;
       }
@@ -1090,7 +1194,7 @@ export function CopilotProvider({
         .query({ projectId, channelId })
         .then((rows) => {
           const fromServer = pruneEmptyAssistantMessages(rowsToMessages(rows as ChatHistoryRow[]));
-          cacheRef.current.set(
+          cache.set(
             channelId,
             preview ? fromServer : seedTranscriptWithLocalBackup(channelId, fromServer),
           );
@@ -1100,7 +1204,7 @@ export function CopilotProvider({
         // an empty transcript is indistinguishable from lost history.
         .catch((err) => log.error("failed to load channel history", { err }));
     },
-    [activeChannelId, projectId, utils, preview],
+    [activeChannelId, projectId, utils, preview, cache],
   );
 
   const createChannel = useCallback(
@@ -1111,21 +1215,21 @@ export function CopilotProvider({
         name,
         categoryId,
       });
-      cacheRef.current.set(channel.id, []);
+      cache.set(channel.id, []);
       setChannels((prev) => [...prev, channel]);
       setActiveChannelId(channel.id);
     },
-    [createChannelMutation, projectId, branchId],
+    [createChannelMutation, projectId, branchId, cache],
   );
 
   const deleteChannel = useCallback(
     async (channelId: string) => {
       await deleteChannelMutation.mutateAsync({ projectId, channelId });
-      cacheRef.current.delete(channelId);
+      cache.delete(channelId);
       setChannels((prev) => prev.filter((c) => c.id !== channelId));
       if (channelId === activeChannelId) setActiveChannelId(defaultChannelId);
     },
-    [deleteChannelMutation, projectId, activeChannelId, defaultChannelId],
+    [deleteChannelMutation, projectId, activeChannelId, defaultChannelId, cache],
   );
 
   const createCategory = useCallback(
@@ -1191,7 +1295,7 @@ export function CopilotProvider({
       branchId={branchId}
       channelId={activeChannelId}
       kickoffEnabled={activeChannelId === defaultChannelId}
-      initialMessages={cacheRef.current.get(activeChannelId) ?? []}
+      initialMessages={cache.get(activeChannelId) ?? []}
       onMessages={onMessages}
       shell={shell}
     >

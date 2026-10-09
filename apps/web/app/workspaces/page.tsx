@@ -55,16 +55,18 @@ export default async function WorkspacesPage({
       user={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
     >
       <div className="mb-8">
-        <p className="text-muted-foreground font-mono text-[11px] tracking-[0.14em] uppercase">
+        <p className="text-muted-foreground font-mono text-[11px] tracking-[0.16em] uppercase">
           Manage
         </p>
-        <h1 className="mt-1 font-mono text-[28px] font-medium tracking-[-0.04em]">Workspaces</h1>
-        <p className="text-muted-foreground mt-1 text-[13px]">
-          Create or switch workspaces. Day-to-day work lives inside a single workspace home.
+        <h1 className="mt-2 text-[28px] leading-tight font-medium tracking-[-0.03em]">
+          Workspaces
+        </h1>
+        <p className="text-muted-foreground mt-1.5 max-w-lg text-[14px]">
+          Create or switch. Day-to-day work lives inside one workspace.
         </p>
       </div>
 
-      <section className="mb-10 grid gap-2 sm:grid-cols-2">
+      <section className="mb-10 grid gap-3 sm:grid-cols-2">
         {workspaces.map((workspace) => (
           <Link key={workspace.id} href={`/w/${workspace.slug}`} className="block">
             <Card className="flex-row gap-0 py-0 transition-colors hover:ring-foreground/30">
@@ -76,10 +78,10 @@ export default async function WorkspacesPage({
               />
               <div className="flex min-w-0 flex-1 items-center gap-3 px-3 py-3">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-mono text-[13px] font-medium tracking-[-0.02em]">
+                  <p className="truncate text-[13px] font-medium tracking-[-0.02em]">
                     {workspace.name}
                   </p>
-                  <p className="text-muted-foreground mt-0.5 font-mono text-[10px] tracking-[0.06em] uppercase">
+                  <p className="text-muted-foreground mt-0.5 text-[12px]">
                     {workspace._count.projects} project
                     {workspace._count.projects === 1 ? "" : "s"}
                     {" · "}

@@ -121,7 +121,7 @@ print(json.dumps({"executable":os.path.realpath(sys.executable),"roots":sorted(r
 
 // The driver sets process/file limits before importing any project code. The OS sandbox,
 // not Python imports or uv's virtual environment, enforces filesystem and network isolation.
-const DRIVER = `import json, sys, os, runpy, resource, math
+const DRIVER = `import json, sys, os, runpy, resource, math, struct
 resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
 resource.setrlimit(resource.RLIMIT_FSIZE, (${MAX_FILE_BYTES}, ${MAX_FILE_BYTES}))
 resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
@@ -131,7 +131,7 @@ project = os.path.join(os.getcwd(), "project")
 sys.path.insert(0, project)
 os.chdir(project)
 print("BUILD123D_PROGRESS: loading build123d", flush=True)
-from build123d import Shape, Builder, export_stl, export_step
+from build123d import Shape, Builder, Color, export_stl, export_step
 print("BUILD123D_PROGRESS: executing model", flush=True)
 module = runpy.run_module(sys.argv[1][:-3].replace("/", "."), run_name="__main__")
 shape = module.get("result")
@@ -154,8 +154,77 @@ if not all(math.isfinite(v) for v in [size.X,size.Y,size.Z,center.X,center.Y,cen
     raise ValueError("BUILD123D_ERROR: result has nonfinite bounds")
 output = os.path.join(os.path.dirname(project), "output")
 print("BUILD123D_PROGRESS: exporting mesh", flush=True)
-if not export_stl(shape, os.path.join(output, "model.stl"), tolerance=0.05, angular_tolerance=0.1):
-    raise ValueError("BUILD123D_ERROR: STL export failed")
+
+def shape_label(item, fallback=""):
+    label = getattr(item, "label", None)
+    if isinstance(label, str):
+        label = " ".join(label.split())
+    return label or fallback
+
+def shape_rgba(item, inherited=0):
+    value = getattr(item, "color", None)
+    if value is None:
+        return inherited
+    try:
+        if not isinstance(value, Color):
+            value = Color(*value) if isinstance(value, (tuple, list)) else Color(value)
+            item.color = value
+        r, g, b, a = value.to_tuple()
+    except Exception:
+        try:
+            item.color = None
+        except Exception:
+            pass
+        return inherited
+    channels = [max(0, min(255, round(float(v) * 255))) for v in (r, g, b, a)]
+    if not all(math.isfinite(v) for v in channels) or channels[3] == 0:
+        return inherited
+    return (channels[0] << 24) | (channels[1] << 16) | (channels[2] << 8) | channels[3]
+
+def labeled_solids(item, inherited="", inherited_rgba=0):
+    name = shape_label(item)
+    rgba = shape_rgba(item, inherited_rgba)
+    if inherited.startswith("foundry:") and name and name != inherited:
+        combined = inherited + "|" + name
+    else:
+        combined = name or inherited
+    children = list(getattr(item, "children", None) or [])
+    if children:
+        found = []
+        for child in children:
+            found.extend(labeled_solids(child, combined, rgba))
+        if found:
+            return found
+    item_solids = item.solids() if hasattr(item, "solids") else []
+    if not item_solids:
+        return []
+    if len(item_solids) == 1:
+        return [(combined or "Body", item_solids[0], shape_rgba(item_solids[0], rgba))]
+    prefix = combined or "Body"
+    return [(f"{prefix} {i+1}", solid, shape_rgba(solid, rgba)) for i, solid in enumerate(item_solids)]
+
+def sanitize_label(label):
+    cleaned = "".join(ch if 32 <= ord(ch) <= 126 else " " for ch in str(label))
+    return " ".join(cleaned.split())[:200] or "Body"
+
+packed = []
+for raw_label, solid, rgba in labeled_solids(shape):
+    tmp = os.path.join(output, f"_solid_{len(packed)}.stl")
+    if not export_stl(solid, tmp, tolerance=0.05, angular_tolerance=0.1):
+        raise ValueError("BUILD123D_ERROR: STL export failed")
+    with open(tmp, "rb") as fh:
+        packed.append((sanitize_label(raw_label), fh.read(), rgba))
+    os.remove(tmp)
+if not packed:
+    raise ValueError("BUILD123D_ERROR: result must contain nonempty solid geometry, not a mesh, wire, or empty compound")
+chunks = [b"FDRYMSH2" + struct.pack("<I", len(packed))]
+for name, data, rgba in packed:
+    encoded = name.encode("utf-8")
+    chunks.append(struct.pack("<HII", len(encoded), len(data), rgba))
+    chunks.append(encoded)
+    chunks.append(data)
+with open(os.path.join(output, "model.stl"), "wb") as f:
+    f.write(b"".join(chunks))
 if not export_step(shape, os.path.join(output, "model.step")):
     raise ValueError("BUILD123D_ERROR: STEP export failed")
 with open(os.path.join(output, "meta.json"), "w") as f:

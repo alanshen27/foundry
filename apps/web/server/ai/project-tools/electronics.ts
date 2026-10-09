@@ -14,11 +14,22 @@ import {
 import {
   emptyPcbSet,
   FOOTPRINT_IDS,
+  INSTALLED_FOOTPRINT_ID,
+  MAX_INSTALLED_FOOTPRINTS,
+  normalizeFootprintLibrary,
   normalizePcbDoc,
   normalizePcbSet,
   unsupportedFootprintIds,
+  type PcbFootprintDef,
 } from "@/lib/pcb/doc";
+import {
+  installedFootprintId,
+  KicadFootprintError,
+  parseKicadFootprint,
+} from "@/lib/pcb/kicad-footprint";
+import { FootprintFetchError, fetchFootprintSource, kicadLibraryUrl } from "../../footprint-fetch";
 import { buildRatsnest } from "@/lib/pcb/netlist";
+import { pcbMechanicalProfile } from "@/lib/pcb/mechanical";
 import { runDrc } from "@/lib/pcb/drc";
 import { buildModelIndex } from "@/lib/sim/models";
 import { validatePartSpec, type PartSpec } from "@/lib/sim/part-spec";
@@ -168,7 +179,9 @@ const pcbSchema = z.object({
         id: z.string().min(1).max(60),
         libraryId: z
           .string()
-          .describe(`Footprint library id. Supported: ${FOOTPRINT_IDS.join(", ")}`),
+          .describe(
+            `Footprint library id: a built-in (${FOOTPRINT_IDS.join(", ")}) or one installed on this board with install_pcb_footprint`,
+          ),
         refDes: z.string().min(1).max(16).describe("Reference designator, e.g. R1, U1, J1"),
         value: z.string().max(64).optional().describe("e.g. 10k, 100nF, ESP32"),
         xMm: z.number().describe("Centre X from top-left of Edge.Cuts, mm"),
@@ -182,6 +195,14 @@ const pcbSchema = z.object({
           .optional()
           .describe(
             "Known package height above the board in mm. Omit when unknown; do not estimate.",
+          ),
+        standoffMm: z
+          .number()
+          .positive()
+          .max(100)
+          .optional()
+          .describe(
+            "Gap in mm between the board surface and the bottom of the body: header pins, spacers, or a module such as an OLED/display on headers. Raises the CAD body so it can sit flush in an enclosure opening. Omit for parts soldered flat.",
           ),
         partId: z
           .string()
@@ -514,7 +535,7 @@ export function buildElectronicsTools(ctx: ToolContext, _kit: ToolKit) {
     },
 
     save_pcb: {
-      description: `Replace the PCB board layout (Engineer > PCB view): rectangular Edge.Cuts outline in millimetres, footprint placement, and optionally copper routing (tracks + vias). Origin (0,0) is the top-left of the board; +X right, +Y down. Keep footprints inside the outline with ~2mm margin; put mounting holes near corners; connectors (USB, headers) on edges. Map schematic parts to footprints: resistors→R_0603/R_0805, caps→C_0603, LEDs→LED_0805, MCUs/ICs→SOIC-8 or QFN-16-3x3, pin headers→PinHeader_1x04, USB→USB_C_Receptacle, holes→MountingHole_3.2mm. Set partId (and pinMap where pin names differ) on every footprint that comes from the schematic: that derives the netlist and draws the ratsnest, and the result tells you which parts are still unplaced or unmapped. Place connected parts near each other so airwires stay short and uncrossed. ONLY these libraryIds: ${FOOTPRINT_IDS.join(", ")}.
+      description: `Replace the PCB board layout (Engineer > PCB view): rectangular Edge.Cuts outline in millimetres, footprint placement, and optionally copper routing (tracks + vias). Origin (0,0) is the top-left of the board; +X right, +Y down. Keep footprints inside the outline with ~2mm margin; put mounting holes near corners; connectors (USB, headers) on edges. Map schematic parts to footprints: resistors→R_0603/R_0805, caps→C_0603, LEDs→LED_0805, MCUs/ICs→SOIC-8 or QFN-16-3x3, pin headers→PinHeader_1x04, USB→USB_C_Receptacle, holes→MountingHole_3.2mm. Set partId (and pinMap where pin names differ) on every footprint that comes from the schematic: that derives the netlist and draws the ratsnest, and the result tells you which parts are still unplaced or unmapped. Place connected parts near each other so airwires stay short and uncrossed. Built-in libraryIds: ${FOOTPRINT_IDS.join(", ")}. For any other real part (display modules, tactile switches, sensors, connectors) call install_pcb_footprint first instead of substituting a built-in with the wrong shape.
 
 Routing: place first, render, then route. Each track's endpoints must sit exactly on pad centres — get_project_state lists every pad's board position — because connection is decided geometrically, not by the net field. Front-side SMD pads exist only on F.Cu, so a B.Cu track cannot reach one without a via; through-hole pads (pin headers, USB-C tabs) reach both layers. Route on one layer where you can and use B.Cu with vias at both ends only to cross. The result reports routed/total connections and every DRC violation, so re-check it after each call.
 
@@ -524,12 +545,6 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
       inputSchema: pcbSchema,
       execute: async (input: PcbInput) =>
         guard(ctx, "electronics.edit", async (workspaceId) => {
-          const unknown = unsupportedFootprintIds(input.footprints);
-          if (unknown.length > 0) {
-            return {
-              error: `Unknown footprint libraryIds: ${unknown.join(", ")}. Use only: ${FOOTPRINT_IDS.join(", ")}.`,
-            };
-          }
           // Existing copper is kept when the model omits tracks/vias, so a
           // placement-only edit does not silently discard a routed board.
           const existing = await prisma.designDoc.findUnique({
@@ -538,9 +553,19 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
           const set = normalizePcbSet(existing?.data ?? null);
           const targetId = input.boardId ?? set.activeBoardId ?? set.boards[0]!.id!;
           const previous = set.boards.find((b) => b.id === targetId) ?? null;
+          const unknown = unsupportedFootprintIds(input.footprints, previous?.library);
+          if (unknown.length > 0) {
+            const installed = previous?.library?.map((f) => f.id) ?? [];
+            return {
+              error: `Unknown footprint libraryIds: ${unknown.join(", ")}. Use a built-in (${FOOTPRINT_IDS.join(", ")})${
+                installed.length ? `, one installed on this board (${installed.join(", ")})` : ""
+              }, or install the part first with install_pcb_footprint.`,
+            };
+          }
 
           const data = normalizePcbDoc({
             version: 1,
+            library: previous?.library,
             id: targetId,
             name: input.boardName ?? previous?.name,
             groupId: input.groupId ?? previous?.groupId,
@@ -552,6 +577,7 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
               return {
                 ...footprint,
                 bodyHeightMm: footprint.bodyHeightMm ?? prior?.bodyHeightMm,
+                standoffMm: footprint.standoffMm ?? prior?.standoffMm,
                 pinMap:
                   footprint.pinMap ??
                   (prior?.partId === footprint.partId ? prior?.pinMap : undefined),
@@ -620,6 +646,19 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
             footprints: data.footprints.length,
             nextStep:
               "Call sync_pcb_to_cad to update all board references in CAD, then inspect the assembly.",
+            // Board-frame Z of every known package envelope (board bottom = 0),
+            // so lid buttons and windows can be sized to real part tops.
+            envelopes: pcbMechanicalProfile(data)
+              .components.filter((c) => c.zMm !== undefined && c.bodyHeightMm !== undefined)
+              .slice(0, 40)
+              .map((c) => ({
+                refDes: c.refDes,
+                libraryId: c.libraryId,
+                centerMm: [Number(c.xMm.toFixed(2)), Number(c.yMm.toFixed(2))],
+                bottomZMm: Number(c.zMm!.toFixed(2)),
+                topZMm: Number((c.zMm! + c.bodyHeightMm!).toFixed(2)),
+                sizeMm: [Number(c.widthMm.toFixed(2)), Number(c.depthMm.toFixed(2))],
+              })),
             tracks: data.tracks.length,
             vias: data.vias.length,
             zones: data.zones.length,
@@ -649,6 +688,259 @@ Multiple boards: when get_project_state reports schematicBoards.regions, each re
                     "Fix the DRC errors above before calling this done. A short means copper joins two different nets; unrouted means connections remain; off-board means copper left the outline.",
                 }
               : {}),
+          };
+        }),
+    },
+
+    install_pcb_footprint: {
+      description: `Install a real component footprint onto a PCB board so save_pcb can place it. Use this whenever the built-ins do not match the physical part: OLED/LCD display modules, tactile switches, sensors, buttons, connectors.
+
+Sources, in order of preference:
+1. kicadLibrary + kicadFootprint: the official KiCad library (gitlab.com/kicad/libraries/kicad-footprints), e.g. "Button_Switch_THT" + "SW_PUSH_6mm", "Button_Switch_SMD" + "SW_SPST_TL3342", "Connector_PinHeader_2.54mm" + "PinHeader_1x04_P2.54mm_Vertical". Use web search to find the exact library and file name.
+2. url: a .kicad_mod file on raw.githubusercontent.com or github.com (e.g. a module vendor's KiCad library).
+3. datasheet: pads and body outline you read from the manufacturer's mechanical drawing, with its URL. Use for modules with no KiCad file, e.g. a 0.96" SSD1306 I2C OLED breakout (≈27 × 27 mm board, 4 header pins on one edge).
+
+KiCad files have no body height, so always pass seatedHeightMm from the datasheet: for a module, the height of the module itself above its own mounting plane; for a tactile switch, the actuator top. Mount height on headers or spacers is a per-placement standoffMm in save_pcb, not part of the footprint. For every display module also pass glass: the glass panel outline, its thickness (the top of seatedHeightMm), and its offset from the body centre. The carrier board is wider than the glass and must sit under the lid frame; only the glass goes through the window, so size the window from the glass, not the body. The installed footprint is UNVERIFIED until checked against the datasheet.`,
+      inputSchema: z.object({
+        boardId: z
+          .string()
+          .max(60)
+          .optional()
+          .describe("Board to install onto; omit for the active board."),
+        kicadLibrary: z
+          .string()
+          .max(128)
+          .optional()
+          .describe('Official KiCad library, e.g. "Button_Switch_THT"'),
+        kicadFootprint: z
+          .string()
+          .max(128)
+          .optional()
+          .describe('Footprint name in that library, e.g. "SW_PUSH_6mm"'),
+        url: z.string().url().max(500).optional().describe(".kicad_mod file URL"),
+        datasheet: z
+          .object({
+            url: z
+              .string()
+              .url()
+              .max(500)
+              .describe("Datasheet or mechanical drawing the dimensions come from"),
+            name: z.string().min(1).max(80),
+            bodyWMm: z.number().positive().max(300).describe("Body outline X size, mm"),
+            bodyHMm: z.number().positive().max(300).describe("Body outline Y size, mm"),
+            pads: z
+              .array(
+                z.object({
+                  pin: z.string().max(16).describe('Pad name; "" for a mechanical hole'),
+                  xMm: z
+                    .number()
+                    .min(-150)
+                    .max(150)
+                    .describe("Offset from the body centre, +Y down"),
+                  yMm: z.number().min(-150).max(150),
+                  wMm: z.number().positive().max(50),
+                  hMm: z.number().positive().max(50),
+                  shape: z.enum(["rect", "oval"]).default("oval"),
+                  drillMm: z.number().positive().max(20).optional().describe("Through-hole drill"),
+                  plated: z.boolean().optional(),
+                }),
+              )
+              .min(1)
+              .max(300),
+          })
+          .optional(),
+        libraryId: z
+          .string()
+          .regex(INSTALLED_FOOTPRINT_ID)
+          .optional()
+          .describe("Id to install under; defaults to the footprint's own name"),
+        seatedHeightMm: z
+          .number()
+          .min(0)
+          .max(100)
+          .optional()
+          .describe("Datasheet body height above its mounting plane, mm"),
+        glass: z
+          .object({
+            wMm: z.number().positive().max(300).describe("Glass X size, mm"),
+            hMm: z.number().positive().max(300).describe("Glass Y size, mm"),
+            heightMm: z
+              .number()
+              .positive()
+              .max(20)
+              .describe("Glass thickness: the top part of seatedHeightMm"),
+            xMm: z.number().min(-150).max(150).default(0).describe("Offset from body centre"),
+            yMm: z
+              .number()
+              .min(-150)
+              .max(150)
+              .default(0)
+              .describe("Offset from body centre, +Y down"),
+          })
+          .optional()
+          .describe("Display glass that shows through a lid window. Requires seatedHeightMm."),
+        refDesPrefix: z
+          .string()
+          .regex(/^[A-Z]{1,4}$/)
+          .optional()
+          .describe('New placement prefix, e.g. "SW", "DS", "J"'),
+        note: z.string().max(300).optional().describe("Part number and what was assumed"),
+      }),
+      execute: async (input: {
+        boardId?: string;
+        kicadLibrary?: string;
+        kicadFootprint?: string;
+        url?: string;
+        datasheet?: {
+          url: string;
+          name: string;
+          bodyWMm: number;
+          bodyHMm: number;
+          pads: {
+            pin: string;
+            xMm: number;
+            yMm: number;
+            wMm: number;
+            hMm: number;
+            shape: "rect" | "oval";
+            drillMm?: number;
+            plated?: boolean;
+          }[];
+        };
+        libraryId?: string;
+        seatedHeightMm?: number;
+        glass?: { wMm: number; hMm: number; heightMm: number; xMm: number; yMm: number };
+        refDesPrefix?: string;
+        note?: string;
+      }) =>
+        guard(ctx, "electronics.edit", async (workspaceId) => {
+          const sources = [
+            input.kicadLibrary || input.kicadFootprint,
+            input.url,
+            input.datasheet,
+          ].filter(Boolean).length;
+          if (sources !== 1)
+            return {
+              error: "Give exactly one source: kicadLibrary + kicadFootprint, url, or datasheet.",
+            };
+
+          const fetchedAt = new Date().toISOString();
+          let def: PcbFootprintDef;
+          let notes: string[] = [];
+          try {
+            if (input.datasheet) {
+              const d = input.datasheet;
+              def = {
+                id: installedFootprintId(d.name),
+                name: d.name,
+                category: "Installed",
+                keywords: d.name.toLowerCase(),
+                bodyWMm: d.bodyWMm,
+                bodyHMm: d.bodyHMm,
+                pads: d.pads.map((pad) => ({
+                  ...pad,
+                  plated: pad.plated ?? (pad.drillMm !== undefined && pad.pin !== ""),
+                })),
+                source: { kind: "datasheet", url: d.url, fetchedAt },
+              };
+            } else {
+              if (input.kicadLibrary && !input.kicadFootprint)
+                return { error: "kicadFootprint is required with kicadLibrary." };
+              const target =
+                input.url ?? kicadLibraryUrl(input.kicadLibrary ?? "", input.kicadFootprint ?? "");
+              const fetched = await fetchFootprintSource(target);
+              ({ def, notes } = parseKicadFootprint(fetched.text, { url: fetched.url, fetchedAt }));
+            }
+          } catch (err) {
+            if (err instanceof FootprintFetchError || err instanceof KicadFootprintError)
+              return { error: `Could not install footprint: ${err.message}` };
+            throw err;
+          }
+          if (input.libraryId) def.id = installedFootprintId(input.libraryId);
+          if (input.seatedHeightMm !== undefined) def.seatedHeightMm = input.seatedHeightMm;
+          if (input.glass) def.glass = input.glass;
+          if (input.refDesPrefix) def.refDesPrefix = input.refDesPrefix;
+          if (input.note) def.source = { ...def.source!, note: input.note };
+
+          const existing = await prisma.designDoc.findUnique({
+            where: { projectId_branchId_kind: { projectId, branchId, kind: "PCB" } },
+          });
+          const set = normalizePcbSet(existing?.data ?? null);
+          const targetId = input.boardId ?? set.activeBoardId ?? set.boards[0]!.id!;
+          const board = set.boards.find((b) => b.id === targetId);
+          if (!board) return { error: `No board ${targetId}. Create it with save_pcb first.` };
+          const replaced = board.library?.some((f) => f.id === def.id) ?? false;
+          const library = normalizeFootprintLibrary([
+            ...(board.library ?? []).filter((f) => f.id !== def.id),
+            def,
+          ]);
+          const installed = library?.find((f) => f.id === def.id);
+          if (!installed)
+            return {
+              error: `The footprint could not be installed${
+                (board.library?.length ?? 0) >= MAX_INSTALLED_FOOTPRINTS
+                  ? `: the board already has ${MAX_INSTALLED_FOOTPRINTS} installed footprints`
+                  : ": it has no usable pads or an invalid source URL"
+              }.`,
+            };
+          const nextBoard = normalizePcbDoc({ ...board, library });
+          const nextSet = {
+            ...set,
+            boards: set.boards.map((b) => (b.id === targetId ? nextBoard : b)),
+          };
+          await writeDesignWithCollaboration({
+            projectId,
+            branchId,
+            userId: ctx.userId,
+            runId: ctx.runId,
+            kind: "PCB",
+            data: nextSet,
+            baseData: existing?.data ?? null,
+          });
+          await recordAudit({
+            type: "DesignDocUpdated",
+            workspaceId,
+            projectId,
+            branchId,
+            actorId: ctx.userId,
+            actorType: "AGENT",
+            payload: {
+              kind: "PCB",
+              boardId: targetId,
+              installedFootprint: installed.id,
+              source: installed.source,
+              replaced,
+            },
+          });
+          await touchStage(ctx, workspaceId, "ENGINEER");
+
+          return {
+            ok: true,
+            status: "UNVERIFIED",
+            boardId: targetId,
+            libraryId: installed.id,
+            name: installed.name,
+            replaced,
+            bodyMm: { w: installed.bodyWMm, h: installed.bodyHMm },
+            seatedHeightMm: installed.seatedHeightMm ?? null,
+            glass: installed.glass ?? null,
+            ...(input.glass && !installed.glass
+              ? {
+                  glassRejected:
+                    "Glass must fit inside the body outline and be thinner than seatedHeightMm.",
+                }
+              : {}),
+            pads: installed.pads.map((pad) => ({
+              pin: pad.pin,
+              xMm: pad.xMm,
+              yMm: pad.yMm,
+              ...(pad.drillMm ? { drillMm: pad.drillMm } : {}),
+            })),
+            source: installed.source,
+            notes,
+            nextStep: `Place it with save_pcb using libraryId "${installed.id}"; set bodyHeightMm${
+              installed.seatedHeightMm === undefined ? " (unknown: take it from the datasheet)" : ""
+            } and standoffMm (header or spacer height) per placement, then sync_pcb_to_cad.`,
           };
         }),
     },

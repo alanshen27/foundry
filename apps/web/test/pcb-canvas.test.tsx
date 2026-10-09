@@ -47,7 +47,10 @@ const savedBoard = {
   ],
 };
 
-type SaveInput = { kind: string; data: { boards: { footprints: { refDes: string }[] }[] } };
+type SaveInput = {
+  kind: string;
+  data: { boards: { footprints: { refDes: string; standoffMm?: number }[] }[] };
+};
 const saves = () =>
   mock.mutationCalls.filter((c) => c.path === "design.save").map((c) => c.input as SaveInput);
 
@@ -57,6 +60,8 @@ beforeEach(() => {
     (input as { kind: string }).kind === "PCB" ? { data: { data: savedBoard } } : { data: null },
   );
   mock.query("project.viewer", { data: { id: "user1", name: "Builder" } });
+  // No collaboration server: single-player autosave.
+  mock.query("collaboration.designSession", { data: null });
   // jsdom has no layout, so give the canvas a size to fit the board into.
   Element.prototype.getBoundingClientRect = function () {
     return {
@@ -83,6 +88,16 @@ describe("PcbCanvas", () => {
     const canvas = screen.getByLabelText("PCB board canvas");
     expect(within(canvas).getAllByText("R1").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("Active board")).toHaveDisplayValue("Main board");
+  });
+
+  it("shows the saved board read-only while the live room is still connecting", async () => {
+    mock.query("collaboration.designSession", { data: undefined });
+    renderCanvas();
+    const canvas = screen.getByLabelText("PCB board canvas");
+    expect(within(canvas).getAllByText("R1").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("Search footprints")).toBeDisabled();
+    await new Promise((r) => setTimeout(r, 1_000));
+    expect(saves()).toEqual([]);
   });
 
   it("places a footprint from the library, selects it, and saves the board", async () => {
@@ -148,6 +163,25 @@ describe("PcbCanvas", () => {
             .at(-1)
             ?.data.boards[0]!.footprints.map((f) => f.refDes),
         ).toContain("U7"),
+      { timeout: 3_000 },
+    );
+  });
+
+  it("raises the selected footprint with a standoff", async () => {
+    const user = userEvent.setup();
+    renderCanvas();
+    const entry = screen
+      .getAllByRole("button")
+      .find((b) => / mm$/.test(b.textContent?.trim() ?? ""))!;
+    await user.click(entry);
+    await user.type(await screen.findByLabelText("Standoff above board in millimetres"), "8.5");
+    await waitFor(
+      () =>
+        expect(
+          saves()
+            .at(-1)
+            ?.data.boards[0]!.footprints.map((f) => f.standoffMm),
+        ).toContain(8.5),
       { timeout: 3_000 },
     );
   });

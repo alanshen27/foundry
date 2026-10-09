@@ -14,6 +14,7 @@ import {
   withAiEditLockGuard,
   withAiRunEditLockGuard,
 } from "./ai-edit-lock";
+import { notifyProjectChanged } from "./project-change";
 
 type Tx = Prisma.TransactionClient;
 type Scope = { projectId: string; branchId: string; userId: string; runId?: string };
@@ -68,6 +69,7 @@ export async function writeDesignWithCollaboration(
     return merged;
   });
   await publishCollaborationUpdate(name);
+  notifyProjectChanged(input.projectId, input.branchId, { kind: "design", design: input.kind });
   return result;
 }
 
@@ -117,6 +119,7 @@ export async function writeCodeWithCollaboration(
     input.human,
   );
   if (room) await publishCollaborationUpdate(room);
+  notifyProjectChanged(input.projectId, input.branchId, { kind: "code" });
   return result;
 }
 
@@ -134,4 +137,5 @@ export async function deleteCodeWithCollaboration(
     input.human,
   );
   await publishCollaborationUpdate(name);
+  notifyProjectChanged(input.projectId, input.branchId, { kind: "code" });
 }

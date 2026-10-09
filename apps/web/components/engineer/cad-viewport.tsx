@@ -28,9 +28,14 @@ import {
   type NavTool,
 } from "@/lib/cad/viewport-input";
 import {
+  applyCadHighlight,
+  assemblyComponentId,
   cadModelTransform,
+  cadPickableMeshes,
   cadSelectionTarget,
   cameraOrientation,
+  clearCadHighlight,
+  collectCadHighlightMeshes,
   disposeCadObject,
   frameCadModel,
   meshLabel,
@@ -255,7 +260,9 @@ type ViewportRuntime = {
   applyView: (view: CadView) => void;
   resize: () => void;
   edges: (visible: boolean) => void;
-  select: (mesh: THREE.Object3D | null) => void;
+  select: (mesh: THREE.Object3D | THREE.Object3D[] | null) => void;
+  selectKey: (key: string | null) => void;
+  hover: (mesh: THREE.Mesh | null) => void;
 };
 
 export function CadViewport({
@@ -273,8 +280,12 @@ export function CadViewport({
   fitPadding = FIT_PADDING,
   scenery = true,
   debounceMs = 350,
+  selectedKey = null,
+  selectionHints = [],
+  pickOnClick = false,
   onReady,
   onError,
+  onSelectObject,
   onCameraOrientationChange,
 }: {
   engine?: "build123d" | "zoo";
@@ -295,8 +306,15 @@ export function CadViewport({
   entryPath?: string;
   /** Stable selected-part identity, independent of edits to that part's source. */
   modelKey?: string;
+  /** Highlight every mesh that belongs to this manufacturing-part id. */
+  selectedKey?: string | null;
+  /** Extra names used to highlight older unlabeled assembly meshes. */
+  selectionHints?: string[];
+  /** Click-without-drag picks a body even while the orbit tool is active. */
+  pickOnClick?: boolean;
   onReady?: () => void;
   onError?: (message: string | null) => void;
+  onSelectObject?: (key: string | null) => void;
   onCameraOrientationChange?: (orientation: CameraOrientation) => void;
 }) {
   const { theme } = useTheme();
@@ -304,10 +322,14 @@ export function CadViewport({
   const hostRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<ViewportRuntime | null>(null);
   const sceneCache = useRef(new CadSceneCache<THREE.Group>(disposeCadObject));
-  const callbacks = useRef({ onReady, onError, onCameraOrientationChange });
-  callbacks.current = { onReady, onError, onCameraOrientationChange };
-  const settings = useRef({ view, fitPadding, scenery, headless });
-  settings.current = { view, fitPadding, scenery, headless };
+  const callbacks = useRef({ onReady, onError, onSelectObject, onCameraOrientationChange });
+  callbacks.current = { onReady, onError, onSelectObject, onCameraOrientationChange };
+  const settings = useRef({ view, fitPadding, scenery, headless, pickOnClick });
+  settings.current = { view, fitPadding, scenery, headless, pickOnClick };
+  const selectedKeyRef = useRef(selectedKey);
+  selectedKeyRef.current = selectedKey;
+  const selectionHintsRef = useRef(selectionHints);
+  selectionHintsRef.current = selectionHints;
   const [mounted, setMounted] = useState(false);
   const [status, setStatus] = useState<"loading" | "building" | "running" | "error">("loading");
   const [loadSource, setLoadSource] = useState<"cache" | "asset" | "engine" | "preview" | null>(
@@ -329,6 +351,7 @@ export function CadViewport({
   const navRef = useRef(navTool);
   navRef.current = navTool;
   const [hover, setHover] = useState<{ name: string; x: number; y: number } | null>(null);
+  const hoverTipRef = useRef<HTMLDivElement | null>(null);
   const [retry, setRetry] = useState(0);
   const requestedMesh = useRef(false);
 
@@ -398,8 +421,43 @@ export function CadViewport({
     const axisHelper = new THREE.AxesHelper(1);
     axisHelper.visible = settings.current.scenery;
     scene.add(axisHelper);
-    let selected: THREE.Object3D | null = null;
-    let selectionBox: THREE.BoxHelper | null = null;
+    let selected: THREE.Object3D[] = [];
+    let hovered: THREE.Mesh[] = [];
+    let hoveredKey: string | null = null;
+    const meshesMatching = (root: THREE.Object3D, key: string | null, extra: string[] = []) => {
+      const hints = [key, ...extra, ...selectionHintsRef.current]
+        .filter((value): value is string => Boolean(value))
+        .map((value) => value.toLowerCase());
+      if (!hints.length) return [];
+      const matches: THREE.Object3D[] = [];
+      root.traverse((object) => {
+        if (
+          !(object instanceof THREE.Mesh) ||
+          object.userData.cadEdges ||
+          object.userData.cadHighlightOverlay
+        )
+          return;
+        const identity = assemblyComponentId(object);
+        const label =
+          `${typeof object.userData.assemblyLabel === "string" ? object.userData.assemblyLabel : ""} ${meshLabel(object)}`.toLowerCase();
+        if (
+          (identity && hints.includes(identity.toLowerCase())) ||
+          hints.some((hint) => hint.length > 1 && label.includes(hint))
+        )
+          matches.push(cadSelectionTarget(object));
+      });
+      return [...new Set(matches)];
+    };
+    const paint = () => {
+      if (!runtime.model) return;
+      clearCadHighlight(runtime.model);
+      const chosen = new Set(collectCadHighlightMeshes(selected));
+      applyCadHighlight(
+        hovered.filter((mesh) => !chosen.has(mesh)),
+        0.32,
+      );
+      applyCadHighlight([...chosen], 0.62);
+    };
     const runtime: ViewportRuntime = {
       scene,
       renderer,
@@ -412,16 +470,33 @@ export function CadViewport({
       fitted: false,
       bounds: new THREE.Box3(),
       select: (mesh) => {
-        selected = mesh;
-        if (selectionBox) {
-          scene.remove(selectionBox);
-          disposeCadObject(selectionBox);
-          selectionBox = null;
+        selected = !mesh ? [] : Array.isArray(mesh) ? mesh : [mesh];
+        paint();
+      },
+      hover: (mesh) => {
+        const key = mesh ? assemblyComponentId(mesh) : null;
+        const hoverKey = mesh ? (key ?? mesh.uuid) : null;
+        if (hoverKey === hoveredKey) return;
+        hoveredKey = hoverKey;
+        if (!mesh) {
+          hovered = [];
+          paint();
+          return;
         }
-        if (mesh) {
-          selectionBox = new THREE.BoxHelper(mesh, 0xe3a750);
-          scene.add(selectionBox);
+        hovered = key
+          ? collectCadHighlightMeshes(
+              runtime.model ? meshesMatching(runtime.model, key, [meshLabel(mesh)]) : [mesh],
+            )
+          : [mesh];
+        paint();
+      },
+      selectKey: (key) => {
+        if (!runtime.model) {
+          runtime.select(null);
+          return;
         }
+        const matches = meshesMatching(runtime.model, key);
+        runtime.select(matches.length ? matches : null);
       },
       fit: () => {
         if (runtime.bounds.isEmpty()) return;
@@ -477,13 +552,17 @@ export function CadViewport({
     controls.addEventListener("change", changed);
     const started = () => {
       setActiveView(null);
+      runtime.hover(null);
       setHover(null);
     };
     controls.addEventListener("start", started);
     let pointerDown: { x: number; y: number } | null = null;
     const raycaster = new THREE.Raycaster();
+    let pickable: { model: THREE.Object3D; meshes: THREE.Mesh[] } | null = null;
     const hit = (event: PointerEvent): THREE.Mesh | null => {
       if (!runtime.model) return null;
+      if (pickable?.model !== runtime.model)
+        pickable = { model: runtime.model, meshes: cadPickableMeshes(runtime.model) };
       const rect = renderer.domElement.getBoundingClientRect();
       raycaster.setFromCamera(
         new THREE.Vector2(
@@ -492,11 +571,8 @@ export function CadViewport({
         ),
         runtime.camera,
       );
-      const hits = raycaster.intersectObject(runtime.model, true);
-      return (
-        (hits.find((entry) => entry.object instanceof THREE.Mesh)?.object as
-          THREE.Mesh | undefined) ?? null
-      );
+      const hits = raycaster.intersectObjects(pickable.meshes, false);
+      return (hits[0]?.object as THREE.Mesh | undefined) ?? null;
     };
     const down = (event: PointerEvent) => {
       if (event.button === 0 && (event.ctrlKey || event.metaKey)) {
@@ -507,34 +583,58 @@ export function CadViewport({
       controls.mouseButtons.LEFT = event.altKey ? THREE.MOUSE.DOLLY : THREE.MOUSE.ROTATE;
       pointerDown = { x: event.clientX, y: event.clientY };
     };
-    const move = (event: PointerEvent) => {
-      if (event.buttons || navRef.current !== "select" || settings.current.headless) {
+    const canPick = () =>
+      !settings.current.headless && (navRef.current === "select" || settings.current.pickOnClick);
+    // Coalesce pointer moves to one raycast per frame; moves fire far faster than paints.
+    let pendingMove: PointerEvent | null = null;
+    let moveFrame = 0;
+    const processMove = () => {
+      moveFrame = 0;
+      const event = pendingMove;
+      pendingMove = null;
+      if (!event) return;
+      if (event.buttons || !canPick()) {
+        runtime.hover(null);
         setHover(null);
         return;
       }
       const mesh = hit(event);
       const rect = host.getBoundingClientRect();
-      setHover(
-        mesh
-          ? { name: meshLabel(mesh), x: event.clientX - rect.left, y: event.clientY - rect.top }
-          : null,
-      );
+      runtime.hover(mesh);
+      const name = mesh ? meshLabel(mesh) : null;
+      const x = Math.round(event.clientX - rect.left);
+      const y = Math.round(event.clientY - rect.top);
+      // Follow the cursor without re-rendering; React state changes only with the label.
+      const tip = hoverTipRef.current;
+      if (tip) {
+        tip.style.left = `${x}px`;
+        tip.style.top = `${y}px`;
+      }
+      setHover((current) => (!name ? null : current?.name === name ? current : { name, x, y }));
       renderer.domElement.style.cursor = mesh ? "pointer" : "grab";
+    };
+    const move = (event: PointerEvent) => {
+      pendingMove = event;
+      if (!moveFrame) moveFrame = requestAnimationFrame(processMove);
     };
     const up = (event: PointerEvent) => {
       if (
         event.button === 0 &&
         pointerDown &&
         Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) < 4 &&
-        navRef.current === "select" &&
-        !settings.current.headless
+        canPick()
       ) {
         const mesh = hit(event);
-        runtime.select(mesh ? cadSelectionTarget(mesh) : null);
+        const key = mesh ? (assemblyComponentId(mesh) ?? meshLabel(mesh)) : null;
+        if (key) runtime.selectKey(key);
+        else runtime.select(mesh ? cadSelectionTarget(mesh) : null);
+        callbacks.current.onSelectObject?.(key);
       }
       pointerDown = null;
     };
     const leave = () => {
+      pendingMove = null;
+      runtime.hover(null);
       setHover(null);
     };
     const lost = (event: Event) => {
@@ -554,17 +654,35 @@ export function CadViewport({
     const resizeObserver = new ResizeObserver(runtime.resize);
     resizeObserver.observe(host);
     runtime.resize();
+    // Hidden tabs (the kept-alive Assembly behind a part window, a background
+    // browser tab) must not keep rendering the scene every frame.
+    let onScreen = true;
+    const visibility =
+      typeof IntersectionObserver === "undefined"
+        ? null
+        : new IntersectionObserver(([entry]) => {
+            onScreen = Boolean(entry?.isIntersecting);
+          });
+    visibility?.observe(host);
     let frame = 0;
     const tick = () => {
       frame = requestAnimationFrame(tick);
+      if (
+        !onScreen ||
+        document.hidden ||
+        host.clientWidth === 0 ||
+        host.checkVisibility?.({ visibilityProperty: true }) === false
+      )
+        return;
       controls.update();
-      if (selected && selectionBox) selectionBox.update();
       renderer.render(scene, runtime.camera);
     };
     tick();
     setMounted(true);
     return () => {
       cancelAnimationFrame(frame);
+      cancelAnimationFrame(moveFrame);
+      visibility?.disconnect();
       resizeObserver.disconnect();
       controls.dispose();
       canvas.removeEventListener("pointerdown", down, true);
@@ -646,6 +764,7 @@ export function CadViewport({
       runtime.edges(edgesRef.current);
       if (!runtime.fitted || settings.current.headless) runtime.applyView(settings.current.view);
       runtime.fitted = true;
+      runtime.selectKey(selectedKeyRef.current ?? null);
       runtime.renderer.render(runtime.scene, runtime.camera);
       setStatus("running");
       requestAnimationFrame(() => {
@@ -768,6 +887,10 @@ export function CadViewport({
   ]);
 
   useEffect(() => {
+    runtimeRef.current?.selectKey(selectedKey ?? null);
+  }, [selectedKey, selectionHints, status]);
+
+  useEffect(() => {
     const runtime = runtimeRef.current;
     if (runtime?.fitted) {
       runtime.applyView(view);
@@ -822,11 +945,13 @@ export function CadViewport({
       data-cad-engine={engine ?? "zoo"}
       data-cad-status={status}
       data-cad-model-key={modelKey ?? entryPath ?? "main"}
+      data-cad-selected={selectedKey ?? undefined}
       data-cad-load-source={status === "running" ? loadSource : undefined}
     >
       <div ref={hostRef} className="absolute inset-0" />
       {hover && !headless ? (
         <div
+          ref={hoverTipRef}
           className="pointer-events-none absolute z-40 -translate-x-1/2 -translate-y-[calc(100%+10px)] rounded-none border bg-card px-2 py-1 font-mono text-[11px] shadow-none"
           style={{ left: hover.x, top: hover.y }}
         >
@@ -967,14 +1092,6 @@ export function CadViewport({
           tone="signal"
           label="Building geometry"
         />
-      ) : status === "building" ? (
-        <div
-          role="status"
-          className="bg-card text-muted-foreground pointer-events-none absolute top-24 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-none border px-3 py-1.5 text-[11px] shadow-none"
-        >
-          <span className="bg-primary size-1.5 animate-pulse rounded-full" />
-          Updating this part · showing previous geometry
-        </div>
       ) : null}
     </div>
   );

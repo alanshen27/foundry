@@ -1,8 +1,6 @@
 /**
- * Workspace documents. Single-instance surfaces (Assembly / PCB / Checks /
- * Repository / Ideate / Verify / Launch / Renders) are permanent top-bar
- * buttons; only multi-component surfaces (CAD / Schematic) open as closable
- * tabs.
+ * Workspace documents. Assembly is the home surface. Everything else opens as
+ * a closable tab from the window menu or a deep link.
  */
 export type EngineerDocKind =
   | "assembly"
