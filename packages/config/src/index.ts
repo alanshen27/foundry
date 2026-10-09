@@ -174,6 +174,28 @@ const serverEnvSchema = z
           message: "Must be Upstash rediss:// URL on Render (not redis://localhost:6379)",
         });
       }
+      if (env.AUTH_MODE !== "supabase") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["AUTH_MODE"],
+          message: "Must be supabase on Render; local auth is development/E2E only",
+        });
+      }
+      // Signs collaboration tokens; without it they fall back to DATABASE_URL.
+      if (!env.AUTH_SECRET) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["AUTH_SECRET"],
+          message: "AUTH_SECRET is required on Render (shared by web, worker and collab)",
+        });
+      }
+      if (!env.APP_ORIGIN || isLocal(env.APP_ORIGIN)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["APP_ORIGIN"],
+          message: "Must be the public https web URL on Render (auth email redirects use it)",
+        });
+      }
     }
   });
 
