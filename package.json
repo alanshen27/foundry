@@ -20,7 +20,8 @@
     "db:migrate": "pnpm --filter @foundry/db migrate",
     "db:migrate:deploy": "pnpm --filter @foundry/db migrate:deploy",
     "db:migrate:status": "pnpm --filter @foundry/db migrate:status",
-    "db:migrate:check": "pnpm --filter @foundry/db migrate:check"
+    "db:migrate:check": "pnpm --filter @foundry/db migrate:check",
+    "db:rls:check": "pnpm --filter @foundry/db rls:check"
   },
   "devDependencies": {
     "eslint": "^9.17.0",

@@ -58,6 +58,9 @@ jobs:
       # Fails if schema.prisma changed without a migration to match.
       - name: Check migrations match schema.prisma
         run: pnpm db:migrate:check
+      # Supabase serves public tables to browser-held anon keys unless RLS is on.
+      - name: Check every table has row-level security
+        run: pnpm db:rls:check
       - run: pnpm db:seed
       - run: pnpm test
       # The dev-server e2e below cannot catch a broken production build
