@@ -157,19 +157,19 @@ use **File → Open Folder…** and select the directory containing this
 
 ## External service configuration
 
-| Capability                     | Configuration                                                 |
-| ------------------------------ | ------------------------------------------------------------- |
-| Database                       | `DATABASE_URL`, optionally `DIRECT_URL`                       |
-| Authentication                 | `AUTH_MODE`, Supabase variables, `AUTH_SECRET` for local mode |
-| Storage                        | Supabase variables and `STORAGE_BUCKET`                       |
+| Capability                     | Configuration                                                       |
+| ------------------------------ | ------------------------------------------------------------------- |
+| Database                       | `DATABASE_URL`, optionally `DIRECT_URL`                             |
+| Authentication                 | `AUTH_MODE`, Supabase variables, `AUTH_SECRET` for local mode       |
+| Storage                        | Supabase variables and `STORAGE_BUCKET`                             |
 | AI copilot                     | OpenAI credentials, `AI_MODEL`; Jev triage via `OPENROUTER_API_KEY` |
-| Background jobs                | `REDIS_URL`                                                   |
-| Realtime presence              | `NEXT_PUBLIC_REALTIME_MODE`                                   |
-| Collaborative engineering      | `NEXT_PUBLIC_COLLAB_URL`                                      |
-| Mechanical CAD                 | `OPENAI_API_KEY`, `CAD_MODEL`; local macOS + `uv`             |
-| Media video                    | `MEDIA_VIDEO_MODEL`                                           |
-| Storefront generation          | `V0_API_KEY`                                                  |
-| Public callbacks and rendering | `APP_ORIGIN`                                                  |
+| Background jobs                | `REDIS_URL`                                                         |
+| Realtime presence              | `NEXT_PUBLIC_REALTIME_MODE`                                         |
+| Collaborative engineering      | `NEXT_PUBLIC_COLLAB_URL`                                            |
+| Mechanical CAD                 | `OPENAI_API_KEY`, `CAD_MODEL`; local macOS + `uv`                   |
+| Media video                    | `MEDIA_VIDEO_MODEL`                                                 |
+| Storefront generation          | `V0_API_KEY`                                                        |
+| Public callbacks and rendering | `APP_ORIGIN`                                                        |
 
 CAD generation uses the OpenAI Responses API with `CAD_MODEL=gpt-6-astra` by default.
 Set `OPENAI_API_KEY` to an account with access to the model. Astra writes editable
