@@ -69,6 +69,11 @@ function queueConnection() {
   return sharedConnection;
 }
 
+/** Reuses the queue's connection so probes do not open one per request. */
+export function pingRedis(): Promise<string> {
+  return queueConnection().ping();
+}
+
 export function getChatRunQueue() {
   if (!queue) {
     queue = new Queue(CHAT_RUN_QUEUE_NAME, {

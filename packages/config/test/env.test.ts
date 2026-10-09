@@ -40,9 +40,7 @@ describe("getServerEnv on Render", () => {
     ["DATABASE_URL", { DATABASE_URL: "postgresql://foundry:foundry@localhost:5432/foundry" }],
   ])("rejects an unsafe %s", async (key, override) => {
     const { getServerEnv } = await load(true);
-    expect(() => getServerEnv({ ...production, ...override })).toThrow(
-      new RegExp(`- ${key}:`),
-    );
+    expect(() => getServerEnv({ ...production, ...override })).toThrow(new RegExp(`- ${key}:`));
   });
 
   it("drops a leftover localhost collaboration URL instead of failing", async () => {
