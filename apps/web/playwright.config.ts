@@ -9,7 +9,8 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "pnpm dev --port 3100",
+    // A separate distDir keeps this server from corrupting the main dev server's .next cache.
+    command: "NEXT_DIST_DIR=.next-test pnpm dev --port 3100",
     url: "http://localhost:3100",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

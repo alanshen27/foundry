@@ -2,9 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Folder, Loader2, Sparkles } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Folder, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { SignalGlowBackdrop } from "@/components/signal-glow-backdrop";
 import { folderBreadcrumbs, type FolderRef } from "@/lib/workspace-folders";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -35,7 +34,7 @@ function folderOptions(folders: FolderRef[]): { id: string; label: string }[] {
 }
 
 /**
- * Lovable-style create bar for the workspace projects page.
+ * Prompt composer for the workspace projects page.
  * Prompt → create project (optional folder) → workbench with AI kickoff.
  */
 export function ProjectCreateBar({
@@ -105,122 +104,120 @@ export function ProjectCreateBar({
   }
 
   return (
-    <section className={cn("relative", className)}>
-      <div className="relative z-10 mx-auto flex max-w-3xl flex-col items-center px-2 pb-8 text-center sm:pb-10">
-        <p className="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
-          Projects
-        </p>
-        <h2 className="mt-3 font-mono text-[clamp(1.75rem,4vw,2.75rem)] leading-[1.05] font-medium tracking-[-0.04em]">
-          Build something Foundry
-        </h2>
-        <p className="text-muted-foreground mt-3 max-w-lg text-[15px] leading-relaxed">
-          Describe the product. AI fills the pipeline — brief, requirements, BOM, circuit, model,
-          and checks.
-        </p>
-
-        {error ? (
-          <p
-            role="alert"
-            className="border-destructive/40 bg-destructive/10 text-destructive mt-4 w-full border px-3 py-2 text-left font-mono text-[12px]"
-          >
-            {error}
-          </p>
-        ) : null}
-
-        <form
-          className="relative mt-8 w-full"
-          onSubmit={(event) => {
-            event.preventDefault();
-            submit();
-          }}
+    <section className={cn("relative mb-8", className)}>
+      {error ? (
+        <p
+          role="alert"
+          className="border-destructive/40 bg-destructive/10 text-destructive mb-3 border px-3 py-2 text-left font-mono text-[12px]"
         >
-          {/* Soft signal glow + orange dots behind the white card */}
-          <SignalGlowBackdrop />
+          {error}
+        </p>
+      ) : null}
 
-          <div className="border-border relative z-10 border bg-white transition-colors focus-within:border-primary dark:bg-card">
-            <textarea
-              id="project-create-prompt"
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-              placeholder="A pocket-size air quality monitor with an e-ink display, under $60…"
-              rows={4}
-              maxLength={2000}
+      <form
+        className="border-border bg-card w-full border transition-colors focus-within:border-primary/60"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <label
+          htmlFor="project-create-prompt"
+          className="text-muted-foreground block px-5 pt-4 font-mono text-[10px] tracking-[0.12em] uppercase"
+        >
+          Start something new
+        </label>
+        <textarea
+          id="project-create-prompt"
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+          placeholder="What would you like to build? Describe your product…"
+          rows={3}
+          maxLength={2000}
+          disabled={create.isPending}
+          aria-label="Describe the product to build"
+          className="placeholder:text-muted-foreground/70 block min-h-[100px] w-full resize-none bg-transparent px-5 py-3 text-[15px] leading-relaxed outline-none disabled:opacity-60 sm:text-base"
+        />
+
+        <div className="border-border bg-muted/25 flex flex-wrap items-center gap-2 border-t px-3 py-2.5 sm:gap-4 sm:px-4">
+          <label className="text-muted-foreground focus-within:text-foreground flex min-w-[8rem] flex-1 items-center gap-2 sm:max-w-xs">
+            <Folder className="size-3.5 shrink-0" strokeWidth={1.5} />
+            <span className="sr-only">Folder</span>
+            <select
+              id="project-create-folder"
+              className="min-w-0 flex-1 cursor-pointer truncate bg-transparent py-1.5 font-mono text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-60"
+              value={targetFolderId}
+              onChange={(event) => setTargetFolderId(event.target.value)}
               disabled={create.isPending}
-              aria-label="Describe the product to build"
-              className="placeholder:text-muted-foreground min-h-[120px] w-full resize-none bg-transparent px-4 py-4 text-left text-[15px] leading-relaxed outline-none disabled:opacity-60"
-            />
-            <div className="border-border flex flex-wrap items-center gap-2 border-t px-3 py-2.5">
-              <label className="text-muted-foreground flex min-w-0 flex-1 items-center gap-1.5 sm:max-w-xs">
-                <Folder className="size-3.5 shrink-0 opacity-70" strokeWidth={1.75} />
-                <span className="sr-only">Folder</span>
-                <select
-                  id="project-create-folder"
-                  className="text-foreground min-w-0 flex-1 appearance-none truncate bg-transparent font-mono text-[11px] tracking-[0.04em] outline-none"
-                  value={targetFolderId}
-                  onChange={(event) => setTargetFolderId(event.target.value)}
-                  disabled={create.isPending}
-                  aria-label="Project folder"
-                >
-                  <option value="">Workspace root</option>
-                  {options.map((folder) => (
-                    <option key={folder.id} value={folder.id}>
-                      {folder.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                onClick={() => setShowOptions((v) => !v)}
-                className="text-muted-foreground hover:text-foreground font-mono text-[11px] tracking-[0.1em] uppercase transition-colors"
-              >
-                {showOptions ? "Hide" : "More"}
-              </button>
-              <Button
-                type="submit"
-                disabled={create.isPending || !prompt.trim()}
-                className="ml-auto rounded-none px-5 font-mono text-[12px] tracking-[0.1em] uppercase"
-              >
-                {create.isPending ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Sparkles className="size-3.5" />
-                )}
-                {create.isPending ? "Creating…" : "Build"}
-              </Button>
-            </div>
-          </div>
+              aria-label="Project folder"
+            >
+              <option value="">Workspace root</option>
+              {options.map((folder) => (
+                <option key={folder.id} value={folder.id}>
+                  {folder.label}
+                </option>
+              ))}
+            </select>
+          </label>
 
-          {showOptions ? (
-            <div className="border-border relative z-10 mt-3 border bg-white px-4 py-3 text-left dark:bg-card">
-              <label
-                htmlFor="project-create-name"
-                className="text-muted-foreground font-mono text-[10px] tracking-[0.14em] uppercase"
-              >
-                Project name
-              </label>
-              <input
-                id="project-create-name"
-                type="text"
-                value={nameOverride}
-                onChange={(event) => setNameOverride(event.target.value)}
-                placeholder={prompt.trim() ? nameFromPrompt(prompt) : "Derived from prompt"}
-                maxLength={80}
-                disabled={create.isPending}
-                className="border-input placeholder:text-muted-foreground mt-1.5 h-9 w-full border bg-white px-3 text-sm outline-none dark:bg-card"
+          <span className="text-muted-foreground ml-auto hidden font-mono text-[10px] lg:block">
+            ⌘/Ctrl + Enter
+          </span>
+          <div className="ml-auto flex shrink-0 items-center gap-2 lg:ml-0">
+            <button
+              type="button"
+              onClick={() => setShowOptions((v) => !v)}
+              aria-expanded={showOptions}
+              aria-controls="project-create-options"
+              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring flex h-8 items-center gap-1 px-2 font-mono text-[11px] outline-none transition-colors focus-visible:ring-1"
+            >
+              Options
+              <ChevronDown
+                className={cn("size-3 transition-transform", showOptions && "rotate-180")}
+                strokeWidth={1.5}
               />
-            </div>
-          ) : null}
-        </form>
-
-        <p className="text-muted-foreground mt-4 font-mono text-[11px]">⌘/Ctrl + Enter to build</p>
-      </div>
+            </button>
+            <Button
+              type="submit"
+              disabled={create.isPending || !prompt.trim()}
+              className="h-9 min-w-[88px] gap-3 rounded-none px-4 text-[13px]"
+            >
+              {create.isPending ? "Creating…" : "Build"}
+              {create.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <ArrowUpRight className="size-3.5" strokeWidth={1.75} />
+              )}
+            </Button>
+          </div>
+        </div>
+        {showOptions ? (
+          <div id="project-create-options" className="border-border border-t px-5 py-4">
+            <label
+              htmlFor="project-create-name"
+              className="text-muted-foreground font-mono text-[10px] tracking-[0.12em] uppercase"
+            >
+              Project name
+            </label>
+            <input
+              id="project-create-name"
+              type="text"
+              value={nameOverride}
+              onChange={(event) => setNameOverride(event.target.value)}
+              placeholder={prompt.trim() ? nameFromPrompt(prompt) : "Derived from prompt"}
+              maxLength={80}
+              disabled={create.isPending}
+              className="border-input placeholder:text-muted-foreground focus:border-primary mt-1.5 h-9 w-full border bg-transparent px-3 text-sm outline-none"
+            />
+          </div>
+        ) : null}
+      </form>
     </section>
   );
 }

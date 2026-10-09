@@ -68,7 +68,7 @@ export function syncPcbFromSchematic(
         });
       continue;
     }
-    const def = footprintDef(assignment.libraryId);
+    const def = footprintDef(assignment.libraryId, pcb.library);
     if (!def) {
       issues.push({
         code: "unknown-package",
@@ -81,7 +81,7 @@ export function syncPcbFromSchematic(
     if (linked.length > 1) continue; // Report below; never guess which occurrence should survive.
     const previous = linked[0];
     const invalidPin = Object.entries(assignment.pinMap ?? {}).find(
-      ([, pad]) => !padByPin(def.id, pad),
+      ([, pad]) => !padByPin(def.id, pad, pcb.library),
     );
     if (invalidPin) {
       issues.push({
@@ -107,6 +107,7 @@ export function syncPcbFromSchematic(
       pinMap: assignment.pinMap ?? (changedPackage ? undefined : base.pinMap),
       // A new package's height must be supplied again; a different package is not the same envelope.
       bodyHeightMm: changedPackage ? undefined : base.bodyHeightMm,
+      standoffMm: changedPackage ? undefined : base.standoffMm,
     };
     if (previous) {
       if (JSON.stringify(next) !== JSON.stringify(previous)) {
@@ -143,7 +144,7 @@ export function syncPcbFromSchematic(
     if (linked.length === 1) {
       const padPins = new Map<string, string>();
       for (const pin of wiredPinsForPart(circuit, part.id)) {
-        const pad = resolvePad(linked[0]!, pin);
+        const pad = resolvePad(linked[0]!, pin, pcb.library);
         if (!pad) continue;
         const priorPin = padPins.get(pad.pin);
         if (priorPin && priorPin !== pin)

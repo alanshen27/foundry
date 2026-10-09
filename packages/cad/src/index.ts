@@ -18,7 +18,14 @@ export type {
   CadProjectIterateOptions,
 } from "./port";
 export { isPlausibleZooOpId } from "./op-id";
-export { stableCadHash, buildLinkedAssembly, linkedAssemblyStatus } from "./linked-assembly";
+export {
+  stableCadHash,
+  buildLinkedAssembly,
+  linkedAssemblyStatus,
+  assemblyInstanceLabel,
+  parseAssemblyInstanceLabel,
+  assemblyMeshDisplayName,
+} from "./linked-assembly";
 export type { LinkedAssemblyStatus } from "./linked-assembly";
 export {
   planAssemblyPlacements,

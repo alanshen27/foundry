@@ -2,6 +2,16 @@ import type { UIMessageChunk } from "ai";
 
 export type RunEventWrite = { seq: number; chunk: UIMessageChunk };
 
+/**
+ * Tool-input deltas stay on the worker: every browser would otherwise re-parse
+ * the whole partial JSON and clone the full assistant message per token, which
+ * grows quadratically with large save_pcb / CAD inputs. Clients still get
+ * tool-input-start and the complete tool-input-available input.
+ */
+export function isPublishedRunChunk(chunk: UIMessageChunk): boolean {
+  return chunk.type !== "tool-input-delta";
+}
+
 function snapshotKey(chunk: UIMessageChunk): string | null {
   if (
     (chunk.type !== "data-cad-draft" && chunk.type !== "data-cad-progress") ||

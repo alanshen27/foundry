@@ -6,6 +6,7 @@ import { requireProjectCapability } from "../access";
 import { ensureStageStarted, touchProject } from "../stage-state";
 import { AiEditLockConflict, getActiveAiEditLock, withAiEditLockGuard } from "../ai-edit-lock";
 import { recordAudit } from "../audit";
+import { notifyProjectChanged } from "../project-change";
 import { designDocumentRoom } from "@foundry/collaboration";
 import {
   syncCollaborationSnapshot,
@@ -131,6 +132,7 @@ export const designRouter = router({
         throw error;
       }
       await publishCollaborationUpdate(documentName);
+      notifyProjectChanged(input.projectId, input.branchId, { kind: "design", design: input.kind });
       await ensureStageStarted({
         workspaceId: project.workspaceId,
         projectId: input.projectId,

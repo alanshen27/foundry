@@ -92,6 +92,41 @@ describe.skipIf(!hasRuntime)("native Python runner with mandatory macOS sandbox"
       expect(result.data.bbox.dimensions.x).toBeCloseTo(45, 6);
     },
   );
+  it(
+    "packs source colours per solid, inheriting a parent's colour",
+    { timeout: 30_000 },
+    async () => {
+      const result = await run(
+        [
+          "from build123d import Box, Color, Compound, Pos",
+          "lens = Box(4,4,1); lens.label = 'lens'; lens.color = Color(0, 0, 1, 0.5)",
+          "cap = Pos(10,0,0) * Box(2,2,2); cap.label = 'cap'",
+          "shell = Pos(20,0,0) * Box(3,3,3); shell.label = 'shell'",
+          "accents = Compound(children=[cap]); accents.label = 'accents'; accents.color = 'orange'",
+          "result = Compound(children=[lens, accents, shell])",
+        ].join("\n"),
+      );
+      expect(result.ok, result.ok ? "" : result.error).toBe(true);
+      if (!result.ok) return;
+      const mesh = Buffer.from(result.data.stl);
+      expect(mesh.subarray(0, 8).toString("ascii")).toBe("FDRYMSH2");
+      const colors: Record<string, number> = {};
+      let offset = 12;
+      for (let i = 0; i < mesh.readUInt32LE(8); i += 1) {
+        const nameLength = mesh.readUInt16LE(offset);
+        const stlLength = mesh.readUInt32LE(offset + 2);
+        const name = mesh.subarray(offset + 10, offset + 10 + nameLength).toString("utf8");
+        colors[name] = mesh.readUInt32LE(offset + 6);
+        offset += 10 + nameLength + stlLength;
+      }
+      expect(colors.lens).toBe(0x0000ff80);
+      expect(colors.shell).toBe(0);
+      // OCCT's named orange is its own shade; assert red-dominant and opaque.
+      expect(colors.cap! >>> 24).toBe(0xff);
+      expect(colors.cap! & 0xff).toBe(0xff);
+      expect((colors.cap! >>> 8) & 0xff).toBeLessThan(0x40);
+    },
+  );
   it("resolves relative source imports at the selected entry", { timeout: 30_000 }, async () => {
     const result = await runPythonCad({
       files: {

@@ -25,6 +25,11 @@ export type PcbMechanicalComponent = {
   bodyHeightMm?: number;
   /** Bottom of the body envelope, absent when height is unknown. */
   zMm?: number;
+  /**
+   * Display glass on top of the carrier, in the component's local CAD frame
+   * (before its Z rotation). The carrier is the body minus this height.
+   */
+  glass?: { wMm: number; hMm: number; heightMm: number; xMm: number; yMm: number };
 };
 
 export type PcbMechanicalProfile = {
@@ -57,7 +62,7 @@ export function pcbMechanicalProfile(board: PcbDoc): PcbMechanicalProfile {
     profile.warnings.push("Board corner radius exceeds half its smaller dimension");
   }
   for (const fp of board.footprints) {
-    const def = footprintDef(fp.libraryId);
+    const def = footprintDef(fp.libraryId, board.library);
     if (!def) {
       profile.warnings.push(`${fp.refDes}: unknown footprint; mechanical envelope unavailable`);
       profile.unknownHeightIds.push(fp.id);
@@ -88,6 +93,7 @@ export function pcbMechanicalProfile(board: PcbDoc): PcbMechanicalProfile {
         ? fp.bodyHeightMm
         : undefined;
     if (bodyHeightMm === undefined) profile.unknownHeightIds.push(fp.id);
+    const standoffMm = fp.standoffMm ?? 0;
     profile.components.push({
       footprintId: fp.id,
       ...(fp.partId ? { partId: fp.partId } : {}),
@@ -100,7 +106,13 @@ export function pcbMechanicalProfile(board: PcbDoc): PcbMechanicalProfile {
       widthMm: def.bodyWMm,
       depthMm: def.bodyHMm,
       ...(bodyHeightMm !== undefined
-        ? { bodyHeightMm, zMm: fp.side === "front" ? thicknessMm : -bodyHeightMm }
+        ? {
+            bodyHeightMm,
+            zMm: fp.side === "front" ? thicknessMm + standoffMm : -bodyHeightMm - standoffMm,
+          }
+        : {}),
+      ...(bodyHeightMm !== undefined && def.glass && def.glass.heightMm < bodyHeightMm
+        ? { glass: { ...def.glass, yMm: -def.glass.yMm } }
         : {}),
     });
   }

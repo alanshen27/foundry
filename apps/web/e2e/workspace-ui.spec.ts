@@ -67,7 +67,9 @@ test("workspace keeps the model dominant and preserves assembly-to-part navigati
   await expect(page).toHaveURL(/view=model&part=top/);
   await expect(viewport).toHaveAttribute("data-cad-status", "running", { timeout: 60_000 });
   await expect(viewport).toHaveAttribute("data-cad-engine", "build123d");
-  await expect(page.getByText("parts/top/main.py", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("parts/top/main.py", { exact: true }).filter({ visible: true }),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: /^Measure$/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Move \/ Copy$/i })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Show code", exact: true })).toBeVisible();
@@ -76,6 +78,10 @@ test("workspace keeps the model dominant and preserves assembly-to-part navigati
   await expect(page.getByRole("button", { name: /^Export STL$/i })).toBeVisible();
   await page.getByText(/^Export$/i).click();
   await page.screenshot({ path: testInfo.outputPath("workspace-cad-part.png") });
+  await expect(openDocuments.getByRole("button", { name: /^Assembly$/i })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
   await openDocuments.getByRole("button", { name: "Close Upper housing", exact: true }).click();
   await expect(openDocuments.getByRole("button", { name: /^Assembly$/i })).toHaveAttribute(
     "aria-current",

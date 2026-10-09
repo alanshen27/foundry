@@ -140,7 +140,11 @@ export function recorderFixtureMesh(part?: string): Uint8Array<ArrayBuffer> {
     asset: { version: "2.0", generator: "Foundry LOCAL / UNVERIFIED UI fixture" },
     scene: 0,
     scenes: [{ nodes: selected.map((_, index) => index) }],
-    nodes: selected.map((entry, index) => ({ mesh: index, name: entry.name })),
+    nodes: selected.map((entry, index) => ({
+      mesh: index,
+      name: entry.name,
+      extras: { assemblyComponentId: entry.id, name: entry.name },
+    })),
     meshes,
     materials,
     buffers: [{ byteLength: byteOffset }],

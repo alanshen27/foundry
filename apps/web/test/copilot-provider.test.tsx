@@ -6,10 +6,12 @@
  * `/api/ai/chat`, so what is tested is what ships.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createTrpcMock, type TrpcMock } from "./utils/trpc-mock";
+import type * as Realtime from "@foundry/realtime";
+import type { UIMessageChunk } from "ai";
 
 let mock: TrpcMock;
 vi.mock("@/lib/trpc", () => ({
@@ -17,6 +19,26 @@ vi.mock("@/lib/trpc", () => ({
     return mock.trpc;
   },
 }));
+
+const broadcastSubscribers = new Map<
+  string,
+  (message: { event: string; payload: unknown }) => void
+>();
+vi.mock("@foundry/realtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof Realtime>();
+  return {
+    ...actual,
+    createOffBroadcastPort: () => ({
+      subscribe: (
+        channel: string,
+        onMessage: (message: { event: string; payload: unknown }) => void,
+      ) => {
+        broadcastSubscribers.set(channel, onMessage);
+        return { leave: () => broadcastSubscribers.delete(channel) };
+      },
+    }),
+  };
+});
 
 const { CopilotProvider, useCopilot } = await import("@/components/copilot/copilot-provider");
 
@@ -27,6 +49,7 @@ type ChatPost = {
   messages: { parts: { text?: string }[] }[];
 };
 let chatResponses: (() => Response)[] = [];
+let streamResponses: Response[] = [];
 const posts: ChatPost[] = [];
 
 function json(status: number, body: unknown) {
@@ -57,6 +80,8 @@ function Harness() {
         delete channel
       </button>
       <button onClick={() => copilot.switchChannel("chan-2")}>switch</button>
+      <button onClick={() => copilot.switchChannel("chan-1")}>back</button>
+      <button onClick={() => copilot.setOpen(!copilot.open)}>toggle panel</button>
     </div>
   );
 }
@@ -90,10 +115,16 @@ beforeEach(() => {
     sortOrder: 9,
   }));
   chatResponses = [];
+  streamResponses = [];
   posts.length = 0;
   sessionStorage.clear();
   globalThis.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
     const path = String(url);
+    if (path.includes("/api/ai/chat/runs/") && path.endsWith("/stream")) {
+      const response = streamResponses.shift();
+      if (!response) throw new Error("unexpected run stream");
+      return response;
+    }
     if (path.includes("/api/ai/chat/stream")) return new Response(null, { status: 204 });
     if (path.endsWith("/api/ai/chat") && init?.method === "POST") {
       posts.push(JSON.parse(String(init.body)) as ChatPost);
@@ -104,6 +135,8 @@ beforeEach(() => {
   }) as typeof fetch;
 });
 
+afterEach(() => vi.restoreAllMocks());
+
 const lastText = (post: ChatPost) =>
   post.messages
     .at(-1)!
@@ -111,6 +144,40 @@ const lastText = (post: ChatPost) =>
     .join("");
 
 describe("CopilotProvider sending", () => {
+  it("refetches only what a committed project write changed", async () => {
+    renderProvider();
+    const notify = broadcastSubscribers.get("foundry:project:proj1:branch1");
+    expect(notify).toBeDefined();
+    const before = mock.invalidations.length;
+    act(() => {
+      notify!({
+        event: "project-changed",
+        payload: { changes: [{ kind: "design", design: "PCB" }] },
+      });
+      notify!({
+        event: "project-changed",
+        payload: { changes: [{ kind: "design", design: "PCB" }] },
+      });
+    });
+    await waitFor(() =>
+      expect(mock.invalidations.slice(before).map((i) => i.path)).toEqual([
+        "design.get",
+        "engineering.status",
+      ]),
+    );
+    expect(mock.invalidations.at(-2)?.input).toEqual({
+      projectId: "proj1",
+      branchId: "branch1",
+    });
+    act(() => {
+      notify!({
+        event: "project-changed",
+        payload: { changes: [{ kind: "code" }] },
+      });
+    });
+    await waitFor(() => expect(mock.invalidations.at(-1)?.path).toBe("code"));
+  });
+
   it("posts a plain note to the chat API with the project, branch and channel", async () => {
     const user = userEvent.setup();
     renderProvider();
@@ -182,7 +249,10 @@ describe("CopilotProvider sending", () => {
 
   it("clears a stale workspace lock and retries the turn once", async () => {
     chatResponses.push(
-      () => json(409, { error: "This workspace is locked while another AI agent is editing it." }),
+      () =>
+        json(409, {
+          error: "This workspace is locked while another AI agent is editing it.",
+        }),
       () => json(202, { runId: null, invoked: false }),
     );
     const user = userEvent.setup();
@@ -203,7 +273,9 @@ describe("CopilotProvider sending", () => {
 
   it("gives up after one retry and tells the user why", async () => {
     const locked = () =>
-      json(409, { error: "This workspace is locked while another AI agent is editing it." });
+      json(409, {
+        error: "This workspace is locked while another AI agent is editing it.",
+      });
     chatResponses.push(locked, locked);
     const user = userEvent.setup();
     renderProvider();
@@ -282,5 +354,111 @@ describe("CopilotProvider channels", () => {
     await user.click(screen.getByText("switch"));
     await act(async () => new Promise((r) => setTimeout(r, 50)));
     expect(screen.getByTestId("channel")).toHaveTextContent("chan-1");
+  });
+});
+
+/** Real SSE bytes consumed by the SDK and production BackgroundChatTransport. */
+function streamingReply() {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const encoder = new TextEncoder();
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value;
+      },
+    }),
+    { headers: { "content-type": "text/event-stream" } },
+  );
+  const emit = (chunk: UIMessageChunk) => {
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+  };
+  chatResponses.push(() => json(202, { runId: "run-stream", invoked: true }));
+  streamResponses.push(response);
+  emit({ type: "start", messageId: "assistant-stream" });
+  emit({ type: "text-start", id: "reply-text" });
+  return {
+    text: (delta: string) => emit({ type: "text-delta", id: "reply-text", delta }),
+    finish: () => {
+      emit({ type: "text-end", id: "reply-text" });
+      emit({ type: "finish", finishReason: "stop" });
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  };
+}
+
+describe("CopilotProvider transcript checkpoints", () => {
+  it("streams without transcript storage I/O, then preserves the visible reply across page hide and reload", async () => {
+    const reply = streamingReply();
+    const user = userEvent.setup();
+    const mounted = renderProvider();
+    await user.click(screen.getByText("ask"));
+    act(() => reply.text("Battery selected"));
+    await screen.findByText("Battery selected");
+
+    const reads = vi.spyOn(Storage.prototype, "getItem");
+    const writes = vi.spyOn(Storage.prototype, "setItem");
+    for (const delta of [" with", " charging", " protection"]) {
+      act(() => reply.text(delta));
+      await screen.findByText(new RegExp(`Battery selected.*${delta.trim()}$`));
+    }
+    // Shell updates also must not re-read/re-seed the transcript during render.
+    await user.click(screen.getByText("toggle panel"));
+    expect(reads.mock.calls.filter(([key]) => key.startsWith("foundry:chat-local:"))).toHaveLength(
+      0,
+    );
+    expect(writes.mock.calls.filter(([key]) => key.startsWith("foundry:chat-local:"))).toHaveLength(
+      0,
+    );
+
+    act(() => window.dispatchEvent(new Event("pagehide")));
+    expect(sessionStorage.getItem("foundry:chat-local:chan-1")).toContain(
+      "Battery selected with charging protection",
+    );
+    mounted.unmount();
+    act(() => reply.finish());
+    renderProvider();
+    expect(screen.getByText("Battery selected with charging protection")).toBeInTheDocument();
+    expect(screen.getAllByText("@AI swap the battery for a 1200 mAh cell")).toHaveLength(1);
+  });
+
+  it("backs up the completed reply so a fresh provider can recover it without server history", async () => {
+    const reply = streamingReply();
+    const user = userEvent.setup();
+    const mounted = renderProvider();
+    await user.click(screen.getByText("ask"));
+    act(() => {
+      reply.text("The 1200 mAh cell fits.");
+      reply.finish();
+    });
+    await waitFor(() => expect(screen.getByTestId("busy")).toHaveTextContent("false"));
+    await waitFor(() =>
+      expect(sessionStorage.getItem("foundry:chat-local:chan-1")).toContain(
+        "The 1200 mAh cell fits.",
+      ),
+    );
+    mounted.unmount();
+    renderProvider();
+    expect(screen.getByText("The 1200 mAh cell fits.")).toBeInTheDocument();
+    expect(screen.getAllByText("@AI swap the battery for a 1200 mAh cell")).toHaveLength(1);
+  });
+
+  it("checkpoints the outgoing channel and restores its latest streamed reply when switching back", async () => {
+    mock.clientQuery("chat.messages", () => []);
+    const reply = streamingReply();
+    const user = userEvent.setup();
+    renderProvider();
+    await user.click(screen.getByText("ask"));
+    act(() => reply.text("Checking the enclosure"));
+    await screen.findByText("Checking the enclosure");
+    await user.click(screen.getByText("switch"));
+    await waitFor(() => expect(screen.getByTestId("channel")).toHaveTextContent("chan-2"));
+    expect(screen.queryByText("Checking the enclosure")).not.toBeInTheDocument();
+    expect(sessionStorage.getItem("foundry:chat-local:chan-1")).toContain("Checking the enclosure");
+    act(() => reply.finish());
+    await user.click(screen.getByText("back"));
+    await waitFor(() => expect(screen.getByTestId("channel")).toHaveTextContent("chan-1"));
+    expect(screen.getByText("Checking the enclosure")).toBeInTheDocument();
+    expect(screen.getAllByText("@AI swap the battery for a 1200 mAh cell")).toHaveLength(1);
   });
 });

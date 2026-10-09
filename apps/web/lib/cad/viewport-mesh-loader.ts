@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import { cadMeshPathSchema, cadMeshStorageKey, type CadMeshRequest } from "./mesh-request";
+import { decodeFoundryMesh, type FoundryMeshColor } from "./foundry-mesh";
 import { disposeCadObject } from "./three-viewport";
 
 export type ViewportMeshUnit = "mm" | "cm" | "m" | "in" | "ft" | "yd";
@@ -204,7 +205,7 @@ function assertSelfContainedGlb(bytes: ArrayBuffer): void {
   if (!sawJson) throw new Error("CAD GLB model has no metadata");
 }
 
-function parseStl(bytes: ArrayBuffer, name: string): THREE.Group {
+function stlMesh(bytes: ArrayBuffer, name: string, sourceColor?: FoundryMeshColor): THREE.Mesh {
   if (bytes.byteLength < 84) throw new Error("CAD service returned an invalid STL model");
   const view = new DataView(bytes);
   const binaryLength = 84 + view.getUint32(80, true) * 50;
@@ -219,19 +220,48 @@ function parseStl(bytes: ArrayBuffer, name: string): THREE.Group {
   } catch {
     throw new Error("CAD service returned an invalid STL model");
   }
-  const alpha = geometry.hasColors ? (geometry.alpha ?? 1) : 1;
-  const material = new THREE.MeshStandardMaterial({
-    color: geometry.hasColors ? 0xffffff : 0xb8bab7,
-    vertexColors: Boolean(geometry.hasColors),
-    metalness: 0.15,
-    roughness: 0.65,
-    opacity: alpha,
-    transparent: alpha < 1,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
+  const vertexColors = Boolean(geometry.hasColors) && !sourceColor;
+  const alpha = sourceColor ? sourceColor.a / 255 : vertexColors ? (geometry.alpha ?? 1) : 1;
+  const color = sourceColor
+    ? new THREE.Color().setRGB(
+        sourceColor.r / 255,
+        sourceColor.g / 255,
+        sourceColor.b / 255,
+        THREE.SRGBColorSpace,
+      )
+    : new THREE.Color(vertexColors ? 0xffffff : 0xb8bab7);
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshStandardMaterial({
+      color,
+      vertexColors,
+      metalness: 0.15,
+      roughness: 0.65,
+      opacity: alpha,
+      transparent: alpha < 1,
+      depthWrite: alpha >= 1,
+    }),
+  );
+  if (sourceColor) mesh.userData.cadSourceColor = `#${color.getHexString(THREE.SRGBColorSpace)}`;
   mesh.name = name;
+  mesh.userData.name = name;
+  return mesh;
+}
+
+function parseStl(bytes: ArrayBuffer, name: string): THREE.Group {
+  const labeled = decodeFoundryMesh(bytes);
   const scene = new THREE.Group();
-  scene.add(mesh);
+  if (labeled) {
+    for (const solid of labeled) {
+      const mesh = stlMesh(solid.stl, solid.displayName, solid.color);
+      mesh.userData.assemblyLabel = solid.name;
+      if (solid.componentId) mesh.userData.assemblyComponentId = solid.componentId;
+      if (solid.instanceId) mesh.userData.assemblyInstanceId = solid.instanceId;
+      scene.add(mesh);
+    }
+    return scene;
+  }
+  scene.add(stlMesh(bytes, name));
   return scene;
 }
 

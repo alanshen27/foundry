@@ -309,12 +309,12 @@ export function checkEnclosureFit(input: EnclosureFitInput): FitFinding[] {
     let tallestBack: { h: number; refDes: string } | null = null;
     let unknownHeights = 0;
     for (const fp of board.footprints) {
-      const def = footprintDef(fp.libraryId);
-      if (def?.seatedHeightMm === undefined) {
+      const body = fp.bodyHeightMm ?? footprintDef(fp.libraryId, board.library)?.seatedHeightMm;
+      if (body === undefined) {
         unknownHeights++;
         continue;
       }
-      const entry = { h: def.seatedHeightMm, refDes: fp.refDes };
+      const entry = { h: (fp.standoffMm ?? 0) + body, refDes: fp.refDes };
       if (fp.side === "back") {
         if (!tallestBack || entry.h > tallestBack.h) tallestBack = entry;
       } else if (!tallestFront || entry.h > tallestFront.h) {

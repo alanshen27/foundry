@@ -1,15 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { FolderKanban, Globe, LogOut, Settings, Waypoints } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FoundryMark } from "@/components/foundry-mark";
-import { InteractiveDotField } from "@/components/interactive-dot-field";
 import { UserAvatar } from "@/components/user-avatar";
 import { SharedProjectsNav } from "@/components/shared-projects-nav";
-import { WorkspaceSwitcher, type ShellWorkspace } from "@/components/project-shell";
+import { WorkspaceSwitcher, type ShellWorkspace } from "@/components/workspace-switcher";
 import {
   WorkspaceFileTree,
   type TreeFolder,
@@ -17,6 +17,10 @@ import {
 } from "@/components/workspace-file-tree";
 import { navIconClass, navItemClass } from "@/lib/nav-item";
 import { cn } from "@/lib/utils";
+
+const WorkspaceManager = dynamic(() =>
+  import("@/components/workspace-manager").then((module) => module.WorkspaceManager),
+);
 
 export type ShellProject = TreeProject;
 export type ShellFolder = TreeFolder;
@@ -42,6 +46,7 @@ export function HomeShell({
   contentClassName?: string;
   children: ReactNode;
 }) {
+  const [manageOpen, setManageOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const homeHref = current ? `/w/${current.slug}` : "/workspaces?manage=1";
@@ -116,10 +121,14 @@ export function HomeShell({
                 Settings
               </Link>
             ) : null}
-            <Link href="/workspaces?manage=1" className={navItemClass(onManage)}>
+            <button
+              type="button"
+              onClick={() => setManageOpen(true)}
+              className={navItemClass(onManage)}
+            >
               <Waypoints className={navIconClass(onManage)} strokeWidth={1.75} />
               Manage workspaces
-            </Link>
+            </button>
           </div>
 
           <div className="mt-2 flex items-center gap-2 border-t px-1 pt-2">
@@ -157,19 +166,29 @@ export function HomeShell({
 
       <main className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col", contentClassName)}>
         {!contentClassName?.includes("p-0") ? (
-          <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-            <InteractiveDotField gap={16} radius={52} />
-          </div>
+          <div className="workspace-dot-field pointer-events-none absolute inset-0 z-0 opacity-80" />
         ) : null}
         <div
           className={cn(
             "relative z-10 min-h-0 flex-1",
-            contentClassName?.includes("p-0") ? "flex flex-col" : "overflow-y-auto p-8",
+            contentClassName?.includes("p-0") ? "flex flex-col" : "overflow-y-auto",
           )}
         >
-          {children}
+          {contentClassName?.includes("p-0") ? (
+            children
+          ) : (
+            <div className="w-full px-6 py-6 sm:px-8 sm:py-8">{children}</div>
+          )}
         </div>
       </main>
+      {manageOpen ? (
+        <WorkspaceManager
+          open={manageOpen}
+          onOpenChange={setManageOpen}
+          workspaces={workspaces}
+          current={current}
+        />
+      ) : null}
     </div>
   );
 }

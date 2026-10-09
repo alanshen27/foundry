@@ -45,6 +45,36 @@ function stripProgressLogForModel({ output }: { output: unknown }) {
 }
 
 /**
+ * Engineering results carry the whole CAD document, ~20 KB per call. The model
+ * sees a part index instead and reads source with read_cad_file; the fit report
+ * goes first so it is not lost behind the index.
+ */
+export function engineeringForModel({ output }: { output: unknown }) {
+  if (!output || typeof output !== "object" || !("cad" in output)) {
+    return { type: "json" as const, value: output as never };
+  }
+  const { cad, fit, seatNotes, ...rest } = output as Record<string, unknown> & { cad: CadDoc };
+  const value = {
+    ...(fit ? { fit } : {}),
+    ...(Array.isArray(seatNotes) && seatNotes.length ? { seatNotes } : {}),
+    ...rest,
+    cad: {
+      engine: cad.engine,
+      activePath: cad.components.find((c) => c.id === cad.activeId)?.path ?? null,
+      components: cad.components.map((c) => ({
+        id: c.id,
+        name: c.name,
+        path: c.path,
+        kind: c.kind,
+        chars: c.content.length,
+      })),
+      ...(cad.assembly ? { instances: cad.assembly.instances } : {}),
+    },
+  };
+  return { type: "json" as const, value: value as never };
+}
+
+/**
  * Resolve a model-supplied component reference to a CAD component. The model
  * tends to use whichever form it saw last — bare name, name with extension, or
  * full path — so all three resolve.
@@ -189,21 +219,44 @@ export function buildCadTools(ctx: ToolContext, kit: ToolKit) {
         "Read the connected schematic → PCB → CAD → assembly workflow, local readiness issues, and current fingerprint. Call before sync_pcb_to_cad or build_linked_assembly. Current means synchronized only; it is not manufacturing verification.",
       inputSchema: z.object({}),
       execute: async () => guard(ctx, "project.read", () => getEngineeringStatus(ctx)),
+      toModelOutput: engineeringForModel,
+    },
+
+    read_cad_file: {
+      description:
+        "Read the current source of one CAD file by path or name (e.g. parts/enclosure_lid/main.py). Engineering results list files without their source; read a file before patching it so find strings match exactly.",
+      inputSchema: z.object({ path: z.string().min(1).max(240) }),
+      execute: async ({ path }: { path: string }) =>
+        guard(ctx, "project.read", async () => {
+          const doc = await readCadDoc();
+          const part =
+            findCadComponent(doc, path, "part") ??
+            findCadComponent(doc, path, "assembly") ??
+            findCadComponent(doc, path, "instructions");
+          if (!part) {
+            return {
+              error: `No CAD file matches ${path}.`,
+              paths: doc.components.map((c) => c.path),
+            };
+          }
+          return { path: part.path, name: part.name, kind: part.kind, content: part.content };
+        }),
     },
 
     sync_pcb_to_cad: {
       description:
-        "Update mechanical board parts from every saved PCB using stable board IDs, real outlines and mounting holes. Preserves user-edited files by reporting conflicts. Requires the current fingerprint from get_engineering_status. Then inspect readiness and build_linked_assembly.",
+        "Update mechanical board parts from every saved PCB using stable board IDs, real outlines, mounting holes, and UNVERIFIED package-envelope mockups for footprints with known body heights. Preserves user-edited files by reporting conflicts. Requires the current fingerprint from get_engineering_status. Then inspect readiness and build_linked_assembly so those board parts are placed in the product.",
       inputSchema: z.object({ expectedFingerprint: z.string().length(64) }),
       execute: async (input: { expectedFingerprint: string }) =>
         guard(ctx, "mechanical.edit", () =>
           updateEngineering(ctx, { ...input, action: "sync_pcb_to_cad" }),
         ),
+      toModelOutput: engineeringForModel,
     },
 
     build_linked_assembly: {
       description:
-        "Build assembly/product.py by importing the ACTUAL manufacturing parts and applying editable instance positions in mm and global XYZ rotations in degrees. Explicitly replaces the product preview. First sync boards to CAD. Omit instances to retain placements and add missing parts at the origin; origin placement is UNVERIFIED, never solved mates. Call get_engineering_status for fingerprint and component IDs.",
+        "Build assembly/product.py by importing the ACTUAL manufacturing parts — including synced PCB boards with package mockups — and applying editable instance positions in mm and global XYZ rotations in degrees. Each instance is labeled so Assembly can highlight it. Explicitly replaces the product preview. First sync boards to CAD. Supply translations for pcb-* parts, not only housings. The builder then seats each upright PCB: the display top is set flush with the housing top face, and a board that crosses the housing outline is centered. Do not put the board back on the housing origin — that origin is the middle of a centered solid, so the screen lands about half the housing height too low and the board clips the walls. After building, the result carries fit: collisions (exact solid overlap between parts, e.g. display glass sunk into a lid frame) and loose (parts that can move 2 mm in a direction without touching anything, e.g. a button cap with no flange). Fix every entry by changing geometry — pockets, flanges, bosses, ribs, snaps — then rebuild. Never close a gap by lengthening a stem or moving a part into another. Omit instances to retain placements and add missing parts at the origin; origin placement is UNVERIFIED, never solved mates. Call get_engineering_status for fingerprint and component IDs.",
       inputSchema: z.object({
         expectedFingerprint: z.string().length(64),
         instances: assemblyInstanceSchema.array().max(200).optional(),
@@ -215,6 +268,7 @@ export function buildCadTools(ctx: ToolContext, kit: ToolKit) {
         guard(ctx, "mechanical.edit", () =>
           updateEngineering(ctx, { ...input, action: "build_linked_assembly" }),
         ),
+      toModelOutput: engineeringForModel,
     },
 
     create_cad_component: {
@@ -751,6 +805,7 @@ export function buildCadTools(ctx: ToolContext, kit: ToolKit) {
             assembly: PYTHON_ASSEMBLY_PATH,
             verificationState: "UNVERIFIED",
             instances: result.cad.assembly?.instances,
+            ...(result.fit ? { fit: result.fit } : {}),
             ...(prompt ? { intent: prompt } : {}),
             hint: "Native part geometry is linked. Retained poses were preserved; new instances are at the origin. Review explicit placement and fit before treating this as assembled.",
             progressLog: takeProgressLog(toolCallId),

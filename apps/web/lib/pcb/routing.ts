@@ -155,7 +155,7 @@ function zoneCovers(zone: PcbZone, x: number, y: number, fallbackClearance: numb
  */
 export function buildCopperGraph(doc: PcbDoc, padNets?: Map<string, string>): CopperGraph {
   const set = new DisjointSet();
-  const pads = boardPads(doc.footprints);
+  const pads = boardPads(doc.footprints, doc.library);
 
   // Track to pad, where the pad reaches that layer.
   for (const track of doc.tracks) {

@@ -15,7 +15,7 @@
  */
 
 import type { CircuitDoc } from "@/lib/circuit/catalog";
-import { padByPin, type PcbDoc, type PcbFootprint } from "@/lib/pcb/doc";
+import { padByPin, type FootprintLibrary, type PcbDoc, type PcbFootprint } from "@/lib/pcb/doc";
 import { padWorldPosition } from "@/lib/pcb/geometry";
 import { buildCopperGraph, padKey, type CopperGraph } from "@/lib/pcb/routing";
 
@@ -144,10 +144,10 @@ export function buildNets(circuit: CircuitDoc): Net[] {
 }
 
 /** The pad a schematic pin lands on: pinMap first, then a direct pad-name match. */
-export function resolvePad(fp: PcbFootprint, schematicPin: string) {
+export function resolvePad(fp: PcbFootprint, schematicPin: string, library?: FootprintLibrary) {
   const mapped = fp.pinMap?.[schematicPin];
-  if (mapped) return padByPin(fp.libraryId, mapped);
-  return padByPin(fp.libraryId, schematicPin);
+  if (mapped) return padByPin(fp.libraryId, mapped, library);
+  return padByPin(fp.libraryId, schematicPin, library);
 }
 
 /**
@@ -272,7 +272,7 @@ export function buildRatsnest(
         }
         continue;
       }
-      const pad = resolvePad(fp, node.pin);
+      const pad = resolvePad(fp, node.pin, pcb.library);
       if (!pad) {
         unmappedPins.push({ refDes: fp.refDes, partId: node.partId, pin: node.pin });
         continue;
@@ -339,7 +339,7 @@ export function netsByPad(nets: Net[], pcb: PcbDoc): Map<string, string> {
     for (const node of net.nodes) {
       const fp = byPartId.get(node.partId);
       if (!fp) continue;
-      const pad = resolvePad(fp, node.pin);
+      const pad = resolvePad(fp, node.pin, pcb.library);
       if (pad) out.set(`${fp.id}:${pad.pin}`, net.name);
     }
   }

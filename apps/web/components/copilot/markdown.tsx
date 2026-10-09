@@ -71,6 +71,14 @@ function getMarkdownComponents(inline?: boolean): Components {
   return { ...components, p: ({ children }) => <span className="inline">{children}</span> };
 }
 
+/**
+ * Web-search models can emit citation tokens wrapped in private-use characters
+ * (U+E200 cite U+E202 turn0search0 U+E201). They are not user-readable text.
+ */
+export function stripCitationMarkers(text: string): string {
+  return text.replace(/\s?\uE200[^\uE201]*\uE201/g, "").replace(/[\uE200-\uE2FF]/g, "");
+}
+
 export const Markdown = memo(function Markdown({
   text,
   inline,
@@ -80,7 +88,7 @@ export const Markdown = memo(function Markdown({
 }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={getMarkdownComponents(inline)}>
-      {text}
+      {stripCitationMarkers(text)}
     </ReactMarkdown>
   );
 });

@@ -49,7 +49,10 @@ const serverEnvSchema = z
     // AI copilot (optional; chat is disabled with a clear notice when unset)
     OPENAI_API_KEY: z.string().optional(),
     AI_MODEL: z.string().default("gpt-5.6"),
-    // Cheap model for "should the copilot reply?" triage on messages without @AI.
+    // OpenRouter key for Jev, which decides whether chat without @AI needs the copilot.
+    OPENROUTER_API_KEY: z.string().optional(),
+    JEV_MODEL: z.string().default("typesafe/jev-1.13"),
+    // Kept for existing environments. Triage uses Jev, not this model.
     AI_LIGHT_MODEL: z.string().default("gpt-4.1-nano"),
     // Copilot turns one user may start per rolling hour. The main cost dial:
     // one turn can run two dozen model steps and several Zoo generations.

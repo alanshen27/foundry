@@ -12,6 +12,7 @@
 
 import {
   footprintDef,
+  type FootprintLibrary,
   type PcbFootprint,
   type PcbLayer,
   type PcbPadDef,
@@ -135,10 +136,10 @@ export type PadInstance = {
 };
 
 /** Every pad on the board, already transformed to board coordinates. */
-export function boardPads(footprints: PcbFootprint[]): PadInstance[] {
+export function boardPads(footprints: PcbFootprint[], library?: FootprintLibrary): PadInstance[] {
   const out: PadInstance[] = [];
   for (const fp of footprints) {
-    const def = footprintDef(fp.libraryId);
+    const def = footprintDef(fp.libraryId, library);
     if (!def) continue;
     for (const pad of def.pads) {
       const at = padWorldPosition(fp, pad);

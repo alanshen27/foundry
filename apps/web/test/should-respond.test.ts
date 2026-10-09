@@ -1,29 +1,39 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import type { UIMessage } from "ai";
 
-const generateObject = vi.fn();
 const getServerEnv = vi.fn();
-
-vi.mock("ai", () => ({
-  generateObject: (...args: unknown[]) => generateObject(...args),
-}));
-
-vi.mock("@ai-sdk/openai", () => ({
-  createOpenAI: () => (model: string) => model,
-}));
+const fetchMock = vi.fn();
 
 vi.mock("@foundry/config", () => ({
   getServerEnv: () => getServerEnv(),
 }));
 
-const { shouldInvokeAi, shouldSuggestAiPing, buildAiPingTip, lastUserText } =
+const { shouldInvokeAi, shouldSuggestAiPing, buildAiPingTip, lastUserText, cleanedChatHistory } =
   await import("@/server/chat-run/should-respond");
 
+function turn(role: "user" | "assistant", text: string, id = text): UIMessage {
+  return { id, role, parts: [{ type: "text", text }] };
+}
+
+function jevResponse(noul: number) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ answers: { needs_ai: { type: "noul", noul } } }),
+  };
+}
+
 beforeEach(() => {
-  generateObject.mockReset();
+  fetchMock.mockReset();
+  vi.stubGlobal("fetch", fetchMock);
   getServerEnv.mockReturnValue({
-    OPENAI_API_KEY: "sk-test",
-    AI_LIGHT_MODEL: "gpt-4.1-nano",
+    OPENROUTER_API_KEY: "sk-or-test",
+    JEV_MODEL: "typesafe/jev-1.13",
   });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("shouldInvokeAi", () => {
@@ -36,22 +46,77 @@ describe("shouldInvokeAi", () => {
 
 describe("shouldSuggestAiPing", () => {
   it("never suggests when @AI is already present", async () => {
-    await expect(shouldSuggestAiPing("@AI design a box")).resolves.toBe(false);
-    expect(generateObject).not.toHaveBeenCalled();
+    await expect(shouldSuggestAiPing([turn("user", "@AI design a box")])).resolves.toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("uses the light model triage result", async () => {
-    generateObject.mockResolvedValueOnce({ object: { suggestPing: true } });
-    await expect(shouldSuggestAiPing("can you update the BOM?")).resolves.toBe(true);
-    generateObject.mockResolvedValueOnce({ object: { suggestPing: false } });
-    await expect(shouldSuggestAiPing("noted, shipping tomorrow")).resolves.toBe(false);
+  it("asks Jev over the cleaned history and treats noul >= 0.5 as yes", async () => {
+    fetchMock.mockResolvedValueOnce(jevResponse(0.91));
+    const messages: UIMessage[] = [
+      turn("user", "the enclosure window is offset", "u1"),
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          { type: "reasoning", text: "hidden chain of thought" },
+          { type: "text", text: "the display stays on the board" },
+        ],
+      } as UIMessage,
+      turn("user", "can you move the screen?", "u2"),
+    ];
+
+    await expect(shouldSuggestAiPing(messages)).resolves.toBe(true);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://openrouter.ai/api/alpha/decisions");
+    const body = JSON.parse(String(init.body)) as {
+      model: string;
+      state: { chat: string };
+      questions: { needs_ai: { type: string } };
+    };
+    expect(body.model).toBe("typesafe/jev-1.13");
+    expect(body.questions.needs_ai.type).toBe("noul");
+    expect(body.state.chat).toContain("user: the enclosure window is offset");
+    expect(body.state.chat).toContain("assistant: the display stays on the board");
+    expect(body.state.chat).toContain("user: can you move the screen?");
+    expect(body.state.chat).not.toContain("hidden chain of thought");
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer sk-or-test",
+      "Content-Type": "application/json",
+    });
+
+    fetchMock.mockResolvedValueOnce(jevResponse(0.49));
+    await expect(shouldSuggestAiPing([turn("user", "noted, shipping tomorrow")])).resolves.toBe(
+      false,
+    );
   });
 
-  it("falls back to heuristics when the light model fails", async () => {
-    generateObject.mockRejectedValueOnce(new Error("boom"));
-    await expect(shouldSuggestAiPing("what thickness should the wall be?")).resolves.toBe(true);
-    generateObject.mockRejectedValueOnce(new Error("boom"));
-    await expect(shouldSuggestAiPing("thanks")).resolves.toBe(false);
+  it("falls back to heuristics when Jev fails or the key is missing", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("boom"));
+    await expect(
+      shouldSuggestAiPing([turn("user", "what thickness should the wall be?")]),
+    ).resolves.toBe(true);
+    fetchMock.mockRejectedValueOnce(new Error("boom"));
+    await expect(shouldSuggestAiPing([turn("user", "thanks")])).resolves.toBe(false);
+
+    getServerEnv.mockReturnValue({ OPENROUTER_API_KEY: undefined, JEV_MODEL: "typesafe/jev-1.13" });
+    fetchMock.mockClear();
+    await expect(shouldSuggestAiPing([turn("user", "can you update the BOM?")])).resolves.toBe(
+      true,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("cleanedChatHistory", () => {
+  it("keeps user and assistant text in order", () => {
+    expect(
+      cleanedChatHistory([
+        turn("user", "hello", "1"),
+        turn("assistant", "hi", "2"),
+        turn("user", "design a lid", "3"),
+      ]),
+    ).toBe("user: hello\n\nassistant: hi\n\nuser: design a lid");
   });
 });
 

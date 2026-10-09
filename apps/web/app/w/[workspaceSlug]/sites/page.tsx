@@ -63,15 +63,6 @@ export default async function WorkspaceSitesPage({
       folders={workspace.folders}
       user={{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }}
     >
-      <div className="mb-10">
-        <h1 className="font-mono text-[11px] tracking-[0.18em] uppercase text-muted-foreground">
-          Workspace / Sites
-        </h1>
-        <p className="mt-2 font-mono text-[22px] font-medium tracking-[-0.03em]">
-          {workspace.name}
-        </p>
-      </div>
-
       <SitesPanel
         workspaceId={workspace.id}
         workspaceSlug={workspace.slug}

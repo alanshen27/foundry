@@ -70,21 +70,25 @@ test("full Phase 0 journey", async ({ browser }) => {
   expect(builder.url()).not.toMatch(/\/w\/test-rover(?:\/|$)/);
   await expect(builder.getByRole("heading", { name: "Test Rover" })).toBeVisible();
 
-  // Walk the stages through the workspace tab bar and check each real editor
-  // renders. The old footer "Design process" nav is gone: every stage now
-  // lives inside the engineer workspace as a tab, addressed by ?view=.
-  // Clicks retry because dev-mode hydration can swallow the first one.
+  // Walk the project through the window menu. Assembly stays on the page;
+  // other surfaces open as tabs from that one control.
   const stageTabs: [string, string, string][] = [
     ["Ideate", "ideate", "Product brief"],
     ["Verify", "verify", "Validation checklist"],
     ["Launch", "launch", "Cut a release"],
     ["Assembly", "assembly", "Test Rover"],
   ];
+  const documents = builder.getByRole("navigation", { name: "Open documents" });
   for (const [tab, view, marker] of stageTabs) {
-    const button = builder.getByRole("button", { name: tab, exact: true });
     await expect(async () => {
-      await button.click();
-      await expect(button).toHaveAttribute("aria-pressed", "true", { timeout: 5_000 });
+      if (view === "assembly") {
+        await documents.getByRole("button", { name: "Assembly", exact: true }).click();
+      } else {
+        await builder.getByRole("button", { name: "Open window", exact: true }).click();
+        await builder.getByRole("menuitem", { name: tab, exact: true }).click();
+      }
+      const current = documents.getByRole("button", { name: tab, exact: true });
+      await expect(current).toHaveAttribute("aria-pressed", "true", { timeout: 5_000 });
     }).toPass({ timeout: 60_000 });
     if (view !== "assembly") await expect(builder).toHaveURL(new RegExp(`view=${view}`));
     await expect(builder.getByText(marker).first()).toBeVisible({ timeout: 60_000 });

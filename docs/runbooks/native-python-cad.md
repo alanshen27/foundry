@@ -38,12 +38,29 @@ that users will adjust. Linked assemblies use `assembly/product.py` and import
 the actual part modules with explicit placements. They do not solve mating
 constraints, collisions, or manufacturing tolerances.
 
+After each `build_linked_assembly`, a local fit check runs in the same sandbox
+outside the design lock (a few seconds for a small enclosure). It reports exact
+solid overlaps above 0.5 mm³ between instances, named down to the PCB package
+(`Board / DS1 glass`), and every non-housing, non-fixed part that can move 2 mm
+in some direction without touching another part. The copilot must fix these by
+changing geometry. The report is `UNVERIFIED`: fasteners that are not modelled
+do not count, and an empty report is not a tolerance analysis. Assemblies that
+import mesh files are skipped. Display modules installed with `glass` are drawn
+as a carrier with a smaller glass box on top, so a lid window sized to the
+glass shows the carrier as a collision until the frame underside is pocketed.
+
 Python source stays in the same Yjs/SQL document as other engineering state.
 Generation streams drafts without evaluating partial code. Generated geometry is
 checked locally before saving; invalid or cancelled generation leaves previous
 source intact. Manual code edits can temporarily be invalid and remain editable.
-The viewport keeps the previous geometry visibly labelled while rebuilding the
-same part and does not substitute an unrelated placeholder box.
+The viewport keeps the previous geometry on screen while rebuilding the same part
+and does not substitute an unrelated placeholder box.
+
+Display colour comes only from build123d `shape.color` (`Color(r, g, b[, a])` or
+a named colour) on `result` or on children of a `Compound`; children and solids
+inherit their parent's colour. The driver packs one RGBA value per solid into the
+labeled mesh (`FDRYMSH2`), and uncoloured solids render neutral grey. Colour is a
+display finish, not engineering evidence.
 
 The native loader includes transitive local Python modules and literal CAD asset
 imports. STEP/BREP import preserves exact geometry. STL/GLB imports can display

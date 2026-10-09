@@ -48,11 +48,11 @@ export function DesignPanel({
   const canEdit = allowEdit && shared.canEdit && (shared.mode === "local" || shared.ready);
 
   useEffect(() => {
-    if (shared.mode === "local" && !dirtyRef.current && query.data?.data) {
+    if ((shared.mode === "local" || shared.awaitingLive) && !dirtyRef.current && query.data?.data) {
       baseRef.current = query.data.data;
       setForm(query.data.data as DesignNotes);
     }
-  }, [query.data, shared.mode]);
+  }, [query.data, shared.mode, shared.awaitingLive]);
 
   const set = useCallback(
     (key: keyof DesignNotes, value: string) => {

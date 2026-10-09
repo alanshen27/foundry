@@ -64,12 +64,12 @@ import {
   emptyPcbDoc,
   emptyPcbSet,
   footprintDef,
-  FOOTPRINT_LIBRARY,
   padByPin,
   normalizePcbDoc,
   normalizePcbSet,
   pcbId,
   searchFootprints,
+  type FootprintLibrary,
   type PcbBoard,
   type PcbDoc,
   type PcbFootprint,
@@ -255,7 +255,7 @@ function ZoneFill({
             />
           ))}
         {doc.footprints.flatMap((fp) => {
-          const def = footprintDef(fp.libraryId);
+          const def = footprintDef(fp.libraryId, doc.library);
           if (!def) return [];
           const onLayer = (pad: { plated?: boolean }) =>
             pad.plated || (fp.side === "front" ? "F.Cu" : "B.Cu") === zone.layer;
@@ -355,6 +355,7 @@ function BoardField({
 
 function FootprintGraphic({
   fp,
+  library,
   selected,
   layers,
   canEdit,
@@ -363,6 +364,7 @@ function FootprintGraphic({
   liveMove,
 }: {
   fp: PcbFootprint;
+  library: FootprintLibrary;
   selected: boolean;
   layers: Record<LayerKey, boolean>;
   canEdit: boolean;
@@ -372,7 +374,7 @@ function FootprintGraphic({
   /** Peer's in-progress drag; drawn instead of the persisted position. */
   liveMove?: LiveMove;
 }) {
-  const def = footprintDef(fp.libraryId);
+  const def = footprintDef(fp.libraryId, library);
   if (!def) return null;
   const copperOn =
     (fp.side === "front" && layers["F.Cu"]) || (fp.side === "back" && layers["B.Cu"]);
@@ -703,7 +705,8 @@ export function PcbCanvas({
   }, [activeBoardId]);
 
   useEffect(() => {
-    if (shared.mode !== "local" || dirtyRef.current) return;
+    if ((shared.mode !== "local" && !shared.awaitingLive) || dirtyRef.current) return;
+    if (shared.awaitingLive && !query.data) return;
     const set = query.data ? normalizePcbSet(query.data.data) : emptyPcbSet();
     sharedBaseRef.current = set;
     setBoards(set.boards);
@@ -712,7 +715,7 @@ export function PcbCanvas({
         ? current
         : (set.activeBoardId ?? set.boards[0]!.id!),
     );
-  }, [query.data, shared.mode]);
+  }, [query.data, shared.mode, shared.awaitingLive]);
 
   useEffect(() => {
     if (shared.mode !== "live" || !shared.ready || !dirtyRef.current) return;
@@ -795,10 +798,15 @@ export function PcbCanvas({
   const addFootprint = useCallback(
     (libraryId: string) => {
       const current = docRef.current;
-      const fp = createFootprint(libraryId, current.footprints, {
-        xMm: Math.round(current.board.widthMm / 2),
-        yMm: Math.round(current.board.heightMm / 2),
-      });
+      const fp = createFootprint(
+        libraryId,
+        current.footprints,
+        {
+          xMm: Math.round(current.board.widthMm / 2),
+          yMm: Math.round(current.board.heightMm / 2),
+        },
+        current.library,
+      );
       if (!fp) return;
       pushHistory();
       setDoc((d) => ({ ...d, footprints: [...d.footprints, fp] }));
@@ -1315,18 +1323,18 @@ export function PcbCanvas({
   }, [scheduleSave]);
 
   const footprintCategories = useMemo(
-    () => ["All", ...new Set(searchFootprints("").map((entry) => entry.category))],
-    [],
+    () => ["All", ...new Set(searchFootprints("", doc.library).map((entry) => entry.category))],
+    [doc.library],
   );
   const results = useMemo(
     () =>
-      searchFootprints(search).filter(
+      searchFootprints(search, doc.library).filter(
         (entry) => footprintCategory === "All" || entry.category === footprintCategory,
       ),
-    [search, footprintCategory],
+    [search, footprintCategory, doc.library],
   );
   const selected = doc.footprints.find((f) => f.id === selectedId) ?? null;
-  const selectedDef = selected ? footprintDef(selected.libraryId) : null;
+  const selectedDef = selected ? footprintDef(selected.libraryId, doc.library) : null;
   const selectedPart = selected?.partId
     ? (circuit.parts.find((p) => p.id === selected.partId) ?? null)
     : null;
@@ -1599,7 +1607,7 @@ export function PcbCanvas({
                     className="bg-background h-8 border px-2"
                   >
                     <option value="">Choose package — unresolved</option>
-                    {FOOTPRINT_LIBRARY.map((def) => (
+                    {searchFootprints("", doc.library).map((def) => (
                       <option key={def.id} value={def.id}>
                         {def.name}
                       </option>
@@ -2040,6 +2048,7 @@ export function PcbCanvas({
                   <FootprintGraphic
                     key={fp.id}
                     fp={fp}
+                    library={doc.library}
                     selected={fp.id === selectedId}
                     layers={layers}
                     canEdit={canEdit}
@@ -2585,6 +2594,19 @@ export function PcbCanvas({
                   <p className="text-muted-foreground text-[10px]">
                     {selected.libraryId} · {selected.side}
                   </p>
+                  {selectedDef?.source ? (
+                    <p className="text-[10px] text-amber-700 dark:text-amber-400">
+                      Installed · UNVERIFIED ·{" "}
+                      <a
+                        href={selectedDef.source.url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="underline"
+                      >
+                        {selectedDef.source.kind === "kicad" ? "KiCad source" : "datasheet"}
+                      </a>
+                    </p>
+                  ) : null}
                   <label className="flex flex-col gap-1 text-[10px]">
                     Package height (mm)
                     <Input
@@ -2609,6 +2631,31 @@ export function PcbCanvas({
                     />
                     <span className="text-muted-foreground">
                       Use a specified or measured height; blank remains unknown in CAD.
+                    </span>
+                  </label>
+                  <label className="flex flex-col gap-1 text-[10px]">
+                    Standoff above board (mm)
+                    <Input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      aria-label="Standoff above board in millimetres"
+                      placeholder="0"
+                      disabled={!canEdit}
+                      value={selected.standoffMm ?? ""}
+                      onChange={(event) => {
+                        const value =
+                          event.target.value === "" ? undefined : Number(event.target.value);
+                        if (value === undefined || value === 0)
+                          patchSelected({ standoffMm: undefined });
+                        else if (Number.isFinite(value) && value > 0 && value <= 100)
+                          patchSelected({ standoffMm: value });
+                      }}
+                      className="h-7 text-xs"
+                    />
+                    <span className="text-muted-foreground">
+                      Header or spacer gap, e.g. a display module raised to its enclosure window.
                     </span>
                   </label>
 
@@ -2671,7 +2718,7 @@ export function PcbCanvas({
                               }}
                             >
                               <option value="">
-                                {padByPin(selected.libraryId, pin)
+                                {padByPin(selected.libraryId, pin, doc.library)
                                   ? `Same name (${pin})`
                                   : "Choose pad — unresolved"}
                               </option>

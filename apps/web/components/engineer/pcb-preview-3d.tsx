@@ -41,7 +41,7 @@ function buildScene(doc: PcbDoc): THREE.Group {
   );
 
   for (const fp of doc.footprints) {
-    const def = footprintDef(fp.libraryId);
+    const def = footprintDef(fp.libraryId, doc.library);
     if (!def) continue;
 
     const group = new THREE.Group();
@@ -57,13 +57,14 @@ function buildScene(doc: PcbDoc): THREE.Group {
         new THREE.BoxGeometry(def.bodyWMm, height, def.bodyHMm),
         new THREE.MeshStandardMaterial({ color: BODY, roughness: 0.55, metalness: 0.2 }),
       );
-      body.position.y = (sideSign * height) / 2;
+      const standoff = fp.standoffMm ?? 0;
+      body.position.y = sideSign * (standoff + height / 2);
       group.add(body);
       const label = new THREE.Mesh(
         new THREE.BoxGeometry(Math.min(def.bodyWMm, 2.2), 0.02, 0.4),
         new THREE.MeshStandardMaterial({ color: SILK, roughness: 0.8 }),
       );
-      label.position.y = sideSign * (height + 0.02);
+      label.position.y = sideSign * (standoff + height + 0.02);
       group.add(label);
     } else {
       // A flat footprint outline communicates placement without inventing a package height.

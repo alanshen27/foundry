@@ -19,8 +19,6 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-
 export type DemoToolName = "get_project_state" | "text_to_cad" | "add_part_to_assembly";
 
 export type DemoChatItem =
@@ -138,18 +136,11 @@ export function DemoChatSidebar({
           <Hash className="text-muted-foreground size-3.5" />
           General
         </button>
-        <span className="text-muted-foreground ml-auto flex shrink-0 items-center gap-1.5 font-mono text-[10px] tracking-[0.08em] uppercase">
-          <span
-            aria-hidden
-            className={cn("size-1.5", busy ? "bg-primary animate-pulse" : "bg-muted-foreground/45")}
-          />
-          {busy ? "Working" : "Ready"}
-        </span>
         <Button
           type="button"
           variant="ghost"
           size="icon-sm"
-          className="text-muted-foreground size-7"
+          className="text-muted-foreground ml-auto size-7"
           aria-label="Open chat in a new window"
           title="Open in a new window"
         >

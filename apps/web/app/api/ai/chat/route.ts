@@ -96,7 +96,7 @@ export async function POST(request: Request) {
       // too — but over the limit it is simply skipped, since a missing nudge
       // costs the user nothing.
       const triage = await rateLimit(policies().aiTriage, user.id);
-      if (triage.allowed && (await shouldSuggestAiPing(userText))) {
+      if (triage.allowed && (await shouldSuggestAiPing(messages))) {
         const userId = lastUserMessageId(messages) ?? `anon-${Date.now()}`;
         const tipMessage = buildAiPingTip(userId);
         await saveNewMessages({ projectId, branchId, channelId }, [tipMessage]);

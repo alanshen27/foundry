@@ -37,6 +37,17 @@ export async function readCollaborationState(
   return rows[0] ?? null;
 }
 
+/** Cheap existence probe; seeding still goes through loadCollaborationDocument. */
+export async function hasCollaborationState(
+  documentName: string,
+  db: Pick<Tx, "$queryRaw"> = prisma,
+): Promise<boolean> {
+  const rows = await db.$queryRaw<Array<{ found: number }>>`
+    SELECT 1 AS found FROM "CollaborationDocument" WHERE "documentName" = ${documentName} LIMIT 1
+  `;
+  return rows.length > 0;
+}
+
 async function lockState(tx: Tx, name: string): Promise<void> {
   // Also serializes first writes, when no row exists to SELECT FOR UPDATE.
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('foundry-collaboration'), hashtext(${name}))`;

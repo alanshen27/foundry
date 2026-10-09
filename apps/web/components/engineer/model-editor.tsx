@@ -443,7 +443,8 @@ export function ModelEditor({
   );
 
   useEffect(() => {
-    if (shared.mode !== "local" || !query.isFetched) return;
+    if ((shared.mode !== "local" && !shared.awaitingLive) || !query.isFetched) return;
+    if (shared.awaitingLive && !query.data) return;
     const serverUpdatedAt = query.data?.updatedAt
       ? new Date(query.data.updatedAt).toISOString()
       : "empty";
@@ -472,7 +473,16 @@ export function ModelEditor({
         data: next,
       });
     }
-  }, [query.data, query.isFetched, editable, projectId, branchId, focusComponentId, shared.mode]);
+  }, [
+    query.data,
+    query.isFetched,
+    editable,
+    projectId,
+    branchId,
+    focusComponentId,
+    shared.mode,
+    shared.awaitingLive,
+  ]);
 
   useEffect(() => {
     if (!doc || !focusComponentId) return;

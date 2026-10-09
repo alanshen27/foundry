@@ -698,3 +698,120 @@ export function mergeTranscriptPreferringUserTurns(
   // Keep server order, then any local-only messages (optimistic user turns not yet loaded).
   return deduplicateAssistantFailures([...server.map((m) => byId.get(m.id) ?? m), ...extras]);
 }
+
+const CONTEXT_CHAR_BUDGET = 120_000;
+const RECENT_MESSAGES = 3;
+
+function partChars(part: UIMessage["parts"][number]): number {
+  try {
+    return JSON.stringify(part).length;
+  } catch {
+    return 1_000;
+  }
+}
+
+function isImageOutput(output: unknown): boolean {
+  if (!output || typeof output !== "object") return false;
+  const record = output as Record<string, unknown>;
+  if (typeof record.key === "string") return true;
+  return (
+    Array.isArray(record.images) &&
+    record.images.some((image) => !!image && typeof image === "object" && "key" in image)
+  );
+}
+
+function omittedImageOutput(): { ok: true; omitted: string } {
+  return {
+    ok: true,
+    omitted: "Earlier image omitted. Render again if you need to see it.",
+  };
+}
+
+function shrinkToolValue(value: unknown, limit: number): unknown {
+  let json: string;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    return { omitted: "Unserializable tool data omitted." };
+  }
+  if (json.length <= limit) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { omitted: `Earlier result shortened (${json.length} chars).` };
+  }
+  const record = value as Record<string, unknown>;
+  const brief: Record<string, unknown> = {
+    omitted: `Earlier result shortened from ${json.length} chars. Re-read the file if you need the source.`,
+  };
+  for (const key of ["ok", "error", "path", "hint", "verified", "engine", "partName"]) {
+    const item = record[key];
+    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+      brief[key] = item;
+    }
+  }
+  return brief;
+}
+
+/**
+ * Bound what a long CAD thread replays to the model. Stored chat stays intact.
+ * Old tool payloads (full Python, repeated viewport PNGs) are what blow the
+ * context window; the latest image and the newest turns stay.
+ */
+export function compactHistoryForModel(
+  messages: UIMessage[],
+  options?: { charBudget?: number; keepRecent?: number },
+): UIMessage[] {
+  const charBudget = options?.charBudget ?? CONTEXT_CHAR_BUDGET;
+  const keepRecent = options?.keepRecent ?? RECENT_MESSAGES;
+  const recentFrom = Math.max(0, messages.length - keepRecent);
+  let latestImage: { message: number; part: number } | null = null;
+  messages.forEach((message, messageIndex) => {
+    message.parts.forEach((part, partIndex) => {
+      if (isToolUIPart(part) && part.state === "output-available" && isImageOutput(part.output)) {
+        latestImage = { message: messageIndex, part: partIndex };
+      }
+    });
+  });
+
+  const compacted = messages.map((message, messageIndex) => ({
+    ...message,
+    parts: message.parts.map((part, partIndex) => {
+      if (!isToolUIPart(part)) {
+        if (messageIndex < recentFrom && part.type === "text" && part.text.length > 1_500) {
+          return { ...part, text: `${part.text.slice(0, 1_500)}…` };
+        }
+        return part;
+      }
+      const keepImage = latestImage?.message === messageIndex && latestImage.part === partIndex;
+      const next = { ...part };
+      if (part.state === "output-available" && isImageOutput(part.output) && !keepImage) {
+        next.output = omittedImageOutput();
+      } else if (messageIndex < recentFrom && "output" in part && part.output !== undefined) {
+        next.output = shrinkToolValue(part.output, 1_500);
+      }
+      if (messageIndex < recentFrom && "input" in part && part.input !== undefined) {
+        next.input = shrinkToolValue(part.input, 800);
+      }
+      return next;
+    }),
+  }));
+
+  let used = compacted.reduce(
+    (sum, message) => sum + message.parts.reduce((inner, part) => inner + partChars(part), 0),
+    0,
+  );
+  if (used <= charBudget) return compacted;
+
+  for (let messageIndex = 0; messageIndex < compacted.length && used > charBudget; messageIndex++) {
+    const message = compacted[messageIndex]!;
+    if (message.role === "user" && messageIndex >= recentFrom) continue;
+    message.parts = message.parts.map((part) => {
+      if (!isToolUIPart(part) || part.state !== "output-available") return part;
+      if (latestImage?.message === messageIndex && isImageOutput(part.output)) return part;
+      const before = partChars(part);
+      const next = { ...part, output: shrinkToolValue(part.output, 400) };
+      used += partChars(next) - before;
+      return next;
+    });
+  }
+  return compacted;
+}

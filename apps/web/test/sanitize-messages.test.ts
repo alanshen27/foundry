@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ModelMessage, UIMessage } from "ai";
 import {
+  compactHistoryForModel,
   markFailedAssistantMessages,
   pruneEmptyAssistantMessages,
   repairInterruptedToolParts,
@@ -404,6 +405,90 @@ describe("stripOrphanToolCalls", () => {
         input: {},
       },
     ]);
+  });
+});
+
+describe("compactHistoryForModel", () => {
+  it("drops earlier screenshots and shortens old scripts, keeping the latest image and recent text", () => {
+    const script = "result = Box(1, 1, 1)\n".repeat(200);
+    const messages = [
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-render_model_views",
+            toolCallId: "call_old_view",
+            state: "output-available",
+            input: { views: ["iso"] },
+            output: { ok: true, images: [{ view: "iso", key: "renders/old.png" }] },
+          },
+          {
+            type: "tool-save_cad_script",
+            toolCallId: "call_old_script",
+            state: "output-available",
+            input: { script },
+            output: { ok: true, path: "parts/lid/main.py", script },
+          },
+        ],
+      },
+      { id: "u1", role: "user", parts: [{ type: "text", text: "make the screen flush" }] },
+      {
+        id: "a2",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-render_model_views",
+            toolCallId: "call_new_view",
+            state: "output-available",
+            input: { views: ["top"] },
+            output: { ok: true, images: [{ view: "top", key: "renders/new.png" }] },
+          },
+        ],
+      },
+      { id: "u2", role: "user", parts: [{ type: "text", text: "@AI the gap is still there" }] },
+    ] as unknown as UIMessage[];
+
+    const compacted = compactHistoryForModel(messages);
+    const oldView = compacted[0]!.parts[0] as { output: { images?: unknown; omitted?: string } };
+    const oldScript = compacted[0]!.parts[1] as {
+      input: { script?: string };
+      output: { path?: string; script?: string; omitted?: string };
+    };
+    const newView = compacted[2]!.parts[0] as { output: { images: { key: string }[] } };
+
+    expect(oldView.output.images).toBeUndefined();
+    expect(oldView.output.omitted).toMatch(/image omitted/i);
+    expect(oldScript.output.script).toBeUndefined();
+    expect(oldScript.output.path).toBe("parts/lid/main.py");
+    expect(JSON.stringify(oldScript.input)).not.toContain("Box");
+    expect(newView.output.images[0]!.key).toBe("renders/new.png");
+    expect(compacted[3]).toEqual(messages[3]);
+  });
+
+  it("shrinks recent tool output when the thread is still over the budget", () => {
+    const blob = "x".repeat(5_000);
+    const messages = [
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-get_project_state",
+            toolCallId: "call_state",
+            state: "output-available",
+            input: {},
+            output: { ok: true, path: "assembly/product.py", script: blob },
+          },
+        ],
+      },
+    ] as unknown as UIMessage[];
+
+    const compacted = compactHistoryForModel(messages, { charBudget: 1_000, keepRecent: 1 });
+    const output = (compacted[0]!.parts[0] as { output: { script?: string; omitted?: string } })
+      .output;
+    expect(output.script).toBeUndefined();
+    expect(output.omitted).toMatch(/shortened/i);
   });
 });
 

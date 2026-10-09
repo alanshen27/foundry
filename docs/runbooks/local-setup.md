@@ -11,7 +11,9 @@
    storage always uses Supabase Storage — create a private `artifacts`
    bucket). Set `AUTH_MODE=supabase` for Supabase Auth, or keep
    `AUTH_MODE=local` for the LOCAL credentials adapter. For presence set
-   `NEXT_PUBLIC_REALTIME_MODE=supabase`.
+   `NEXT_PUBLIC_REALTIME_MODE=supabase`. `OPENROUTER_API_KEY` enables Jev
+   triage, which decides whether a chat message without `@AI` should nudge
+   the user to ping the copilot.
 5. Run `pnpm db:generate`, `pnpm db:migrate:deploy`, and `pnpm db:seed`.
    The seed includes the **Environmental Monitor** project used to demo the
    product graph (Engineer > Sourcing > the branch icon on the battery row).
@@ -62,6 +64,14 @@ The table is required even if `NEXT_PUBLIC_COLLAB_URL` is unset. Web, chat worke
 and Hocuspocus must use the same database, Redis instance, and `AUTH_SECRET`.
 Set `NEXT_PUBLIC_COLLAB_URL=ws://localhost:1234` for live editing.
 See [the workflow runbook](connected-engineering.md) for behavior and checks.
+
+AI and API writes reach open editors in two ways. Hocuspocus pushes them into
+live Yjs rooms (Redis pub/sub, with a 5 s durable catch-up). Every committed
+write also sends a content-free `project-changed` Supabase Realtime broadcast
+on `foundry:project:<projectId>:<branchId>` (REST endpoint, coalesced 250 ms)
+when `NEXT_PUBLIC_REALTIME_MODE=supabase`. Editors not on a synced room (collab
+server down, connecting, or offline for more than 3 s) show the refetched
+committed snapshot read-only, so AI edits still appear as they land.
 
 ## Troubleshooting
 

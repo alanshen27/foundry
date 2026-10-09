@@ -21,7 +21,7 @@ every service). There are no per-service env vars beyond that link.
    - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
      `SUPABASE_SERVICE_ROLE_KEY`
    - `NEXT_PUBLIC_COLLAB_URL` — `wss://<foundry-collab hostname>`
-   - Optional: `OPENAI_API_KEY`, `ZOO_API_TOKEN`, `V0_API_KEY`,
+   - Optional: `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ZOO_API_TOKEN`, `V0_API_KEY`,
      `FOUNDRY_DEFAULT_WORKSPACE_SLUG`
 4. Apply schema against production Postgres (`pnpm db:push` locally with
    production `DIRECT_URL`, or run Prisma from a one-off shell).

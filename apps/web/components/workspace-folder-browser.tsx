@@ -3,7 +3,16 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ChevronRight, FolderPlus, Loader2, MoreHorizontal, Plus } from "lucide-react";
+import {
+  ArrowUpRight,
+  Box,
+  ChevronRight,
+  Folder,
+  FolderPlus,
+  Loader2,
+  MoreHorizontal,
+  Plus,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -17,13 +26,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/empty-state";
 import { FolderColorPicker } from "@/components/folder-color-picker";
-import { MatrixCover, MatrixScreen } from "@/components/matrix-cover";
+import { MatrixScreen } from "@/components/matrix-cover";
 import { MoveToFolderDialog } from "@/components/move-to-folder-dialog";
 import { ProjectCreateBar } from "@/components/project-create-bar";
 import { ShareButton } from "@/components/share-button";
 import { folderColorStyle, type FolderColor } from "@/lib/folder-color";
 import { childFolders, folderBreadcrumbs, type FolderRef } from "@/lib/workspace-folders";
-import { FolderGlyph } from "@/components/signal-icons";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
@@ -39,9 +47,8 @@ const STAGE_DOT: Record<string, string> = {
   STALE: "bg-orange-400",
 };
 
-/** Shared face + caption rhythm so folder and project tiles align. */
-const TILE_FACE = "relative aspect-square overflow-hidden";
-const TILE_CAPTION = "border-border flex h-[4.5rem] flex-col justify-between border-t px-2.5 py-2";
+const TILE_FACE = "relative aspect-[16/10] overflow-hidden";
+const TILE_CAPTION = "border-border flex flex-col gap-4 border-t p-4";
 
 export type BrowserProject = {
   id: string;
@@ -56,10 +63,10 @@ export type BrowserProject = {
   stale?: boolean;
 };
 
-/** One cell of a preview tile: the 3D render, or a title-colored matrix cover. */
+/** Keep real geometry legible; missing previews get a quiet, explicit placeholder. */
 function PreviewFace({ project, className }: { project: BrowserProject; className?: string }) {
   const [broken, setBroken] = useState(false);
-  // Skip stale thumbs (wrong format / outdated model) so matrix covers show
+  // Skip stale thumbs (wrong format / outdated model) so the placeholder shows
   // until a fresh render lands — avoids caching Zoo error frames on cards.
   if (project.thumbnailUrl && !project.stale && !broken) {
     return (
@@ -67,47 +74,32 @@ function PreviewFace({ project, className }: { project: BrowserProject; classNam
       <img
         src={project.thumbnailUrl}
         alt=""
-        className={cn("size-full scale-125 object-cover", className)}
+        className={cn("size-full object-cover", className)}
         loading="lazy"
         onError={() => setBroken(true)}
       />
     );
   }
-  return <MatrixCover seed={project.name} className={className} />;
-}
-
-function FolderTileFace({ folder }: { folder: FolderRef }) {
-  const style = folderColorStyle(folder.color, folder.id);
-  const signal = !folder.color || folder.color === "orange";
-  const voidColor = signal ? "#ff5a00" : "var(--background)";
-  const dot = signal ? "#faf9f5" : "currentColor";
   return (
     <div
       className={cn(
-        TILE_FACE,
-        "rounded-none",
-        signal ? "bg-primary text-[#faf9f5]" : cn(style.tile, "text-current"),
+        "bg-muted/35 text-muted-foreground relative flex size-full flex-col items-center justify-center gap-3",
+        className,
       )}
-      style={{ ["--glyph-void" as string]: voidColor }}
     >
-      <MatrixScreen color={dot} opacity={signal ? 0.4 : 0.28} />
-      <span className="absolute top-2 left-2 z-[1] font-mono text-[10px] tracking-[0.14em] uppercase opacity-70">
-        DIR
+      <MatrixScreen color="currentColor" opacity={0.06} />
+      <Box className="size-10 opacity-40" strokeWidth={1} aria-hidden />
+      <span className="font-mono text-[10px] tracking-[0.08em] uppercase opacity-70">
+        No preview yet
       </span>
-      <div className="absolute inset-0 z-[1] flex items-center justify-center">
-        <FolderGlyph className="size-[48%] max-w-[5rem]" />
-      </div>
     </div>
   );
 }
 
 function ProjectTileFace({ project, rendering }: { project: BrowserProject; rendering: boolean }) {
-  const hasThumb = Boolean(project.thumbnailUrl && !project.stale);
   return (
     <div className={cn(TILE_FACE, "bg-muted")}>
       <PreviewFace project={project} />
-      {/* Keep a light matrix screen over 3D thumbs so every card reads as signal UI. */}
-      {hasThumb ? <MatrixScreen color="#faf9f5" opacity={0.2} className="z-[1]" /> : null}
       {rendering ? (
         <div
           className="bg-background/70 absolute inset-0 z-[2] flex items-center justify-center backdrop-blur-sm"
@@ -122,16 +114,23 @@ function ProjectTileFace({ project, rendering }: { project: BrowserProject; rend
 
 function StageDots({ project }: { project: BrowserProject }) {
   return (
-    <div className="flex h-2.5 items-center gap-1" aria-label="Stage progress">
+    <div
+      role="img"
+      className="flex items-center gap-1.5"
+      aria-label={STAGES.map(
+        (stage) =>
+          `${stage}: ${(project.stageStates.find((state) => state.stage === stage)?.status ?? "NOT_STARTED").replaceAll("_", " ").toLowerCase()}`,
+      ).join(", ")}
+    >
       {STAGES.map((stage, i) => {
         const state = project.stageStates.find((s) => s.stage === stage);
         const status = state?.status ?? "NOT_STARTED";
         return (
           <div key={stage} className="flex items-center gap-1">
-            {i > 0 ? <span className="bg-border mx-0.5 h-px w-2" aria-hidden /> : null}
+            {i > 0 ? <span className="bg-border h-px w-3" aria-hidden /> : null}
             <span
               title={`${stage}: ${status.replaceAll("_", " ").toLowerCase()}`}
-              className={cn("size-1.5 rounded-[1px]", STAGE_DOT[status] ?? STAGE_DOT.NOT_STARTED)}
+              className={cn("size-1.5 rounded-full", STAGE_DOT[status] ?? STAGE_DOT.NOT_STARTED)}
             />
           </div>
         );
@@ -289,7 +288,11 @@ export function WorkspaceFolderBrowser({
   function submitFolder(e: FormEvent) {
     e.preventDefault();
     if (!folderName.trim()) return;
-    createFolder.mutate({ workspaceId, name: folderName.trim(), parentId: folderId });
+    createFolder.mutate({
+      workspaceId,
+      name: folderName.trim(),
+      parentId: folderId,
+    });
   }
 
   function submitProject(e: FormEvent) {
@@ -305,38 +308,50 @@ export function WorkspaceFolderBrowser({
 
   return (
     <div>
-      <div className="mb-6 flex items-start justify-between gap-4">
+      <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <nav
-            aria-label="Breadcrumb"
-            className="text-muted-foreground mb-2 flex flex-wrap items-center gap-1 font-mono text-[11px] tracking-[0.04em]"
-          >
-            <Link href={`/w/${workspaceSlug}`} className="hover:text-foreground transition-colors">
-              {workspaceName}
-            </Link>
-            {crumbs.map((c) => (
-              <span key={c.id} className="flex items-center gap-1">
-                <ChevronRight className="size-3 opacity-50" />
-                <Link
-                  href={`/w/${workspaceSlug}/folders/${c.id}`}
-                  className={cn(
-                    "hover:text-foreground transition-colors",
-                    c.id === folderId && "text-foreground font-medium",
-                  )}
-                >
-                  {c.name}
-                </Link>
-              </span>
-            ))}
-          </nav>
-          <h1 className="font-mono text-[28px] font-medium tracking-[-0.04em]">{currentName}</h1>
-          <p className="text-muted-foreground mt-1 font-mono text-[12px]">
+          {crumbs.length > 0 ? (
+            <nav
+              aria-label="Breadcrumb"
+              className="text-muted-foreground mb-2 flex flex-wrap items-center gap-1 font-mono text-[11px] tracking-[0.04em]"
+            >
+              <Link
+                href={`/w/${workspaceSlug}`}
+                className="hover:text-foreground transition-colors"
+              >
+                {workspaceName}
+              </Link>
+              {crumbs.map((c) => (
+                <span key={c.id} className="flex items-center gap-1">
+                  <ChevronRight className="size-3 opacity-50" />
+                  <Link
+                    href={`/w/${workspaceSlug}/folders/${c.id}`}
+                    className={cn(
+                      "hover:text-foreground transition-colors",
+                      c.id === folderId && "text-foreground font-medium",
+                    )}
+                  >
+                    {c.name}
+                  </Link>
+                </span>
+              ))}
+            </nav>
+          ) : null}
+          {!folderId ? (
+            <p className="text-muted-foreground mb-2 font-mono text-[10px] tracking-[0.14em] uppercase">
+              Workspace
+            </p>
+          ) : null}
+          <h1 className="break-words text-[30px] leading-tight font-medium tracking-[-0.04em]">
+            {currentName}
+          </h1>
+          <p className="text-muted-foreground mt-2 text-[13px]">
             {foldersHere.length} folder{foldersHere.length === 1 ? "" : "s"}
             {" · "}
             {projectsHere.length} project{projectsHere.length === 1 ? "" : "s"}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
             variant="outline"
@@ -349,6 +364,7 @@ export function WorkspaceFolderBrowser({
           </Button>
           <Button
             type="button"
+            variant="outline"
             size="sm"
             className="gap-1.5"
             onClick={() => setNewProjectOpen(true)}
@@ -357,7 +373,12 @@ export function WorkspaceFolderBrowser({
             Blank project
           </Button>
           {!folderId ? (
-            <ShareButton workspaceId={workspaceId} workspaceName={workspaceName} variant="invite" />
+            <ShareButton
+              workspaceId={workspaceId}
+              workspaceName={workspaceName}
+              variant="invite"
+              appearance="outline"
+            />
           ) : null}
         </div>
       </div>
@@ -370,8 +391,15 @@ export function WorkspaceFolderBrowser({
       />
 
       {empty ? (
-        <EmptyState title="This folder is empty" className="min-h-64">
-          <p>Create a folder or project to organize work here.</p>
+        <EmptyState
+          title={folderId ? "This folder is empty" : "Your first project starts here"}
+          className="min-h-56"
+        >
+          <p>
+            {folderId
+              ? "Create a project here, or move one into this folder."
+              : "Describe a product above, or start with a blank project."}
+          </p>
           <div className="text-foreground mt-3 flex justify-center gap-2">
             <Button
               type="button"
@@ -395,88 +423,137 @@ export function WorkspaceFolderBrowser({
           </div>
         </EmptyState>
       ) : (
-        // Auto-fill off the container, not the viewport: with a sidebar in the
-        // way, breakpoint columns guess the available width badly.
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(10.5rem,1fr))] gap-2">
-          {foldersHere.map((folder) => (
-            <div key={folder.id} className="group relative">
-              <Link href={`/w/${workspaceSlug}/folders/${folder.id}`} className="block">
-                <Card className="gap-0 py-0 transition-colors hover:ring-foreground/30">
-                  <FolderTileFace folder={folder} />
-                  <div className={TILE_CAPTION}>
-                    <div className="min-w-0">
-                      <p className="truncate font-mono text-[12px] font-medium tracking-[-0.02em]">
-                        {folder.name}
-                      </p>
-                      <p className="text-muted-foreground mt-0.5 truncate font-mono text-[10px] tracking-[0.04em] uppercase">
-                        {folderSummary(folder.id)}
-                      </p>
-                    </div>
-                    <div className="h-2.5" aria-hidden />
+        <div className="space-y-8">
+          {foldersHere.length > 0 ? (
+            <section aria-labelledby="workspace-folders-heading">
+              <div className="mb-3 flex items-center gap-2.5">
+                <h2 id="workspace-folders-heading" className="text-[13px] font-medium">
+                  Folders
+                </h2>
+                <span className="text-muted-foreground font-mono text-[11px]">
+                  {foldersHere.length}
+                </span>
+              </div>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,15rem),1fr))] gap-3">
+                {foldersHere.map((folder) => (
+                  <div key={folder.id} className="group relative">
+                    <Link href={`/w/${workspaceSlug}/folders/${folder.id}`} className="block">
+                      <Card className="flex-row items-center gap-3 p-4 pr-12 transition-colors hover:bg-muted/40 hover:ring-foreground/25">
+                        <div
+                          className={cn(
+                            "flex size-10 shrink-0 items-center justify-center",
+                            folderColorStyle(folder.color, folder.id).tile,
+                          )}
+                        >
+                          <Folder className="size-5" strokeWidth={1.5} aria-hidden />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-[13px] font-medium" title={folder.name}>
+                            {folder.name}
+                          </p>
+                          <p className="text-muted-foreground mt-1 truncate text-[12px]">
+                            {folderSummary(folder.id)}
+                          </p>
+                        </div>
+                      </Card>
+                    </Link>
+                    <ItemMenu
+                      open={menuFor === `f:${folder.id}`}
+                      onOpenChange={(open) => setMenuFor(open ? `f:${folder.id}` : null)}
+                      color={folder.color}
+                      onSetColor={(color) => setColorMut.mutate({ folderId: folder.id, color })}
+                      onRename={() => {
+                        setRenameFolder(folder);
+                        setRenameValue(folder.name);
+                        setMenuFor(null);
+                      }}
+                      onMove={() => {
+                        setMoveFolder(folder);
+                        setMenuFor(null);
+                      }}
+                      onDelete={() => {
+                        if (
+                          confirm(
+                            `Delete “${folder.name}”? Projects and subfolders move up one level.`,
+                          )
+                        ) {
+                          deleteMut.mutate({ folderId: folder.id });
+                        }
+                        setMenuFor(null);
+                      }}
+                    />
                   </div>
-                </Card>
-              </Link>
-              <ItemMenu
-                open={menuFor === `f:${folder.id}`}
-                onOpenChange={(open) => setMenuFor(open ? `f:${folder.id}` : null)}
-                color={folder.color}
-                onSetColor={(color) => setColorMut.mutate({ folderId: folder.id, color })}
-                onRename={() => {
-                  setRenameFolder(folder);
-                  setRenameValue(folder.name);
-                  setMenuFor(null);
-                }}
-                onMove={() => {
-                  setMoveFolder(folder);
-                  setMenuFor(null);
-                }}
-                onDelete={() => {
-                  if (
-                    confirm(`Delete “${folder.name}”? Projects and subfolders move up one level.`)
-                  ) {
-                    deleteMut.mutate({ folderId: folder.id });
-                  }
-                  setMenuFor(null);
-                }}
-              />
-            </div>
-          ))}
+                ))}
+              </div>
+            </section>
+          ) : null}
 
-          {projectsHere.map((project) => (
-            <div key={project.id} className="group relative">
-              <Link
-                href={`/w/${workspaceSlug}/projects/${project.slug}/engineer?view=assembly`}
-                className="block"
-              >
-                <Card className="gap-0 py-0 transition-colors hover:ring-foreground/30">
-                  <ProjectTileFace project={project} rendering={renderingIds.has(project.id)} />
-                  <div className={TILE_CAPTION}>
-                    <div className="min-w-0">
-                      <p className="truncate font-mono text-[12px] font-medium tracking-[-0.02em]">
-                        {project.name}
-                      </p>
-                      <p className="text-muted-foreground mt-0.5 truncate font-mono text-[10px] tracking-[0.04em] uppercase">
-                        {project.description || "Project"}
-                      </p>
-                    </div>
-                    <StageDots project={project} />
+          {projectsHere.length > 0 ? (
+            <section aria-labelledby="workspace-projects-heading">
+              <div className="border-border mb-4 flex items-center justify-between border-b pb-3">
+                <div className="flex items-center gap-2.5">
+                  <h2 id="workspace-projects-heading" className="text-[13px] font-medium">
+                    Projects
+                  </h2>
+                  <span className="text-muted-foreground font-mono text-[11px]">
+                    {projectsHere.length}
+                  </span>
+                </div>
+                <span className="text-muted-foreground font-mono text-[10px] tracking-[0.06em] uppercase">
+                  A–Z
+                </span>
+              </div>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,16rem),1fr))] gap-4">
+                {projectsHere.map((project) => (
+                  <div key={project.id} className="group relative">
+                    <Link
+                      href={`/w/${workspaceSlug}/projects/${project.slug}/engineer?view=assembly`}
+                      className="block"
+                    >
+                      <Card className="gap-0 py-0 transition-colors hover:ring-foreground/30">
+                        <ProjectTileFace
+                          project={project}
+                          rendering={renderingIds.has(project.id)}
+                        />
+                        <div className={TILE_CAPTION}>
+                          <div className="min-w-0">
+                            <p
+                              className="line-clamp-2 min-h-10 text-[14px] leading-5 font-medium tracking-[-0.015em]"
+                              title={project.name}
+                            >
+                              {project.name}
+                            </p>
+                            <p className="text-muted-foreground mt-1.5 truncate text-[12px]">
+                              {project.description || "No description yet"}
+                            </p>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <StageDots project={project} />
+                            <ArrowUpRight
+                              className="text-muted-foreground size-3.5 transition-colors group-hover:text-primary"
+                              aria-hidden
+                            />
+                          </div>
+                        </div>
+                      </Card>
+                    </Link>
+                    <ItemMenu
+                      open={menuFor === `p:${project.id}`}
+                      onOpenChange={(open) => setMenuFor(open ? `p:${project.id}` : null)}
+                      onMove={() => {
+                        setMoveProject(project);
+                        setMenuFor(null);
+                      }}
+                      onRefreshPreview={() => {
+                        setMenuFor(null);
+                        void renderPreview(project.id);
+                      }}
+                    />
                   </div>
-                </Card>
-              </Link>
-              <ItemMenu
-                open={menuFor === `p:${project.id}`}
-                onOpenChange={(open) => setMenuFor(open ? `p:${project.id}` : null)}
-                onMove={() => {
-                  setMoveProject(project);
-                  setMenuFor(null);
-                }}
-                onRefreshPreview={() => {
-                  setMenuFor(null);
-                  void renderPreview(project.id);
-                }}
-              />
-            </div>
-          ))}
+                ))}
+              </div>
+            </section>
+          ) : null}
         </div>
       )}
 
@@ -590,7 +667,10 @@ export function WorkspaceFolderBrowser({
             onSubmit={(e) => {
               e.preventDefault();
               if (renameFolder && renameValue.trim()) {
-                renameMut.mutate({ folderId: renameFolder.id, name: renameValue.trim() });
+                renameMut.mutate({
+                  folderId: renameFolder.id,
+                  name: renameValue.trim(),
+                });
               }
             }}
             className="flex flex-col gap-3"
@@ -641,7 +721,10 @@ export function WorkspaceFolderBrowser({
         pending={moveProjectMut.isPending}
         onMove={(targetFolderId) => {
           if (moveProject) {
-            moveProjectMut.mutate({ projectId: moveProject.id, folderId: targetFolderId });
+            moveProjectMut.mutate({
+              projectId: moveProject.id,
+              folderId: targetFolderId,
+            });
           }
         }}
       />
@@ -678,7 +761,7 @@ function ItemMenu({
           variant="ghost"
           size="icon-sm"
           className={cn(
-            "bg-background/80 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100",
+            "bg-card text-muted-foreground opacity-100 ring-1 ring-border transition-colors hover:text-foreground sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus-visible:opacity-100",
             open && "opacity-100",
           )}
           aria-label="More actions"

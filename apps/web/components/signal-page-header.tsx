@@ -28,7 +28,7 @@ export function SignalPageHeader({
       </div>
       <div className="relative px-5 py-5">
         <p className="font-mono text-[11px] tracking-[0.14em] uppercase opacity-80">{code}</p>
-        <h1 className="mt-1 font-mono text-[28px] font-medium tracking-[-0.04em]">{title}</h1>
+        <h1 className="mt-1 text-[28px] font-medium tracking-[-0.03em]">{title}</h1>
         {subtitle ? <p className="mt-1.5 max-w-xl text-[14px] opacity-85">{subtitle}</p> : null}
       </div>
     </div>

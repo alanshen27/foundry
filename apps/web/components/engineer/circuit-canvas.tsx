@@ -468,7 +468,8 @@ function CircuitCanvasInner({ projectId, branchId, canEdit: allowEdit }: CanvasP
 
   // Adopt server state (e.g. copilot edits) whenever we have no unsaved edits.
   useEffect(() => {
-    if (shared.mode !== "local" || dirtyRef.current) return;
+    if ((shared.mode !== "local" && !shared.awaitingLive) || dirtyRef.current) return;
+    if (shared.awaitingLive && !query.data) return;
     const doc = query.data ? normalizeCircuitDoc(query.data.data) : EMPTY_CIRCUIT;
     sharedBaseRef.current = doc;
     const graph = docToGraph(doc, canEdit);
@@ -477,7 +478,7 @@ function CircuitCanvasInner({ projectId, branchId, canEdit: allowEdit }: CanvasP
     setGroups(doc.groups);
     setSketchFileId(doc.sketchFileId ?? null);
     setPartSpecs(doc.models);
-  }, [query.data, canEdit, setNodes, setEdges, shared.mode]);
+  }, [query.data, canEdit, setNodes, setEdges, shared.mode, shared.awaitingLive]);
 
   useEffect(() => {
     if (shared.mode !== "live" || !shared.ready || !dirtyRef.current) return;

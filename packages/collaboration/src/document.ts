@@ -213,7 +213,7 @@ function hunks(changes: Change[]): TextHunk[] {
   return out;
 }
 
-function checkedDiff(before: string, after: string): Change[] {
+function tryDiff(before: string, after: string): Change[] | null {
   // Anchor unchanged ends first. Without this, a shortest character diff can
   // match the 'w' inside an inserted 'new ' to the 'w' in baseline 'world',
   // splitting a peer's insertion when that baseline word is replaced.
@@ -231,8 +231,7 @@ function checkedDiff(before: string, after: string): Change[] {
     after.slice(prefix, after.length - suffix),
     { timeout: 200, maxEditLength: 20_000 },
   );
-  if (!changes)
-    throw new Error("Text change is too large to merge safely; split it into smaller edits");
+  if (!changes) return null;
   return [
     ...(prefix
       ? [{ value: before.slice(0, prefix), count: prefix, added: false, removed: false }]
@@ -251,6 +250,13 @@ function checkedDiff(before: string, after: string): Change[] {
   ];
 }
 
+function replaceText(text: Y.Text, after: string): () => void {
+  return () => {
+    if (text.length > 0) text.delete(0, text.length);
+    if (after.length > 0) text.insert(0, after);
+  };
+}
+
 /**
  * Apply only the author's multi-hunk edit, rebased onto the current shared text.
  * Delete surviving baseline characters, never text inserted by another author.
@@ -263,8 +269,23 @@ function prepareTextSnapshot(text: Y.Text, before: string, after: string): () =>
     throw new Error("Design text exceeds the size limit");
   const current = text.toString();
   if (before === after || current === after) return () => {};
-  const desired = hunks(checkedDiff(before, after));
-  const remote = checkedDiff(before, current);
+  const desiredChanges = tryDiff(before, after);
+  // A wholesale rewrite has no peer hunks to protect when the room still
+  // matches the author's baseline. Replace it. Rebase only when someone else
+  // edited, and refuse when that rebase cannot be computed.
+  if (!desiredChanges) {
+    if (current !== before) {
+      throw new Error(
+        "This file changed during the rewrite, and the rewrite is too large to merge with that edit",
+      );
+    }
+    return replaceText(text, after);
+  }
+  const remote = tryDiff(before, current);
+  if (!remote) {
+    throw new Error("This file changed during the rewrite, and that edit is too large to merge");
+  }
+  const desired = hunks(desiredChanges);
   const existing = hunks(remote);
   const matches: Array<{ start: number; end: number; current: number }> = [];
   let original = 0,

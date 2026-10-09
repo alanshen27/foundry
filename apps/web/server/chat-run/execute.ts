@@ -15,7 +15,7 @@ import { buildGraphTools } from "@/server/ai/graph-tools";
 import { addStepUsage, emptyUsage, recordRunUsage } from "@/server/ai-usage";
 import { createLogger } from "@foundry/observability";
 import { appOrigin } from "@/server/app-origin";
-import { COPILOT_SYSTEM_PROMPT } from "./prompt";
+import { COPILOT_SYSTEM_PROMPT, MAX_RUN_STEPS, finalStepSettings } from "./prompt";
 import {
   checkpointRunMessages,
   persistFailedRunFromEvents,
@@ -26,10 +26,11 @@ import { createCadProgressEmitter } from "./cad-progress";
 import { createCadDraftEmitter } from "./cad-draft";
 import { withLiveToolDrafts } from "./tool-draft";
 import { maxRunEventSeq, publishRunChunks, publishRunFinished, publishRunStarted } from "./publish";
-import { createRunEventWriter } from "./event-writer";
+import { createRunEventWriter, isPublishedRunChunk } from "./event-writer";
 import {
   markFailedAssistantMessages,
   markCancelledAssistantMessages,
+  compactHistoryForModel,
   pairToolCallsWithResults,
   sanitizeUiMessagesForModel,
   stripAllToolParts,
@@ -79,6 +80,13 @@ function isMissingProviderReasoningError(err: unknown): boolean {
   return /(?:without|missing).*required.*reasoning.*item|reasoning.*item.*required/i.test(message);
 }
 
+function isContextLengthError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /context window|context length|maximum context|too many tokens|input exceeds/i.test(
+    message,
+  );
+}
+
 /** OpenAI 400 when the same `msg_` / `fc_` / `ws_` id appears twice in input. */
 function isDuplicateProviderItemError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -91,7 +99,7 @@ async function toModelMessages(
 
   tools: ToolSet,
 ): Promise<{ ui: UIMessage[]; model: ModelMessage[] }> {
-  const sanitized = sanitizeUiMessagesForModel(uiMessages);
+  const sanitized = compactHistoryForModel(sanitizeUiMessagesForModel(uiMessages));
   try {
     const model = pairToolCallsWithResults(
       await convertToModelMessages(sanitized, {
@@ -445,10 +453,8 @@ async function executeClaimedChatRun(
         onError: ({ error }) => {
           streamError = error;
         },
-        // A full bootstrap (brief → schematic → PCB → parts → assembly →
-        // renders → fixes) can legitimately need ~20 steps; a low cap makes
-        // the run stop mid-build with partial output.
-        stopWhen: stepCountIs(24),
+        stopWhen: stepCountIs(MAX_RUN_STEPS),
+        prepareStep: ({ stepNumber }) => finalStepSettings(stepNumber),
         ...(env.AI_MAX_OUTPUT_TOKENS ? { maxOutputTokens: env.AI_MAX_OUTPUT_TOKENS } : {}),
         onStepFinish: ({ toolCalls, toolResults, finishReason, usage: stepUsage }) => {
           usage = addStepUsage(usage, stepUsage);
@@ -548,6 +554,7 @@ async function executeClaimedChatRun(
           if (!["start", "start-step", "finish-step", "finish"].includes(value.type)) {
             attemptProducedContent = true;
           }
+          if (!isPublishedRunChunk(value)) continue;
           // Enqueue immediately; only pause consumption when the bounded
           // buffer fills. Progress must not delay completed tool results.
           await enqueueChunk(value);
@@ -575,39 +582,64 @@ async function executeClaimedChatRun(
     try {
       await runStream(rawMessages, prepared.model);
     } catch (err) {
-      // convertToLanguageModelPrompt throws here once the stream starts.
-      const missingItem = isMissingProviderItemError(err) || isMissingProviderReasoningError(err);
-      const duplicateItem = isDuplicateProviderItemError(err);
-      const recoverable =
-        missingItem || duplicateItem || isMissingToolResultsError(err) || isInvalidPromptError(err);
-      // Never replay an attempt that has already issued tools or text; its
-      // writes may have committed and replaying could duplicate real work.
-      if (!recoverable || attemptProducedContent || abort.signal.aborted) throw err;
-      runLog.warn(
-        duplicateItem
-          ? "duplicate provider item id; retrying without provider-executed tool parts"
-          : missingItem
-            ? "stale provider item reference; retrying without provider-executed tool parts"
-            : "prompt/tool history error during stream; retrying without tool parts",
-        { err },
-      );
-      // Reasoning / itemIds are already stripped in sanitize. A missing or
-      // duplicate item id after that is almost always a provider-executed tool
-      // (web_search) still leaking references.
-      const stripped =
-        missingItem || duplicateItem
-          ? stripProviderExecutedToolParts(prepared.ui)
-          : stripAllToolParts(prepared.ui);
-      prepared = {
-        ui: stripped,
-        model: pairToolCallsWithResults(
-          await convertToModelMessages(stripped, {
-            tools,
-            ignoreIncompleteToolCalls: true,
-          }),
-        ),
-      };
-      await runStream(rawMessages, prepared.model);
+      // A long CAD thread can still overflow after the first shorten. Retry
+      // once with a tighter budget before the model has done any work.
+      if (isContextLengthError(err) && !attemptProducedContent && !abort.signal.aborted) {
+        runLog.warn("prompt exceeded the context window; retrying with a shorter history", {
+          err,
+        });
+        const shortened = compactHistoryForModel(prepared.ui, {
+          charBudget: 24_000,
+          keepRecent: 1,
+        });
+        prepared = {
+          ui: shortened,
+          model: pairToolCallsWithResults(
+            await convertToModelMessages(shortened, {
+              tools,
+              ignoreIncompleteToolCalls: true,
+            }),
+          ),
+        };
+        await runStream(rawMessages, prepared.model);
+      } else {
+        // convertToLanguageModelPrompt throws here once the stream starts.
+        const missingItem = isMissingProviderItemError(err) || isMissingProviderReasoningError(err);
+        const duplicateItem = isDuplicateProviderItemError(err);
+        const recoverable =
+          missingItem ||
+          duplicateItem ||
+          isMissingToolResultsError(err) ||
+          isInvalidPromptError(err);
+        // Never replay an attempt that has already issued tools or text; its
+        // writes may have committed and replaying could duplicate real work.
+        if (!recoverable || attemptProducedContent || abort.signal.aborted) throw err;
+        runLog.warn(
+          duplicateItem
+            ? "duplicate provider item id; retrying without provider-executed tool parts"
+            : missingItem
+              ? "stale provider item reference; retrying without provider-executed tool parts"
+              : "prompt/tool history error during stream; retrying without tool parts",
+          { err },
+        );
+        // Reasoning / itemIds are already stripped in sanitize. A missing or
+        // duplicate item id after that is almost always a provider-executed tool
+        // (web_search) still leaking references.
+        const stripped =
+          missingItem || duplicateItem
+            ? stripProviderExecutedToolParts(prepared.ui)
+            : stripAllToolParts(prepared.ui);
+        prepared = {
+          ui: stripped,
+          model: pairToolCallsWithResults(
+            await convertToModelMessages(stripped, {
+              tools,
+              ignoreIncompleteToolCalls: true,
+            }),
+          ),
+        };
+        await runStream(rawMessages, prepared.model);
+      }
     }
 
     if (persistenceFailed) throw persistenceError;

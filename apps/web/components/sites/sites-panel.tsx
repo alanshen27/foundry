@@ -138,24 +138,23 @@ export function SitesPanel({
     <div className="space-y-10">
       {/* Create hero — open on the page, no outer card */}
       <section className="relative">
-        <div className="relative z-10 mx-auto flex max-w-3xl flex-col items-center px-2 py-10 text-center sm:py-16">
-          <p className="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
+        <div className="relative z-10 max-w-2xl">
+          <p className="text-muted-foreground font-mono text-[11px] tracking-[0.16em] uppercase">
             Sites
           </p>
-          <h2 className="mt-3 font-mono text-[clamp(1.75rem,4vw,2.75rem)] leading-[1.05] font-medium tracking-[-0.04em]">
-            Build something Foundry
+          <h2 className="mt-2 text-[22px] leading-tight font-medium tracking-[-0.03em]">
+            Describe the page.
           </h2>
-          <p className="text-muted-foreground mt-3 max-w-lg text-[15px] leading-relaxed">
-            Describe a launch page or storefront. AI drafts it — then you refine beside live preview
-            and code.
+          <p className="text-muted-foreground mt-1.5 max-w-lg text-[14px] leading-relaxed">
+            A launch page or storefront. Foundry drafts it, then you refine beside the preview.
           </p>
 
           {simulated ? (
-            <p className="border-destructive/40 bg-destructive/10 text-destructive mt-5 border px-3 py-2 font-mono text-[11px] tracking-wide">
+            <p className="border-destructive/40 bg-destructive/10 text-destructive mt-4 border px-3 py-2 font-mono text-[11px] tracking-wide">
               SIMULATED builder — set V0_API_KEY for real generation
             </p>
           ) : (
-            <p className="text-muted-foreground mt-5 font-mono text-[11px] tracking-[0.12em] uppercase">
+            <p className="text-muted-foreground mt-3 font-mono text-[11px] tracking-[0.12em] uppercase">
               v0 connected
             </p>
           )}
@@ -170,13 +169,13 @@ export function SitesPanel({
           ) : null}
 
           <form
-            className="relative mt-8 w-full"
+            className="relative mt-5 w-full"
             onSubmit={(event) => {
               event.preventDefault();
               submit();
             }}
           >
-            <SignalGlowBackdrop />
+            <SignalGlowBackdrop className="opacity-40" />
 
             <div className="border-border relative z-10 border bg-white transition-colors focus-within:border-primary dark:bg-card">
               <textarea

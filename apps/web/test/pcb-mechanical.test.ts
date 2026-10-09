@@ -3,6 +3,7 @@ import { cadDoc, stableCadHash, updateComponentContent, upsertPartScript } from 
 import { normalizePcbSet, type PcbSet } from "@/lib/pcb/doc";
 import { pcbAssemblyKcl, pcbCadPartName, pcbPartKcl, legacyPcbPartKcl } from "@/lib/pcb/kcl";
 import { pcbMechanicalProfile, pcbMechanicalSourceHash } from "@/lib/pcb/mechanical";
+import { pcbPartPython } from "@/lib/pcb/python";
 import { syncPcbCadParts } from "@/server/assemble-product";
 
 function fixture(): PcbSet {
@@ -76,6 +77,36 @@ describe("PCB mechanical profile", () => {
     expect(profile.unknownHeightIds).toEqual(["unknown"]);
     expect(profile.components[1]).not.toHaveProperty("bodyHeightMm");
     expect(profile.components[1]).not.toHaveProperty("zMm");
+  });
+
+  it("raises package bodies by their standoff on either side of the board", () => {
+    const board = fixture().boards[0]!;
+    board.footprints[1]!.standoffMm = 1.5;
+    board.footprints[2]!.bodyHeightMm = 3;
+    board.footprints[2]!.standoffMm = 8.4;
+    const profile = pcbMechanicalProfile(board);
+    expect(profile.components[0]).toMatchObject({ bodyHeightMm: 2.5, zMm: -4 });
+    expect(profile.components[1]).toMatchObject({ bodyHeightMm: 3, zMm: 10 });
+    expect(pcbPartPython(board)).toContain("Pos(0, 0, 10) * Rot(0, 0, 0) * Box(");
+    expect(pcbMechanicalSourceHash(board)).not.toBe(pcbMechanicalSourceHash(fixture().boards[0]!));
+  });
+
+  it("drops invalid standoffs", () => {
+    const [board] = normalizePcbSet({
+      version: 2,
+      boards: [
+        {
+          id: "b",
+          board: { widthMm: 20, heightMm: 20, thicknessMm: 1.6, cornerRadiusMm: 0 },
+          footprints: [
+            { id: "a", libraryId: "R_0603", xMm: 5, yMm: 5, standoffMm: -2 },
+            { id: "b", libraryId: "R_0603", xMm: 9, yMm: 5, standoffMm: 250 },
+            { id: "c", libraryId: "R_0603", xMm: 13, yMm: 5, standoffMm: 4 },
+          ],
+        },
+      ],
+    }).boards;
+    expect(board!.footprints.map((fp) => fp.standoffMm)).toEqual([undefined, undefined, 4]);
   });
 
   it("hashes mechanical changes, ignoring tracks and board display names", () => {

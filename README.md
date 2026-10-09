@@ -162,7 +162,7 @@ use **File → Open Folder…** and select the directory containing this
 | Database                       | `DATABASE_URL`, optionally `DIRECT_URL`                       |
 | Authentication                 | `AUTH_MODE`, Supabase variables, `AUTH_SECRET` for local mode |
 | Storage                        | Supabase variables and `STORAGE_BUCKET`                       |
-| AI copilot                     | OpenAI credentials, `AI_MODEL`, `AI_LIGHT_MODEL`              |
+| AI copilot                     | OpenAI credentials, `AI_MODEL`; Jev triage via `OPENROUTER_API_KEY` |
 | Background jobs                | `REDIS_URL`                                                   |
 | Realtime presence              | `NEXT_PUBLIC_REALTIME_MODE`                                   |
 | Collaborative engineering      | `NEXT_PUBLIC_COLLAB_URL`                                      |

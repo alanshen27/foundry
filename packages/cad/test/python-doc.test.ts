@@ -177,6 +177,9 @@ describe("native Python documents", () => {
     expect(built.assembly!.instances).toHaveLength(1);
     expect(built.script).toContain("from parts.bracket.main import result as source1");
     expect(built.script).toContain("deepcopy(source1)");
+    expect(built.script).toContain(
+      `.label = "foundry:${native.components.find((c) => c.id === native.activeId)!.id}:${built.assembly!.instances[0]!.id}:bracket"`,
+    );
     expect(built.script).not.toContain("Box(");
     expect(linkedAssemblyStatus(built)).toMatchObject({
       linked: true,

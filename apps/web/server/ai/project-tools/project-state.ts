@@ -128,7 +128,7 @@ export function buildProjectStateTools(ctx: ToolContext, _kit: ToolKit) {
             // footprint centre alone.
             pcbPads: pcb?.data
               ? normalizePcbSet(pcb.data).boards.flatMap((b) =>
-                  boardPads(b.footprints).map((p) => ({
+                  boardPads(b.footprints, b.library).map((p) => ({
                     boardId: b.id,
                     refDes: p.refDes,
                     pin: p.pin,

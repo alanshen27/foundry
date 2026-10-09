@@ -185,6 +185,20 @@ describe("checkEnclosureFit — height", () => {
     expect(findings[0]!.nodes?.[0]).toEqual({ refKey: "footprint:0:J1", label: "J1" });
   });
 
+  it("stacks a part's own standoff and known body height", () => {
+    // 2 mm standoff + 1.6 mm board + (5 mm module standoff + 3 mm body) = 11.6 mm.
+    const shallow = enclosure("inner_width = 80\ninner_length = 60\ninner_height = 11");
+    const findings = checkEnclosureFit({
+      pcb: board(70, 45, [
+        { libraryId: "R_0603", refDes: "DS1", bodyHeightMm: 3, standoffMm: 5 },
+        { libraryId: "PinHeader_1x04", refDes: "J1", bodyHeightMm: 2.5 },
+      ]),
+      cad: [shallow],
+    });
+    expect(errors(findings)[0]!.message).toContain("ESTIMATED 11.6 mm");
+    expect(errors(findings)[0]!.message).toContain("8 mm DS1");
+  });
+
   it("uses the enclosure's own standoff height", () => {
     const withStandoff = enclosure(
       "inner_width = 80\ninner_length = 60\ninner_height = 14\nstandoff_height = 5",

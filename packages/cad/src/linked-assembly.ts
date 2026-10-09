@@ -7,6 +7,41 @@ import {
 import { PYTHON_ASSEMBLY_PATH, isPythonCadComponent, pythonModuleName } from "./python-project";
 import type { CadAssemblyInstance, CadDoc } from "./port";
 
+/** Viewport / assembly identity: foundry:<componentId>:<instanceId>:<name>[|<child>] */
+export function assemblyInstanceLabel(
+  part: { id: string; name: string },
+  instance: { id: string },
+): string {
+  const name = part.name.replace(/[\r\n\t:]/g, " ").trim() || "Part";
+  return `foundry:${part.id}:${instance.id}:${name}`;
+}
+
+export function parseAssemblyInstanceLabel(label: string): {
+  componentId: string;
+  instanceId: string;
+  name: string;
+  child?: string;
+} | null {
+  const match = /^foundry:([^:]+):([^:]+):(.+)$/.exec(label.trim());
+  if (!match) return null;
+  const rest = match[3]!;
+  const split = rest.indexOf("|");
+  const name = (split === -1 ? rest : rest.slice(0, split)).trim() || "Part";
+  const child = split === -1 ? undefined : rest.slice(split + 1).trim() || undefined;
+  return {
+    componentId: match[1]!,
+    instanceId: match[2]!,
+    name,
+    ...(child ? { child } : {}),
+  };
+}
+
+export function assemblyMeshDisplayName(label: string): string {
+  const parsed = parseAssemblyInstanceLabel(label);
+  if (!parsed) return label.trim() || "Body";
+  return parsed.child ? `${parsed.child} · ${parsed.name}` : parsed.name;
+}
+
 /** Stable, noncryptographic fingerprint for change detection, never access control. */
 export function stableCadHash(value: unknown): string {
   const seen = new Set<object>();
@@ -196,7 +231,7 @@ export function buildLinkedAssembly(doc: CadDoc, instances?: CadAssemblyInstance
       const t = instance.translationMm;
       lines.push(
         `${name} = ${name}.translate((${t.x}, ${t.y}, ${t.z}))`,
-        `${name}.label = ${JSON.stringify(`${part.name} (${instance.id})`)}`,
+        `${name}.label = ${JSON.stringify(assemblyInstanceLabel(part, instance))}`,
         `children.append(${name})`,
       );
     }

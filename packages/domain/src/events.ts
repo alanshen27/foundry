@@ -6,6 +6,7 @@ import { z } from "zod";
  */
 export const DOMAIN_EVENT_TYPES = [
   "WorkspaceCreated",
+  "WorkspaceRenamed",
   "WorkspaceMemberAdded",
   "WorkspaceMemberInvited",
   "ProfileUpdated",

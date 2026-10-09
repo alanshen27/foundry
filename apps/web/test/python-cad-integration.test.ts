@@ -52,6 +52,8 @@ describe("native PCB, CAD, assembly and collaboration integration", () => {
     expect(part.path).toMatch(/^parts\/[a-z0-9_]+\/main\.py$/);
     expect(part.content).toContain("width = 60\ndepth = 40\nthickness = 1.6\ncorner_radius = 3");
     expect(part.content).toContain("Pos(-25, 13, 0) * Cylinder(1.6, thickness");
+    expect(part.content).toContain("result = board");
+    expect(part.content).not.toContain("packages = []");
     expect(part.source).toMatchObject({
       sourceHash: pcbMechanicalSourceHash(board),
       generatedHash: stableCadHash(part.content),
@@ -73,6 +75,28 @@ describe("native PCB, CAD, assembly and collaboration integration", () => {
     });
   });
 
+  it("embeds known package envelopes on the board part without inventing missing heights", () => {
+    const pcb = boards();
+    pcb.boards[0]!.footprints.push({
+      id: "mcu",
+      libraryId: "R_0603",
+      refDes: "U1",
+      xMm: 20,
+      yMm: 10,
+      rotationDeg: 90,
+      side: "front",
+      bodyHeightMm: 1.2,
+    });
+    const source = pcbPartPython(pcb.boards[0]!);
+    expect(source).toContain("packages = []");
+    expect(source).toContain('pkg.label = "U1"');
+    expect(source).toContain("Pos(-10, 10, 1.6) * Rot(0, 0, -90)");
+    expect(source).toContain("Box(1.6, 0.8, 1.2, align=(Align.CENTER, Align.CENTER, Align.MIN))");
+    expect(source).toContain("board.color = Color(0.176, 0.353, 0.239)");
+    expect(source).toContain("pkg.color = Color(0.09, 0.09, 0.1)");
+    expect(source).toContain("Compound(children=[board, *packages])");
+    expect(source).not.toContain("R2");
+  });
   it("updates generated Python from a changed board and preserves customized source", () => {
     const pcb = boards();
     const synced = syncPcbCadParts(pythonCadDoc(), pcb).doc;

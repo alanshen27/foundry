@@ -10,6 +10,8 @@ import {
 } from "@foundry/cad";
 import { normalizePcbSet } from "@/lib/pcb/doc";
 import { syncPcbCadParts } from "./assemble-product";
+import { seatPcbInstances } from "./seat-assembly";
+import { checkAssemblyFit } from "./assembly-fit";
 import { buildEngineeringReadiness } from "@/lib/engineering/readiness";
 import { designDocumentRoom } from "@foundry/collaboration";
 import {
@@ -19,6 +21,7 @@ import {
 import { requireProjectCapability } from "./access";
 import { AiEditLockConflict, withAiEditLockGuard, withAiRunEditLockGuard } from "./ai-edit-lock";
 import { recordAudit } from "./audit";
+import { notifyProjectChanged } from "./project-change";
 import { ensureStageStarted, markDownstreamStale } from "./stage-state";
 
 type Scope = { projectId: string; branchId: string };
@@ -88,6 +91,32 @@ export async function updateEngineering(
     "mechanical.edit",
   );
   const scope = { projectId: actor.projectId, branchId: actor.branchId };
+  // Measure the housing before taking the row lock. A kernel bbox can take
+  // seconds; holding the design lock for that long blocks every other edit.
+  let assemblyInstances = input.action === "build_linked_assembly" ? input.instances : undefined;
+  let seatNotes: string[] = [];
+  if (input.action === "build_linked_assembly") {
+    const preview = await snapshot(prisma, scope);
+    if (preview.fingerprint === input.expectedFingerprint) {
+      try {
+        const nativeCad = { ...preview.cad, engine: "build123d" as const };
+        const planned = buildLinkedAssembly(nativeCad, input.instances);
+        const seated = await seatPcbInstances(
+          nativeCad,
+          preview.pcb ? normalizePcbSet(preview.pcb) : null,
+          planned.assembly?.instances ?? [],
+        );
+        assemblyInstances = seated.instances;
+        seatNotes = seated.notes;
+      } catch (error) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: error instanceof Error ? error.message : "Invalid assembly placement",
+        });
+      }
+    }
+  }
+  const built: { doc: CadDoc | null } = { doc: null };
   const write = async (tx: Prisma.TransactionClient) => {
     // Stable lock ordering prevents deadlock with CAD mutations. A missing
     // MODEL3D row is protected by the branch edit lease; uniqueness is checked
@@ -135,7 +164,7 @@ export async function updateEngineering(
         }
       }
       try {
-        next = buildLinkedAssembly(nativeCad, input.instances);
+        next = buildLinkedAssembly(nativeCad, assemblyInstances);
       } catch (error) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -157,7 +186,8 @@ export async function updateEngineering(
       create: { ...scope, kind: "MODEL3D", data, updatedById: actor.userId },
       update: { data, updatedById: actor.userId },
     });
-    return { updated, removed };
+    built.doc = input.action === "build_linked_assembly" ? next : null;
+    return { updated, removed, seatNotes };
   };
   let changes;
   try {
@@ -181,6 +211,7 @@ export async function updateEngineering(
   }
   const stage = { ...scope, workspaceId: project.workspaceId, actorId: actor.userId };
   await publishCollaborationUpdate(designDocumentRoom(actor.projectId, actor.branchId, "MODEL3D"));
+  notifyProjectChanged(actor.projectId, actor.branchId, { kind: "design", design: "MODEL3D" });
   await ensureStageStarted({ ...stage, stage: "ENGINEER" });
   await markDownstreamStale({ ...stage, changedStage: "ENGINEER" });
   await recordAudit({
@@ -194,5 +225,8 @@ export async function updateEngineering(
       ...changes,
     },
   });
-  return { ...(await getEngineeringStatus(actor)), ...changes };
+  // Runs after the write and outside the lock: booleans over every solid pair
+  // can take tens of seconds.
+  const fit = built.doc ? await checkAssemblyFit(built.doc) : undefined;
+  return { ...(await getEngineeringStatus(actor)), ...changes, ...(fit ? { fit } : {}) };
 }
