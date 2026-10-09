@@ -14,7 +14,8 @@
     "migrate:deploy": "dotenv -e ../../.env.local -e ../../.env -- prisma migrate deploy",
     "migrate:status": "dotenv -e ../../.env.local -e ../../.env -- prisma migrate status",
     "migrate:check": "dotenv -e ../../.env.local -e ../../.env -- sh -c 'prisma migrate diff --from-url \"$DIRECT_URL\" --to-schema-datamodel prisma/schema.prisma --exit-code'",
-    "rls:check": "dotenv -e ../../.env.local -e ../../.env -- tsx src/check-rls.ts"
+    "rls:check": "dotenv -e ../../.env.local -e ../../.env -- tsx src/check-rls.ts",
+    "baseline:plan": "dotenv -e ../../.env.local -e ../../.env -- tsx src/baseline-plan.ts"
   },
   "dependencies": {
     "@foundry/domain": "workspace:*",

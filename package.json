@@ -21,7 +21,8 @@
     "db:migrate:deploy": "pnpm --filter @foundry/db migrate:deploy",
     "db:migrate:status": "pnpm --filter @foundry/db migrate:status",
     "db:migrate:check": "pnpm --filter @foundry/db migrate:check",
-    "db:rls:check": "pnpm --filter @foundry/db rls:check"
+    "db:rls:check": "pnpm --filter @foundry/db rls:check",
+    "db:baseline:plan": "pnpm --filter @foundry/db baseline:plan"
   },
   "devDependencies": {
     "eslint": "^9.17.0",
