@@ -3,6 +3,8 @@
   "globalEnv": [
     "CI",
     "DATABASE_URL",
+    "DIRECT_URL",
+    "RENDER",
     "AUTH_MODE",
     "AUTH_SECRET",
     "STORAGE_BUCKET",
