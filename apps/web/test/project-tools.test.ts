@@ -83,10 +83,12 @@ vi.mock("../server/stage-state", () => ({
 }));
 const evaluateCadComponent = vi.hoisted(() => vi.fn());
 const writeDesignWithCollaboration = vi.hoisted(() =>
-  vi.fn(async (input: { data: unknown }) => input.data),
+  vi.fn(async (...args: unknown[]) => (args[0] as { data: unknown }).data),
 );
-const writeCodeWithCollaboration = vi.hoisted(() => vi.fn(async () => ({ id: "file-1" })));
-const deleteCodeWithCollaboration = vi.hoisted(() => vi.fn());
+const writeCodeWithCollaboration = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ id: "file-1" })),
+);
+const deleteCodeWithCollaboration = vi.hoisted(() => vi.fn((..._args: unknown[]) => undefined));
 
 vi.mock("../server/cad", () => ({
   getCad: () => ({ executeKcl }),
@@ -152,7 +154,7 @@ beforeEach(() => {
   evaluateCadComponent.mockReset();
   writeDesignWithCollaboration
     .mockReset()
-    .mockImplementation(async (input: { data: unknown }) => input.data);
+    .mockImplementation(async (...args: unknown[]) => (args[0] as { data: unknown }).data);
   writeCodeWithCollaboration.mockReset().mockResolvedValue({ id: "file-1" });
   deleteCodeWithCollaboration.mockReset();
 });

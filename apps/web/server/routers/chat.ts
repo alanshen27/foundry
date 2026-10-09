@@ -386,9 +386,9 @@ export const chatRouter = router({
           // The worker may have finished after the initial query. Never relabel
           // completed work or publish a stop for a run we did not cancel.
           if (cancelled.count === 0) return;
-          const inputMessages = await validateUIMessages({
-            messages: Array.isArray(run.inputMessages) ? run.inputMessages : [],
-          });
+          const inputMessages = await validateResumableUIMessages(
+            Array.isArray(run.inputMessages) ? run.inputMessages : [],
+          );
           await persistCancelledRunFromEvents({
             runId: run.id,
             scope: { projectId: input.projectId, branchId: run.branchId, channelId: run.channelId },
