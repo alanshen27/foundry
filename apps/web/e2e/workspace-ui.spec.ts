@@ -6,6 +6,8 @@ test.use({ deviceScaleFactor: 2 });
 test("workspace keeps the model dominant and preserves assembly-to-part navigation", async ({
   page,
 }, testInfo) => {
+  // A cold dev server compiles the workspace, CAD and PCB surfaces on first visit.
+  test.setTimeout(180_000);
   const errors: string[] = [];
   const serviceCalls: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
