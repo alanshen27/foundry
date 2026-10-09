@@ -16,7 +16,7 @@ async function signIn(page: Page) {
   await page.getByLabel("Email").fill("builder@foundry.local");
   await page.getByLabel("Password").fill("demo-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL(/\/w\/[^/]+$/);
+  await page.waitForURL(/\/w\/[^/]+(\/projects\/[^/]+\/engineer\?view=assembly)?$/);
 }
 
 test("swapping the battery surfaces what depends on it, across tabs", async ({ page }) => {
