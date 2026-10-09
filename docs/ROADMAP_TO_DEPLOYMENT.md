@@ -67,7 +67,12 @@ right fit, and this roadmap keeps it:
 `pnpm install --frozen-lockfile`, `db:generate`, `format:check`, `lint`
 (warnings only), `typecheck`, `db:migrate:deploy`, `db:migrate:check`,
 `db:rls:check`, `db:seed`, `test` (all packages), and `build` all pass against
-Postgres 16 and Redis 7. E2E status is in the PR description.
+Postgres 16 and Redis 7. The full Playwright suite (`pnpm e2e`, 11 tests) passes
+with `CI=true` against a fresh database built from migrations. Four E2E specs had
+drifted from the work in progress (signing in now opens the last project's assembly,
+the create-bar toggle was renamed "Options", project creation routes to
+`?view=assembly`, and new parts are Python with no KCL parameter inspector), and
+were updated to the current behavior.
 
 ### Known product limitation
 

@@ -190,18 +190,27 @@ variables because each workspace may sell through a different store.
 
 ## Commands
 
-| Command             | Purpose                                                |
-| ------------------- | ------------------------------------------------------ |
-| `pnpm dev`          | Run the web app, chat worker, and collaboration server |
-| `pnpm build`        | Build the monorepo                                     |
-| `pnpm format:check` | Check formatting                                       |
-| `pnpm lint`         | Run ESLint                                             |
-| `pnpm typecheck`    | Type-check all packages                                |
-| `pnpm test`         | Run Vitest tests                                       |
-| `pnpm e2e`          | Run the Playwright end-to-end journey                  |
-| `pnpm db:generate`  | Generate the Prisma client                             |
-| `pnpm db:push`      | Apply the schema to the database                       |
-| `pnpm db:seed`      | Seed local demonstration data                          |
+| Command                  | Purpose                                                |
+| ------------------------ | ------------------------------------------------------ |
+| `pnpm dev`               | Run the web app, chat worker, and collaboration server |
+| `pnpm build`             | Build the monorepo                                     |
+| `pnpm format:check`      | Check formatting                                       |
+| `pnpm lint`              | Run ESLint                                             |
+| `pnpm typecheck`         | Type-check all packages                                |
+| `pnpm test`              | Run Vitest tests                                       |
+| `pnpm e2e`               | Run the Playwright end-to-end journey                  |
+| `pnpm db:generate`       | Generate the Prisma client                             |
+| `pnpm db:push`           | Apply the schema to the database                       |
+| `pnpm db:seed`           | Seed local demonstration data                          |
+| `pnpm db:migrate:deploy` | Apply pending migrations (Render runs this pre-deploy) |
+| `pnpm db:migrate:check`  | Fail if the database and `schema.prisma` disagree      |
+| `pnpm db:rls:check`      | Fail if any public table lacks row-level security      |
+| `pnpm db:baseline:plan`  | Read-only: print the baseline for a `db push` database |
+
+Deployment targets Render + Supabase; see
+[`docs/ROADMAP_TO_DEPLOYMENT.md`](docs/ROADMAP_TO_DEPLOYMENT.md) and
+[`docs/runbooks/deploy-render.md`](docs/runbooks/deploy-render.md).
+`GET /api/health` is liveness; `GET /api/ready` also checks Postgres and Redis.
 
 ## Repository layout
 
