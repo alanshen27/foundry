@@ -55,6 +55,18 @@ async function snapshot(db: SnapshotDb, scope: Scope) {
   return { circuit, pcb, cad, rawCad, fingerprint };
 }
 
+/** A linked assembly must not silently assemble old/missing board geometry. */
+function assertBoardsSynced(cad: CadDoc, pcb: unknown) {
+  if (!pcb) return;
+  const sync = syncPcbCadParts(cad, normalizePcbSet(pcb));
+  if (sync.conflicts.length || sync.updated.length || sync.removed.length) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "Update CAD from boards before building the assembly.",
+    });
+  }
+}
+
 export async function getEngineeringStatus(actor: Actor) {
   await requireProjectCapability(actor.userId, actor.projectId, "project.read");
   let canEdit = true;
@@ -98,8 +110,9 @@ export async function updateEngineering(
   if (input.action === "build_linked_assembly") {
     const preview = await snapshot(prisma, scope);
     if (preview.fingerprint === input.expectedFingerprint) {
+      const nativeCad = { ...preview.cad, engine: "build123d" as const };
+      assertBoardsSynced(nativeCad, preview.pcb);
       try {
-        const nativeCad = { ...preview.cad, engine: "build123d" as const };
         const planned = buildLinkedAssembly(nativeCad, input.instances);
         const seated = await seatPcbInstances(
           nativeCad,
@@ -153,16 +166,7 @@ export async function updateEngineering(
       updated = sync.updated;
       removed = sync.removed;
     } else {
-      // A linked assembly must not silently assemble old/missing board geometry.
-      if (source.pcb) {
-        const sync = syncPcbCadParts(nativeCad, normalizePcbSet(source.pcb));
-        if (sync.conflicts.length || sync.updated.length || sync.removed.length) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: "Update CAD from boards before building the assembly.",
-          });
-        }
-      }
+      assertBoardsSynced(nativeCad, source.pcb);
       try {
         next = buildLinkedAssembly(nativeCad, assemblyInstances);
       } catch (error) {
